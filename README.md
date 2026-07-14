@@ -64,6 +64,16 @@ npm run test:ticket-03
 
 This proves bounded Context Access Grants, strict Kernel/Data Plane policy intersection, direct inventory delivery, immutable observation time, signed payload-free receipts, freshness and authority projection, deterministic rejection, and restart persistence.
 
+Ticket 04 package publication acceptance:
+
+```powershell
+npm run test:ticket-04
+```
+
+This proves exact Builder Toolkit provenance, governed-context binding, structured deterministic validation, fixture and observational Simulation Receipts, atomic immutable publication, and semantic-version byte collision protection. Published packages remain inert until later activation.
+
+Ticket 04 adds the domain-neutral publication substrate. The inventory Package itself is ordinary user-space content: no inventory-specific Kernel route, table, validator branch, or schema is required to publish another compatible Package.
+
 ## Public Boundary
 
 `GET /kernel/v0/bootstrap` is the canonical discovery entry point. Its Operation Descriptors define available transports, schemas, authority/effect classes, preconditions, outcomes, idempotency, emitted events, and next operations. HTTP is an adapter over this contract; direct database access is not a platform interface.

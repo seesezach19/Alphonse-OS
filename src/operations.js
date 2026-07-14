@@ -221,21 +221,26 @@ const descriptors = [
 const identityCommandIssues = ["AUTHENTICATION_REQUIRED", "INVALID_BOOTSTRAP_CREDENTIAL", "INVALID_JSON",
   "REQUEST_TOO_LARGE", "INVALID_INPUT", "IDEMPOTENCY_CONFLICT"];
 
-function commandDescriptor(operationId, summary, path, resultKey, issues = [], inputSchema = { type: "object" }) {
+function commandDescriptor(operationId, summary, path, resultKey, issues = [], inputSchema = { type: "object" },
+  authorityClass = "authenticated_sponsoring_human") {
   const emittedEvent = {
     "kernel.principal.create": "kernel.principal.created",
     "kernel.agent_passport.issue": "kernel.agent_passport.issued",
     "kernel.work_intent.propose": "kernel.work_intent.proposed",
     "kernel.work_intent.confirm": "kernel.work_intent.confirmed",
     "kernel.build_session.open": "kernel.build_session.opened",
-    "kernel.context_access_grant.issue": "kernel.context_access_grant.issued"
+    "kernel.context_access_grant.issue": "kernel.context_access_grant.issued",
+    "kernel.package_candidate.validate": "kernel.package_candidate.validated",
+    "kernel.package_candidate.simulate": "kernel.package_candidate.simulated",
+    "kernel.package_version.publish": "kernel.package_version.published",
+    "kernel.artifact.trust_attest": "kernel.artifact.trust_attested"
   }[operationId];
   return {
     operation_id: operationId,
     version: "0.1.0",
     summary,
     visibility: "public",
-    authority_class: "authenticated_sponsoring_human",
+    authority_class: authorityClass,
     effect_class: "kernel_state_transition",
     idempotency: "required_command_id_and_canonical_request_digest",
     transport: { method: "POST", path },
@@ -345,6 +350,48 @@ descriptors.push(
     "/kernel/v0/context-access-grants/{grant_id}", "context_access_grant", "CONTEXT_GRANT_NOT_FOUND"),
   readDescriptor("kernel.context_receipt.get", "Inspect one signed Context Receipt without context payload.",
     "/kernel/v0/context-receipts/{receipt_id}", "context_receipt", "CONTEXT_RECEIPT_NOT_FOUND")
+);
+
+const builderAuthority = "authenticated_builder_agent_under_confirmed_intent";
+descriptors.push(
+  commandDescriptor("kernel.artifact.trust_attest", "Record a human trust decision for exact adapter bytes and build attestation.",
+    "/kernel/v0/artifact-attestations", "artifact_attestation", ["ADAPTER_REFERENCE_INVALID"], {
+      type: "object", required: ["artifact_ref", "artifact_digest", "build_attestation_digest"],
+      properties: { artifact_ref: { type: "string" }, artifact_digest: { type: "string" },
+        build_attestation_digest: { type: "string" } }, additionalProperties: false
+    }),
+  readDescriptor("kernel.artifact_attestation.get", "Inspect one immutable human artifact trust attestation.",
+    "/kernel/v0/artifact-attestations/{artifact_attestation_id}", "artifact_attestation", "ARTIFACT_ATTESTATION_NOT_FOUND"),
+  commandDescriptor("kernel.package_candidate.validate", "Deterministically validate an inert Operational Package candidate.",
+    "/kernel/v0/package-validations", "validation_receipt", ["BUILD_SESSION_AGENT_MISMATCH", "BUILD_SESSION_EXPIRED"], {
+      type: "object", required: ["build_session_id", "candidate"],
+      properties: { build_session_id: { type: "string", format: "uuid" }, candidate: { type: "object" } },
+      additionalProperties: false
+    }, builderAuthority),
+  readDescriptor("kernel.package_validation_receipt.get", "Inspect structured deterministic package validation results.",
+    "/kernel/v0/package-validations/{validation_receipt_id}", "validation_receipt", "VALIDATION_RECEIPT_NOT_FOUND"),
+  commandDescriptor("kernel.package_candidate.simulate", "Create an authority-free fixture or observational Simulation Receipt.",
+    "/kernel/v0/package-simulations", "simulation_receipt", ["CANDIDATE_NOT_VALID", "CANDIDATE_DIGEST_MISMATCH",
+      "UNSUPPORTED_SIMULATION_MODE", "EVALUATION_EXPORT_NOT_FOUND"], {
+      type: "object", required: ["validation_receipt_id", "candidate", "mode"],
+      properties: { validation_receipt_id: { type: "string", format: "uuid" }, candidate: { type: "object" },
+        mode: { enum: ["deterministic_fixture", "observational_read_only"] },
+        observational_attestation: { type: "object" }, observational_attestation_signature: { type: "string" } },
+      additionalProperties: false
+    }, builderAuthority),
+  readDescriptor("kernel.package_simulation_receipt.get", "Inspect one authority-free Simulation Receipt.",
+    "/kernel/v0/package-simulations/{simulation_receipt_id}", "simulation_receipt", "SIMULATION_RECEIPT_NOT_FOUND"),
+  commandDescriptor("kernel.package_version.publish", "Atomically publish one immutable content-addressed Package Version.",
+    "/kernel/v0/package-versions", "package_version", ["PUBLICATION_VALIDATION_MISMATCH", "CANDIDATE_REVALIDATION_FAILED",
+      "SIMULATION_RECEIPTS_REQUIRED", "SIMULATION_COVERAGE_INCOMPLETE", "PACKAGE_VERSION_BYTES_CONFLICT", "PACKAGE_VERSION_EXISTS"], {
+      type: "object", required: ["build_session_id", "validation_receipt_id", "simulation_receipt_ids", "candidate"],
+      properties: { build_session_id: { type: "string", format: "uuid" },
+        validation_receipt_id: { type: "string", format: "uuid" },
+        simulation_receipt_ids: { type: "array", minItems: 2, items: { type: "string", format: "uuid" } },
+        candidate: { type: "object" } }, additionalProperties: false
+    }, builderAuthority),
+  readDescriptor("kernel.package_version.get", "Inspect one immutable Package Version and publication attestation.",
+    "/kernel/v0/package-versions/{package_version_id}", "package_version", "PACKAGE_VERSION_NOT_FOUND")
 );
 
 export function listOperationDescriptors() {

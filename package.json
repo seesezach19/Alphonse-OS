@@ -14,9 +14,11 @@
     "test": "node --test test/unit/*.test.js",
     "test:blackbox": "node scripts/acceptance.js",
     "test:ticket-02": "node scripts/acceptance-ticket-02.js",
-    "test:ticket-03": "node scripts/acceptance-ticket-03.js"
+    "test:ticket-03": "node scripts/acceptance-ticket-03.js",
+    "test:ticket-04": "node scripts/acceptance-ticket-04.js"
   },
   "dependencies": {
+    "json-logic-js": "^2.0.5",
     "pg": "8.22.0"
   }
 }

@@ -27,6 +27,8 @@ services:
       KERNEL_ENVIRONMENT_NAME: Local Development
       KERNEL_BOOTSTRAP_TOKEN: local-development-bootstrap-token
       KERNEL_BOOTSTRAP_PRINCIPAL_ID: local-bootstrap-operator
+      KERNEL_PACKAGE_SIGNING_SECRET: local-package-signing-secret
+      KERNEL_PACKAGE_SIGNING_KEY_ID: local-package-signing-key-v1
       DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
       DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
       DATA_PLANE_ID: reference-data-plane

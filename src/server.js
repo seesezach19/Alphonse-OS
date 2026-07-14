@@ -7,6 +7,7 @@ import { createDatabase } from "./database.js";
 import { KernelError } from "./errors.js";
 import { createIdentityIntentService, validateCommandEnvelope } from "./identity-intent-service.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
+import { createPackageService } from "./package-service.js";
 import { validateProfileUpdateCommand } from "./validation.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -20,16 +21,22 @@ const bootstrapPrincipalId = process.env.KERNEL_BOOTSTRAP_PRINCIPAL_ID ?? "local
 const dataPlaneServiceToken = process.env.DATA_PLANE_SERVICE_TOKEN;
 const dataPlaneReceiptSecret = process.env.DATA_PLANE_RECEIPT_SECRET;
 const dataPlaneId = process.env.DATA_PLANE_ID ?? "reference-data-plane";
+const packageSigningSecret = process.env.KERNEL_PACKAGE_SIGNING_SECRET;
+const packageSigningKeyId = process.env.KERNEL_PACKAGE_SIGNING_KEY_ID ?? "local-package-signing-key-v1";
+const packageVerificationKeys = JSON.parse(process.env.KERNEL_PACKAGE_VERIFICATION_KEYS ?? "{}");
 
 if (!databaseUrl) throw new Error("DATABASE_URL is required.");
 if (!bootstrapToken) throw new Error("KERNEL_BOOTSTRAP_TOKEN is required.");
 if (!dataPlaneServiceToken || !dataPlaneReceiptSecret) throw new Error("Data Plane service credentials are required.");
+if (!packageSigningSecret) throw new Error("KERNEL_PACKAGE_SIGNING_SECRET is required.");
 
 const database = createDatabase(databaseUrl);
 await database.migrate();
 await database.bootstrapEnvironment(installationId, installationName, environmentId, environmentName);
 const identityIntent = createIdentityIntentService(database, installationId, environmentId, bootstrapPrincipalId);
 const contextService = createContextService(database, identityIntent, installationId, environmentId);
+const packageService = createPackageService(database, identityIntent, contextService, installationId, environmentId,
+  packageSigningSecret, packageSigningKeyId, dataPlaneReceiptSecret, dataPlaneId, packageVerificationKeys);
 
 function sendJson(response, status, body, headers = {}) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
@@ -41,13 +48,13 @@ function sendHtml(response, status, html) {
   response.end(html);
 }
 
-async function readJson(request) {
+async function readJson(request, limit = 64 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 64 * 1024) {
-      throw new KernelError(413, "REQUEST_TOO_LARGE", "Command body exceeds 64 KiB.");
+    if (size > limit) {
+      throw new KernelError(413, "REQUEST_TOO_LARGE", `Command body exceeds ${Math.floor(limit / 1024)} KiB.`);
     }
     chunks.push(chunk);
   }
@@ -105,6 +112,12 @@ function authenticateDataPlane(request) {
   if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
     throw new KernelError(403, "DATA_PLANE_AUTHENTICATION_FAILED", "Data Plane service authentication failed.");
   }
+}
+
+async function authenticateAgent(request) {
+  const authorization = request.headers.authorization;
+  if (!authorization?.startsWith("Agent ")) throw new KernelError(401, "AGENT_AUTHENTICATION_REQUIRED", "Agent Passport credential is required.");
+  return identityIntent.authenticateAgent(authorization.slice("Agent ".length));
 }
 
 async function route(request, response) {
@@ -185,9 +198,7 @@ async function route(request, response) {
   }
 
   if (request.method === "POST" && url.pathname === "/kernel/v0/work-intent-proposals") {
-    const authorization = request.headers.authorization;
-    if (!authorization?.startsWith("Agent ")) throw new KernelError(401, "AGENT_AUTHENTICATION_REQUIRED", "Agent Passport credential is required.");
-    const passport = await identityIntent.authenticateAgent(authorization.slice("Agent ".length));
+    const passport = await authenticateAgent(request);
     const command = validateCommandEnvelope(await readJson(request), "kernel.work_intent.propose");
     return sendCommandResult(response, await identityIntent.proposeIntent(command, passport));
   }
@@ -244,6 +255,50 @@ async function route(request, response) {
     return sendJson(response, 200, { context_receipt: await contextService.getReceipt(pathId(url.pathname, "/kernel/v0/context-receipts/")) });
   }
 
+  if (request.method === "POST" && url.pathname === "/kernel/v0/package-validations") {
+    const passport = await authenticateAgent(request);
+    const command = validateCommandEnvelope(await readJson(request, 512 * 1024), "kernel.package_candidate.validate");
+    return sendCommandResult(response, await packageService.validateCandidate(command, passport));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/artifact-attestations") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.artifact.trust_attest");
+    return sendCommandResult(response, await packageService.attestArtifact(command));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/artifact-attestations/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { artifact_attestation: await packageService.getArtifactAttestation(pathId(url.pathname, "/kernel/v0/artifact-attestations/")) });
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/package-validations/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { validation_receipt: await packageService.getValidationReceipt(pathId(url.pathname, "/kernel/v0/package-validations/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/package-simulations") {
+    const passport = await authenticateAgent(request);
+    const command = validateCommandEnvelope(await readJson(request, 512 * 1024), "kernel.package_candidate.simulate");
+    return sendCommandResult(response, await packageService.simulate(command, passport));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/package-simulations/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { simulation_receipt: await packageService.getSimulationReceipt(pathId(url.pathname, "/kernel/v0/package-simulations/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/package-versions") {
+    const passport = await authenticateAgent(request);
+    const command = validateCommandEnvelope(await readJson(request, 512 * 1024), "kernel.package_version.publish");
+    return sendCommandResult(response, await packageService.publish(command, passport));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/package-versions/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { package_version: await packageService.getPackageVersion(pathId(url.pathname, "/kernel/v0/package-versions/")) });
+  }
+
   if (request.method === "POST" && url.pathname === "/internal/v0/context/authorize") {
     authenticateDataPlane(request);
     const input = await readJson(request);
@@ -275,7 +330,10 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     const environment = await database.getEnvironment(installationId, environmentId);
     const items = await identityIntent.getAccountableWork();
-    for (const item of items) item.context = await contextService.contextForWorkIntent(item.intent.work_intent_id);
+    for (const item of items) {
+      item.context = await contextService.contextForWorkIntent(item.intent.work_intent_id);
+      item.package_versions = await packageService.packageVersionsForWorkIntent(item.intent.work_intent_id);
+    }
     return sendJson(response, 200, {
       environment: serializeEnvironment(environment),
       health: "healthy",
@@ -300,9 +358,12 @@ async function route(request, response) {
       throw error;
     }
     const items = await identityIntent.getAccountableWork();
-    for (const item of items) item.context = await contextService.contextForWorkIntent(item.intent.work_intent_id);
+    for (const item of items) {
+      item.context = await contextService.contextForWorkIntent(item.intent.work_intent_id);
+      item.package_versions = await packageService.packageVersionsForWorkIntent(item.intent.work_intent_id);
+    }
     const threads = items.length === 0 ? "<p>No accountable work.</p>" : items.map((item) =>
-      `<article><h2>${escapeHtml(item.identity.agent_name)}</h2><dl><dt>Intent</dt><dd>${escapeHtml(item.intent.objective)}</dd><dt>Intent status</dt><dd>${escapeHtml(item.intent.status)}</dd><dt>Build Session</dt><dd>${escapeHtml(item.build_session.build_session_id)} / ${escapeHtml(item.build_session.status)}</dd><dt>Context authority</dt><dd>${escapeHtml(item.context[0]?.authority ?? "not_granted")}</dd><dt>Context freshness</dt><dd>${escapeHtml(item.context[0]?.latest_receipt?.freshness_claims?.map((claim) => `${claim.source}:${claim.current_age_seconds}s ${claim.status}`).join(", ") ?? "not_observed")}</dd><dt>Redactions</dt><dd>${escapeHtml(item.context[0]?.latest_receipt?.limitations?.fields_redacted?.join(", ") ?? "none")}</dd><dt>Effect authority</dt><dd>${escapeHtml(item.authority.effects)}</dd><dt>Execution authority</dt><dd>${escapeHtml(item.authority.execution)}</dd></dl></article>`
+      `<article><h2>${escapeHtml(item.identity.agent_name)}</h2><dl><dt>Intent</dt><dd>${escapeHtml(item.intent.objective)}</dd><dt>Intent status</dt><dd>${escapeHtml(item.intent.status)}</dd><dt>Build Session</dt><dd>${escapeHtml(item.build_session.build_session_id)} / ${escapeHtml(item.build_session.status)}</dd><dt>Published package</dt><dd>${escapeHtml(item.package_versions[0] ? `${item.package_versions[0].package_id}@${item.package_versions[0].semantic_version} / ${item.package_versions[0].artifact_digest}` : "not_published")}</dd><dt>Package authority</dt><dd>${escapeHtml(item.package_versions[0]?.authority_granted ? "granted" : "not_granted")}</dd><dt>Context authority</dt><dd>${escapeHtml(item.context[0]?.authority ?? "not_granted")}</dd><dt>Context freshness</dt><dd>${escapeHtml(item.context[0]?.latest_receipt?.freshness_claims?.map((claim) => `${claim.source}:${claim.current_age_seconds}s ${claim.status}`).join(", ") ?? "not_observed")}</dd><dt>Redactions</dt><dd>${escapeHtml(item.context[0]?.latest_receipt?.limitations?.fields_redacted?.join(", ") ?? "none")}</dd><dt>Effect authority</dt><dd>${escapeHtml(item.authority.effects)}</dd><dt>Execution authority</dt><dd>${escapeHtml(item.authority.execution)}</dd></dl></article>`
     ).join("");
     return sendHtml(response, 200, `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Butler</title>

@@ -39,3 +39,14 @@ test("governed context descriptors expose exact identifiers and grant fields", (
   const receipt = getOperationDescriptor("kernel.context_receipt.get");
   assert.deepEqual(receipt.input_schema.required, ["receipt_id"]);
 });
+
+test("package build operations remain inert Builder Agent work", () => {
+  for (const operationId of ["kernel.package_candidate.validate", "kernel.package_candidate.simulate",
+    "kernel.package_version.publish"]) {
+    const descriptor = getOperationDescriptor(operationId);
+    assert.equal(descriptor.authority_class, "authenticated_builder_agent_under_confirmed_intent");
+    assert.equal(descriptor.effect_class, "kernel_state_transition");
+  }
+  assert.deepEqual(getOperationDescriptor("kernel.package_version.publish").emitted_events,
+    ["kernel.package_version.published"]);
+});
