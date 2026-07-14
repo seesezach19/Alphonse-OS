@@ -4,14 +4,16 @@
 
 **Blocked by:** 11 - Pass The Unfamiliar-Builder Production Proof.
 
-**Status:** ready-for-agent
+**Status:** implemented-and-rehearsed; production inventory publication remains blocked by Ticket 11
 
-- [ ] Publisher root delegates a scoped expiring release key; private key remains outside registry storage.
-- [ ] Atomic publication rejects incomplete or mismatched artifacts.
-- [ ] Package identity remains stable across registry/mirror location.
-- [ ] Publication Receipt binds publisher proof, exact artifacts, attestations, and transparency checkpoint.
-- [ ] Destination independently verifies every transitive dependency under versioned Trust Policy.
-- [ ] Successful import creates quarantined Package plus immutable Import Receipt, not Deployment.
-- [ ] Development and production policies can reach different admissibility decisions.
-- [ ] Signed advisory drives only preapproved local response.
-- [ ] Offline bundle import verifies equivalently and active operations continue during registry outage.
+- [x] Publisher root delegates a scoped expiring release key; private key remains outside registry storage.
+- [x] Atomic publication rejects incomplete or mismatched artifacts.
+- [x] Package identity remains stable across registry/mirror location.
+- [x] Publication Receipt binds publisher proof, exact artifacts, attestations, and transparency checkpoint.
+- [x] Destination independently verifies every transitive dependency under versioned Trust Policy.
+- [x] Successful import creates quarantined Package plus immutable Import Receipt, not Deployment.
+- [x] Development and production policies can reach different admissibility decisions.
+- [x] Signed advisory drives only preapproved local response.
+- [x] Offline bundle import verifies equivalently and active operations continue during registry outage.
+
+Controlled-package acceptance passes. Do not publish or describe the inventory Package as production-qualified until Ticket 11 passes.

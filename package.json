@@ -15,7 +15,17 @@
     "test:blackbox": "node scripts/acceptance.js",
     "test:ticket-02": "node scripts/acceptance-ticket-02.js",
     "test:ticket-03": "node scripts/acceptance-ticket-03.js",
-    "test:ticket-04": "node scripts/acceptance-ticket-04.js"
+    "test:ticket-04": "node scripts/acceptance-ticket-04.js",
+    "test:ticket-05": "node scripts/acceptance-ticket-05.js",
+    "test:ticket-06": "node scripts/acceptance-ticket-06.js",
+    "test:ticket-07": "node scripts/acceptance-ticket-07.js",
+    "test:ticket-08": "node scripts/acceptance-ticket-08.js",
+    "test:ticket-09": "node scripts/acceptance-ticket-09.js",
+    "test:ticket-10": "node scripts/rehearsal-ticket-10.js",
+    "rehearse": "node scripts/rehearsal-ticket-10.js",
+    "proof:snapshot": "node scripts/proof-snapshot.js",
+    "qualify:ticket-11": "node scripts/qualify-ticket-11.js",
+    "test:ticket-12": "node scripts/acceptance-ticket-12.js"
   },
   "dependencies": {
     "json-logic-js": "^2.0.5",

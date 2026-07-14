@@ -70,6 +70,8 @@ export function createContextService(database, identityIntent, installationId, e
     const command = { ...envelope, actor };
     const passportId = uuid(envelope.input.passport_id, "input.passport_id");
     const workIntentId = uuid(envelope.input.work_intent_id, "input.work_intent_id");
+    const requestedDelegationId = envelope.input.delegation_id === undefined
+      ? null : uuid(envelope.input.delegation_id, "input.delegation_id");
     const purpose = text(envelope.input.purpose, "input.purpose", 500);
     const subjects = strings(envelope.input.subjects, "input.subjects");
     const sources = strings(envelope.input.sources, "input.sources", 10);
@@ -83,27 +85,52 @@ export function createContextService(database, identityIntent, installationId, e
     const passport = await identityIntent.getPassport(passportId);
     const workIntent = await identityIntent.getWorkIntent(workIntentId);
     if (passport.sponsor_principal_id !== actor.id) throw new KernelError(403, "SPONSOR_MISMATCH", "Only the sponsor may issue this grant.");
+    let delegation = null;
     if (workIntent.passport_id !== passportId || workIntent.agent_principal_id !== passport.agent_principal_id) {
-      throw new KernelError(409, "PASSPORT_INTENT_MISMATCH", "Passport and Work Intent do not match.");
+      if (!requestedDelegationId) throw new KernelError(409, "PASSPORT_INTENT_MISMATCH", "Passport requires exact Delegation for this Work Intent.");
+      const delegated = await pool.query(`SELECT * FROM kernel_delegations
+        WHERE installation_id=$1 AND environment_id=$2 AND delegation_id=$3`,
+      [installationId, environmentId, requestedDelegationId]);
+      delegation = delegated.rows[0];
+      if (!delegation || delegation.work_intent_id !== workIntentId || delegation.target_passport_id !== passportId
+        || delegation.target_agent_principal_id !== passport.agent_principal_id || Date.now() >= Date.parse(delegation.expires_at)) {
+        throw new KernelError(409, "DELEGATION_MISMATCH", "Context Grant requires current exact Delegation.");
+      }
+    } else if (requestedDelegationId) {
+      throw new KernelError(400, "DELEGATION_NOT_REQUIRED", "Original Work Intent owner must not supply Delegation.");
     }
     if (Date.parse(expiresAt) > Date.parse(passport.expires_at)) throw new KernelError(409, "GRANT_EXCEEDS_PASSPORT", "Grant cannot outlive Passport.");
+    if (delegation && Date.parse(expiresAt) > Date.parse(delegation.expires_at)) {
+      throw new KernelError(409, "GRANT_EXCEEDS_DELEGATION", "Context Grant cannot outlive Delegation.");
+    }
     const grantId = randomUUID();
     const requestDigest = sha256Digest({ installation_id: installationId, environment_id: environmentId, ...command });
     return executeCommand({ installationId, environmentId, command, requestDigest,
       apply: async (client, { acceptedAt }) => {
+        if (requestedDelegationId) {
+          const currentDelegation = await client.query(`SELECT * FROM kernel_delegations
+            WHERE installation_id=$1 AND environment_id=$2 AND delegation_id=$3`,
+          [installationId, environmentId, requestedDelegationId]);
+          const row = currentDelegation.rows[0];
+          if (!row || row.work_intent_id !== workIntentId || row.target_passport_id !== passportId
+            || row.target_agent_principal_id !== passport.agent_principal_id
+            || Date.parse(row.expires_at) <= Date.parse(acceptedAt)) {
+            throw new KernelError(409, "DELEGATION_EXPIRED", "Delegation expired before Context Grant admission.");
+          }
+        }
         await client.query(
           `INSERT INTO kernel_context_access_grants
-           (grant_id,installation_id,environment_id,passport_id,work_intent_id,agent_principal_id,purpose,
+           (grant_id,installation_id,environment_id,passport_id,work_intent_id,agent_principal_id,delegation_id,purpose,
             subjects,sources,sensitivity_classes,max_items,max_age_seconds,expires_at,issued_by_principal_id,issued_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [grantId, installationId, environmentId, passportId, workIntentId, passport.agent_principal_id,
-            purpose, JSON.stringify(subjects), JSON.stringify(sources), JSON.stringify(sensitivityClasses),
+            requestedDelegationId, purpose, JSON.stringify(subjects), JSON.stringify(sources), JSON.stringify(sensitivityClasses),
             maxItems, maxAgeSeconds, expiresAt, actor.id, acceptedAt]
         );
         return { aggregateType: "context_access_grant", aggregateId: grantId,
           transitionType: "kernel.context_access_grant.issued",
           transitionPayload: { passport_id: passportId, work_intent_id: workIntentId },
-          result: { context_access_grant: { grant_id: grantId, passport_id: passportId,
+          result: { context_access_grant: { grant_id: grantId, passport_id: passportId, delegation_id: requestedDelegationId,
             work_intent_id: workIntentId, agent_principal_id: passport.agent_principal_id, purpose, subjects,
             sources, sensitivity_classes: sensitivityClasses, max_items: maxItems, max_age_seconds: maxAgeSeconds,
             expires_at: expiresAt, issued_by_principal_id: actor.id, issued_at: acceptedAt, access: "read_only" } } };
@@ -133,6 +160,7 @@ export function createContextService(database, identityIntent, installationId, e
     if (!subset(subjects, grant.subjects) || !subset(sources, grant.sources)) throw new KernelError(403, "OVER_BROAD_CONTEXT_REQUEST", "Request exceeds Context Access Grant.");
     if (subjects.length * sources.length > grant.max_items) throw new KernelError(403, "CONTEXT_ITEM_LIMIT_EXCEEDED", "Request exceeds grant item limit.");
     return { grant_id: grant.grant_id, passport_id: grant.passport_id, work_intent_id: grant.work_intent_id,
+      delegation_id: grant.delegation_id,
       recipient_principal_id: grant.agent_principal_id, purpose: grant.purpose, subjects, sources,
       sensitivity_classes: grant.sensitivity_classes, max_items: grant.max_items,
       max_age_seconds: grant.max_age_seconds, expires_at: grant.expires_at };

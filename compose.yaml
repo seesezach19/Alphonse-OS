@@ -14,6 +14,7 @@ services:
       retries: 20
     volumes:
       - kernel-postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/001-registry-role.sql:ro
 
   kernel:
     build:
@@ -25,15 +26,68 @@ services:
       KERNEL_INSTALLATION_NAME: Local Installation
       KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
       KERNEL_ENVIRONMENT_NAME: Local Development
+      KERNEL_ENVIRONMENT_CLASS: development
       KERNEL_BOOTSTRAP_TOKEN: local-development-bootstrap-token
       KERNEL_BOOTSTRAP_PRINCIPAL_ID: local-bootstrap-operator
       KERNEL_PACKAGE_SIGNING_SECRET: local-package-signing-secret
       KERNEL_PACKAGE_SIGNING_KEY_ID: local-package-signing-key-v1
+      KERNEL_WORKLOAD_GRANT_SIGNING_SECRET: local-workload-grant-signing-secret
+      KERNEL_WORKLOAD_GRANT_SIGNING_KEY_ID: local-workload-grant-key-v1
+      SUBSTRATE_SERVICE_TOKEN: local-substrate-service-token
+      SUBSTRATE_OBSERVATION_SECRET: local-substrate-observation-secret
+      SUBSTRATE_OBSERVATION_KEY_ID: local-substrate-observation-key-v1
+      DISPATCH_PERMIT_SIGNING_SECRET: local-dispatch-permit-signing-secret
+      DISPATCH_PERMIT_SIGNING_KEY_ID: local-dispatch-permit-key-v1
+      TRUSTED_ADAPTER_URL: http://trusted-adapter:3400
+      KERNEL_ADAPTER_TOKEN: local-kernel-adapter-token
+      ADAPTER_DISPATCH_TIMEOUT_MS: 250
+      BROKER_SERVICE_TOKEN: local-broker-service-token
       DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
       DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
       DATA_PLANE_ID: reference-data-plane
     ports:
       - "127.0.0.1:${KERNEL_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  kernel-production:
+    profiles: ["portable-trust"]
+    build:
+      context: .
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://alphonse:local-development-only@postgres:5432/alphonse_kernel
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
+      KERNEL_INSTALLATION_NAME: Local Installation
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000002
+      KERNEL_ENVIRONMENT_NAME: Local Production
+      KERNEL_ENVIRONMENT_CLASS: production
+      KERNEL_BOOTSTRAP_TOKEN: local-development-bootstrap-token
+      KERNEL_BOOTSTRAP_PRINCIPAL_ID: local-bootstrap-operator
+      KERNEL_PACKAGE_SIGNING_SECRET: local-package-signing-secret
+      KERNEL_PACKAGE_SIGNING_KEY_ID: local-package-signing-key-v1
+      KERNEL_WORKLOAD_GRANT_SIGNING_SECRET: local-workload-grant-signing-secret
+      KERNEL_WORKLOAD_GRANT_SIGNING_KEY_ID: local-workload-grant-key-v1
+      SUBSTRATE_SERVICE_TOKEN: local-substrate-service-token
+      SUBSTRATE_OBSERVATION_SECRET: local-substrate-observation-secret
+      SUBSTRATE_OBSERVATION_KEY_ID: local-substrate-observation-key-v1
+      DISPATCH_PERMIT_SIGNING_SECRET: local-dispatch-permit-signing-secret
+      DISPATCH_PERMIT_SIGNING_KEY_ID: local-dispatch-permit-key-v1
+      TRUSTED_ADAPTER_URL: http://trusted-adapter:3400
+      KERNEL_ADAPTER_TOKEN: local-kernel-adapter-token
+      ADAPTER_DISPATCH_TIMEOUT_MS: 250
+      BROKER_SERVICE_TOKEN: local-broker-service-token
+      DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
+      DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
+      DATA_PLANE_ID: reference-data-plane
+    ports:
+      - "127.0.0.1:${KERNEL_PRODUCTION_PORT:-3001}:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,6 +113,102 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  storefront-staging:
+    build:
+      context: .
+    command: ["node", "src/storefront-staging-server.js"]
+    environment:
+      PORT: 3200
+      STOREFRONT_CREDENTIAL_ISSUER_SECRET: local-storefront-credential-issuer-secret
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3200/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  credential-broker:
+    build:
+      context: .
+    command: ["node", "src/credential-broker-server.js"]
+    environment:
+      PORT: 3300
+      ADAPTER_BROKER_TOKEN: local-adapter-broker-token
+      STOREFRONT_CREDENTIAL_ISSUER_SECRET: local-storefront-credential-issuer-secret
+      DISPATCH_PERMIT_SIGNING_SECRET: local-dispatch-permit-signing-secret
+      KERNEL_INTERNAL_URL: http://kernel:3000
+      BROKER_SERVICE_TOKEN: local-broker-service-token
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3300/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  trusted-adapter:
+    build:
+      context: .
+    command: ["node", "src/trusted-adapter-server.js"]
+    environment:
+      PORT: 3400
+      KERNEL_ADAPTER_TOKEN: local-kernel-adapter-token
+      ADAPTER_BROKER_TOKEN: local-adapter-broker-token
+      CREDENTIAL_BROKER_URL: http://credential-broker:3300
+      STOREFRONT_URL: http://storefront-staging:3200
+      STOREFRONT_SYSTEM: storefront-staging
+      ADAPTER_TEST_CONTROL_TOKEN: local-adapter-test-control-token
+      ADAPTER_FAULT_DELAY_MS: 1000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3400/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  registry-primary:
+    profiles: ["portable-trust"]
+    build:
+      context: .
+    command: ["node", "src/package-registry-server.js"]
+    environment:
+      REGISTRY_PORT: 3500
+      REGISTRY_ID: registry:primary
+      REGISTRY_PRIVATE_KEY: ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIB0W3/Jf3OfpSwuKXBhMiQVzr01jGYd027lwHTpBKQMW
+      REGISTRY_ACCESS_GRANT_SECRET: local-primary-registry-access-grant-secret
+      ADVISORY_SNAPSHOT_TTL_SECONDS: 10
+      DATABASE_URL: postgresql://alphonse_registry_primary:local-registry-primary-only@postgres:5432/alphonse_kernel
+    ports:
+      - "127.0.0.1:${REGISTRY_PRIMARY_PORT:-3500}:3500"
+    depends_on:
+      kernel:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3500/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  registry-mirror:
+    profiles: ["portable-trust"]
+    build:
+      context: .
+    command: ["node", "src/package-registry-server.js"]
+    environment:
+      REGISTRY_PORT: 3500
+      REGISTRY_ID: registry:mirror
+      REGISTRY_PRIVATE_KEY: ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIBNVoZQ1SalYPugob/FnNEGg6VwSWjgi85/pk6hbRM4q
+      REGISTRY_ACCESS_GRANT_SECRET: local-mirror-registry-access-grant-secret
+      REGISTRY_TRUSTED_SOURCE_REGISTRIES: '{"registry:primary":"ed25519-spki:MCowBQYDK2VwAyEA2Qr92TwObgACe8bcrpUkUO/HwhWBruxS4LEOnIfYIHE="}'
+      ADVISORY_SNAPSHOT_TTL_SECONDS: 10
+      DATABASE_URL: postgresql://alphonse_registry_mirror:local-registry-mirror-only@postgres:5432/alphonse_kernel
+    ports:
+      - "127.0.0.1:${REGISTRY_MIRROR_PORT:-3501}:3500"
+    depends_on:
+      kernel:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3500/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
       interval: 2s
       timeout: 3s
       retries: 20

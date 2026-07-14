@@ -54,7 +54,8 @@ export function createDatabase(connectionString) {
         }
       }
     },
-    async bootstrapEnvironment(installationId, installationName, environmentId, displayName) {
+    async bootstrapEnvironment(installationId, installationName, environmentId, displayName,
+      environmentClass = "development") {
       await pool.query(
         `INSERT INTO kernel_installations (installation_id, display_name)
          VALUES ($1, $2)
@@ -62,15 +63,23 @@ export function createDatabase(connectionString) {
         [installationId, installationName]
       );
       await pool.query(
-        `INSERT INTO kernel_environments (installation_id, environment_id, display_name)
-         VALUES ($1, $2, $3)
+        `INSERT INTO kernel_environments (installation_id, environment_id, display_name, environment_class)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (installation_id, environment_id) DO NOTHING`,
-        [installationId, environmentId, displayName]
+        [installationId, environmentId, displayName, environmentClass]
       );
+      const bound = await pool.query(
+        `SELECT environment_class FROM kernel_environments
+         WHERE installation_id=$1 AND environment_id=$2`, [installationId, environmentId]
+      );
+      if (bound.rows[0].environment_class !== environmentClass) {
+        throw new Error(`Kernel Environment is already bound to ${bound.rows[0].environment_class}.`);
+      }
     },
     async getEnvironment(installationId, environmentId) {
       const result = await pool.query(
-        `SELECT installation_id, environment_id, display_name, revision, created_at, updated_at
+        `SELECT installation_id, environment_id, display_name, environment_class, revision, execution_epoch,
+                created_at, updated_at
          FROM kernel_environments WHERE installation_id = $1 AND environment_id = $2`,
         [installationId, environmentId]
       );

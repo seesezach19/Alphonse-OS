@@ -325,9 +325,14 @@ function validateCandidateShape(candidate, passport, session) {
         issues.push(issue("UNDECLARED_EFFECT", `${path}.declared_effects`, "Declared effect does not match the adapter operation contract."));
       }
     } else if (entry.kind === "capability") {
-      rejectUnknownKeys(entry.content, ["effect_class", "skill_ref", "context_requirements"], path, issues);
+      rejectUnknownKeys(entry.content, ["effect_class", "skill_ref", "context_requirements", "accountability_contract_ref"], path, issues);
       if (entry.content.effect_class !== "read_only" || exportMap.get(entry.content.skill_ref)?.kind !== "skill") {
         issues.push(issue("INCOMPATIBLE_EXPORT_REFERENCE", `${path}.skill_ref`, "Read Capability must resolve one Skill export."));
+      }
+      if (entry.content.accountability_contract_ref !== undefined
+        && exportMap.get(entry.content.accountability_contract_ref)?.kind !== "accountability_contract") {
+        issues.push(issue("INCOMPATIBLE_EXPORT_REFERENCE", `${path}.accountability_contract_ref`,
+          "Read Capability Accountability Contract must resolve an exact export."));
       }
     }
     if (entry.kind === "evaluation") {

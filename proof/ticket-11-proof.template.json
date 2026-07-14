@@ -1,0 +1,76 @@
+{
+  "schema_version": "alphonse.unfamiliar_builder_proof.v0.1",
+  "proof_session_id": "REPLACE_WITH_UUID",
+  "started_at": "REPLACE_WITH_ISO_TIMESTAMP",
+  "finished_at": "REPLACE_WITH_ISO_TIMESTAMP",
+  "builder": {
+    "builder_id": "REPLACE",
+    "unfamiliar_with_kernel_internals": false,
+    "has_not_built_operational_package": false,
+    "kernel_source_accessed": true,
+    "internal_schema_accessed": true,
+    "allowed_materials": ["kernel_protocol", "public_documentation", "builder_toolkit", "running_local_environment", "source_system_access"]
+  },
+  "timing": {
+    "workflow_active_ms": 0,
+    "human_attention_ms": 0,
+    "agent_runtime_ms": 0,
+    "external_wait_ms": 0,
+    "environment_setup_ms": 0
+  },
+  "integrity": {
+    "kernel_source_before": "REPLACE_WITH_SHA256",
+    "kernel_source_after": "REPLACE_WITH_SHA256",
+    "schema_before": "REPLACE_WITH_SHA256",
+    "schema_after": "REPLACE_WITH_SHA256",
+    "direct_sql_used": false,
+    "authority_bypass_used": false,
+    "hidden_scaffold_used": false,
+    "secret_copied": false,
+    "duplicate_uncertain_effect": false,
+    "failure_history_erased": false
+  },
+  "runtime_handoff": {
+    "handoff_id": "REPLACE_WITH_UUID",
+    "source_passport_id": "REPLACE_WITH_UUID",
+    "target_passport_id": "REPLACE_WITH_UUID",
+    "source_runtime": "REPLACE",
+    "target_runtime": "REPLACE",
+    "conversation_history_received": false,
+    "hidden_memory_received": false
+  },
+  "staging_recovery": {
+    "recovery_case_id": "REPLACE_WITH_UUID",
+    "was_uncertain": true,
+    "final_status": "resolved_applied",
+    "completed_at": "REPLACE_WITH_ISO_TIMESTAMP"
+  },
+  "production_effect": {
+    "effect_id": "REPLACE_WITH_UUID",
+    "run_id": "REPLACE_WITH_UUID",
+    "evidence_record_id": "REPLACE_WITH_UUID",
+    "capability_activation_id": "REPLACE_WITH_UUID",
+    "target_system": "REPLACE_PRODUCTION_SYSTEM",
+    "target_subject": "REPLACE",
+    "provider": "REPLACE_NON_AWS_PROVIDER",
+    "aws": false,
+    "selected_by_user": false,
+    "approved_by_user": false,
+    "reversible": false,
+    "completed_at": "REPLACE_WITH_ISO_TIMESTAMP"
+  },
+  "operator_explanation": {
+    "source": "butler",
+    "identity": "REPLACE",
+    "intent": "REPLACE",
+    "versions": "REPLACE",
+    "context": "REPLACE",
+    "authority": "REPLACE",
+    "effect": "REPLACE",
+    "evidence": "REPLACE",
+    "uncertainty": "REPLACE",
+    "recovery": "REPLACE",
+    "final_accountability": "REPLACE"
+  },
+  "builder_reviews": []
+}

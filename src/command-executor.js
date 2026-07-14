@@ -30,7 +30,7 @@ export function createCommandExecutor(pool) {
       }
 
       const environmentResult = await client.query(
-        `SELECT installation_id, environment_id, display_name, revision, next_sequence
+        `SELECT installation_id, environment_id, display_name, revision, next_sequence, execution_epoch
          FROM kernel_environments
          WHERE installation_id = $1 AND environment_id = $2
          FOR UPDATE`,
