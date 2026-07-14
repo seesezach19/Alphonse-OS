@@ -1,0 +1,22 @@
+{
+  "name": "alphonse-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Customer-controlled authority and accountability substrate for agentic operations.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "local:up": "docker compose up --build --wait",
+    "local:down": "docker compose down",
+    "test": "node --test test/unit/*.test.js",
+    "test:blackbox": "node scripts/acceptance.js",
+    "test:ticket-02": "node scripts/acceptance-ticket-02.js",
+    "test:ticket-03": "node scripts/acceptance-ticket-03.js"
+  },
+  "dependencies": {
+    "pg": "8.22.0"
+  }
+}

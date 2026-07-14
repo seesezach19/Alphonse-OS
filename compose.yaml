@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: alphonse_kernel
+      POSTGRES_USER: alphonse
+      POSTGRES_PASSWORD: local-development-only
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alphonse -d alphonse_kernel"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - kernel-postgres-data:/var/lib/postgresql/data
+
+  kernel:
+    build:
+      context: .
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://alphonse:local-development-only@postgres:5432/alphonse_kernel
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
+      KERNEL_INSTALLATION_NAME: Local Installation
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
+      KERNEL_ENVIRONMENT_NAME: Local Development
+      KERNEL_BOOTSTRAP_TOKEN: local-development-bootstrap-token
+      KERNEL_BOOTSTRAP_PRINCIPAL_ID: local-bootstrap-operator
+      DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
+      DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
+      DATA_PLANE_ID: reference-data-plane
+    ports:
+      - "127.0.0.1:${KERNEL_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  data-plane:
+    build:
+      context: .
+    command: ["node", "src/data-plane-server.js"]
+    environment:
+      DATA_PLANE_PORT: 3100
+      KERNEL_INTERNAL_URL: http://kernel:3000
+      DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
+      DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
+    ports:
+      - "127.0.0.1:${DATA_PLANE_PORT:-3100}:3100"
+    depends_on:
+      kernel:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  kernel-postgres-data:
