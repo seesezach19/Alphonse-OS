@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
     environment:
       POSTGRES_DB: alphonse_kernel
       POSTGRES_USER: alphonse
@@ -44,6 +44,7 @@ services:
       BROKER_SERVICE_TOKEN: local-broker-service-token
       DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
       DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
+      KERNEL_SUPPORT_DIAGNOSTIC_SECRET: local-support-diagnostic-encryption-secret-v1
       DATA_PLANE_ID: reference-data-plane
     ports:
       - "127.0.0.1:${KERNEL_PORT:-3000}:3000"
@@ -85,6 +86,7 @@ services:
       BROKER_SERVICE_TOKEN: local-broker-service-token
       DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
       DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
+      KERNEL_SUPPORT_DIAGNOSTIC_SECRET: local-support-diagnostic-encryption-secret-v1
       DATA_PLANE_ID: reference-data-plane
     ports:
       - "127.0.0.1:${KERNEL_PRODUCTION_PORT:-3001}:3000"
@@ -176,7 +178,7 @@ services:
       REGISTRY_ID: registry:primary
       REGISTRY_PRIVATE_KEY: ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIB0W3/Jf3OfpSwuKXBhMiQVzr01jGYd027lwHTpBKQMW
       REGISTRY_ACCESS_GRANT_SECRET: local-primary-registry-access-grant-secret
-      ADVISORY_SNAPSHOT_TTL_SECONDS: 10
+      ADVISORY_SNAPSHOT_TTL_SECONDS: 20
       DATABASE_URL: postgresql://alphonse_registry_primary:local-registry-primary-only@postgres:5432/alphonse_kernel
     ports:
       - "127.0.0.1:${REGISTRY_PRIMARY_PORT:-3500}:3500"
@@ -200,7 +202,7 @@ services:
       REGISTRY_PRIVATE_KEY: ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIBNVoZQ1SalYPugob/FnNEGg6VwSWjgi85/pk6hbRM4q
       REGISTRY_ACCESS_GRANT_SECRET: local-mirror-registry-access-grant-secret
       REGISTRY_TRUSTED_SOURCE_REGISTRIES: '{"registry:primary":"ed25519-spki:MCowBQYDK2VwAyEA2Qr92TwObgACe8bcrpUkUO/HwhWBruxS4LEOnIfYIHE="}'
-      ADVISORY_SNAPSHOT_TTL_SECONDS: 10
+      ADVISORY_SNAPSHOT_TTL_SECONDS: 20
       DATABASE_URL: postgresql://alphonse_registry_mirror:local-registry-mirror-only@postgres:5432/alphonse_kernel
     ports:
       - "127.0.0.1:${REGISTRY_MIRROR_PORT:-3501}:3500"
@@ -213,5 +215,182 @@ services:
       timeout: 3s
       retries: 20
 
+  promotion-postgres-development:
+    profiles: ["promotion"]
+    image: postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+    environment:
+      POSTGRES_DB: alphonse_kernel
+      POSTGRES_USER: alphonse
+      POSTGRES_PASSWORD: local-promotion-development-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alphonse -d alphonse_kernel"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - promotion-development-data:/var/lib/postgresql/data
+
+  promotion-postgres-staging:
+    profiles: ["promotion"]
+    image: postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+    environment:
+      POSTGRES_DB: alphonse_kernel
+      POSTGRES_USER: alphonse
+      POSTGRES_PASSWORD: local-promotion-staging-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alphonse -d alphonse_kernel"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - promotion-staging-data:/var/lib/postgresql/data
+
+  promotion-postgres-production:
+    profiles: ["promotion"]
+    image: postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+    environment:
+      POSTGRES_DB: alphonse_kernel
+      POSTGRES_USER: alphonse
+      POSTGRES_PASSWORD: local-promotion-production-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alphonse -d alphonse_kernel"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - promotion-production-data:/var/lib/postgresql/data
+
+  coordinator-postgres:
+    profiles: ["promotion"]
+    image: postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+    environment:
+      POSTGRES_DB: alphonse_coordinator
+      POSTGRES_USER: coordinator
+      POSTGRES_PASSWORD: local-coordinator-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coordinator -d alphonse_coordinator"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - coordinator-data:/var/lib/postgresql/data
+
+  hosted-coordinator:
+    profiles: ["promotion"]
+    build:
+      context: .
+    command: ["node", "src/hosted-coordinator-server.js"]
+    environment:
+      COORDINATOR_PORT: 3600
+      COORDINATOR_DATABASE_URL: postgresql://coordinator:local-coordinator-only@coordinator-postgres:5432/alphonse_coordinator
+      COORDINATOR_ID: coordinator:local
+      COORDINATOR_CUSTOMER_ID: customer:demo
+      COORDINATOR_PRIVATE_KEY: ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIBSylRiSYFNkTpjv+dZOBfkvXjehTkpx2+S4bCqr8WRt
+      COORDINATOR_ENROLLMENT_TOKENS: '{"00000000-0000-4000-8000-000000000131":"local-development-enrollment-only","00000000-0000-4000-8000-000000000132":"local-staging-enrollment-only","00000000-0000-4000-8000-000000000133":"local-production-enrollment-only"}'
+      COORDINATOR_ACCOUNT_TOKEN: local-coordinator-account-only
+      COORDINATOR_PROMOTION_GRAPH: '{"development:staging":["package_validation","compatibility"],"staging:production":["staging_deployed","staging_activated","staging_recovery"]}'
+    ports:
+      - "127.0.0.1:${COORDINATOR_PORT:-3600}:3600"
+    depends_on:
+      coordinator-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3600/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  promotion-kernel-development:
+    profiles: ["promotion"]
+    build:
+      context: .
+    environment: &promotion-kernel-environment
+      PORT: 3000
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a013
+      KERNEL_BOOTSTRAP_TOKEN: local-development-bootstrap-token
+      KERNEL_BOOTSTRAP_PRINCIPAL_ID: local-bootstrap-operator
+      KERNEL_PACKAGE_SIGNING_SECRET: local-package-signing-secret
+      KERNEL_PACKAGE_SIGNING_KEY_ID: local-package-signing-key-v1
+      KERNEL_WORKLOAD_GRANT_SIGNING_SECRET: local-workload-grant-signing-secret
+      KERNEL_WORKLOAD_GRANT_SIGNING_KEY_ID: local-workload-grant-key-v1
+      SUBSTRATE_SERVICE_TOKEN: local-substrate-service-token
+      SUBSTRATE_OBSERVATION_SECRET: local-substrate-observation-secret
+      SUBSTRATE_OBSERVATION_KEY_ID: local-substrate-observation-key-v1
+      DISPATCH_PERMIT_SIGNING_SECRET: local-dispatch-permit-signing-secret
+      DISPATCH_PERMIT_SIGNING_KEY_ID: local-dispatch-permit-key-v1
+      TRUSTED_ADAPTER_URL: http://trusted-adapter:3400
+      KERNEL_ADAPTER_TOKEN: local-kernel-adapter-token
+      BROKER_SERVICE_TOKEN: local-broker-service-token
+      DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
+      DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
+      KERNEL_SUPPORT_DIAGNOSTIC_SECRET: local-support-diagnostic-encryption-secret-v1
+      DATA_PLANE_ID: reference-data-plane
+      KERNEL_BUILD: 0.1.0
+      COORDINATOR_ENROLLMENT_TOKEN: local-development-enrollment-only
+      DATABASE_URL: postgresql://alphonse:local-promotion-development-only@promotion-postgres-development:5432/alphonse_kernel
+      KERNEL_INSTALLATION_NAME: Promotion Customer
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000131
+      KERNEL_ENVIRONMENT_NAME: Customer Development
+      KERNEL_ENVIRONMENT_CLASS: development
+      KERNEL_COORDINATION_PRIVATE_KEY: ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIKwY4Uwq70gyKPz1/np/VaPLdaIziuz5Zv35fZGQO/oz
+    ports:
+      - "127.0.0.1:${PROMOTION_DEVELOPMENT_PORT:-3611}:3000"
+    depends_on:
+      promotion-postgres-development:
+        condition: service_healthy
+      hosted-coordinator:
+        condition: service_healthy
+    healthcheck: &promotion-kernel-health
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  promotion-kernel-staging:
+    profiles: ["promotion"]
+    build:
+      context: .
+    environment:
+      <<: *promotion-kernel-environment
+      DATABASE_URL: postgresql://alphonse:local-promotion-staging-only@promotion-postgres-staging:5432/alphonse_kernel
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000132
+      KERNEL_ENVIRONMENT_NAME: Customer Staging
+      KERNEL_ENVIRONMENT_CLASS: staging
+      KERNEL_COORDINATION_PRIVATE_KEY: ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIDm4+wFrmoMbL29LaAsG9p6vvudujwxTJ3nvqT+Lf1my
+      COORDINATOR_ENROLLMENT_TOKEN: local-staging-enrollment-only
+    ports:
+      - "127.0.0.1:${PROMOTION_STAGING_PORT:-3612}:3000"
+    depends_on:
+      promotion-postgres-staging:
+        condition: service_healthy
+      hosted-coordinator:
+        condition: service_healthy
+    healthcheck: *promotion-kernel-health
+
+  promotion-kernel-production:
+    profiles: ["promotion"]
+    build:
+      context: .
+    environment:
+      <<: *promotion-kernel-environment
+      DATABASE_URL: postgresql://alphonse:local-promotion-production-only@promotion-postgres-production:5432/alphonse_kernel
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000133
+      KERNEL_ENVIRONMENT_NAME: Customer Production
+      KERNEL_ENVIRONMENT_CLASS: production
+      KERNEL_COORDINATION_PRIVATE_KEY: ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIIyilt0TdTdit+SbII7UjDJB0JOBl7v7BitW2USp47DS
+      COORDINATOR_ENROLLMENT_TOKEN: local-production-enrollment-only
+    ports:
+      - "127.0.0.1:${PROMOTION_PRODUCTION_PORT:-3613}:3000"
+    depends_on:
+      promotion-postgres-production:
+        condition: service_healthy
+      hosted-coordinator:
+        condition: service_healthy
+    healthcheck: *promotion-kernel-health
+
 volumes:
   kernel-postgres-data:
+  promotion-development-data:
+  promotion-staging-data:
+  promotion-production-data:
+  coordinator-data:

@@ -437,6 +437,7 @@ try {
       bundle: advisedBundle
     });
   const advisedOnline = await kernelPost("/kernel/v0/package-imports", advisedOnlineCommand);
+  assert.equal(advisedOnline.response.status, 201, JSON.stringify(advisedOnline.body));
   assert.equal(advisedOnline.body.import_receipt.admissible, true);
   assert.deepEqual(advisedOnline.body.import_receipt.verification_result.advisory_responses,
     [{ advisory_id: "ADV-T12-LOW", kind: "package_advisory", severity: "low", response: "notify_only" }]);
@@ -500,7 +501,7 @@ try {
     advisedOnline.body.import_receipt.verification_digest);
   assert.equal(offlineImport.body.quarantined_package.quarantine_id, quarantineId);
 
-  await new Promise((resolve) => setTimeout(resolve, 10_500));
+  await new Promise((resolve) => setTimeout(resolve, 20_500));
   const replayAfterSnapshotExpiry = await kernelPost("/kernel/v0/package-imports", advisedOnlineCommand);
   assert.equal(replayAfterSnapshotExpiry.response.status, 200);
   assert.equal(replayAfterSnapshotExpiry.body.import_receipt.import_receipt_id,

@@ -1,0 +1,62 @@
+{
+  "schema_version": "alphonse.release_spec.v0.1",
+  "release_version": "0.1.0",
+  "protocol_version": "0.1.0",
+  "components": {
+    "kernel": { "version": "0.1.0", "entrypoint": "src/server.js" },
+    "butler": { "version": "0.1.0", "entrypoint": "src/server.js", "surface": "/butler" },
+    "data_plane": { "version": "0.1.0", "entrypoint": "src/data-plane-server.js" },
+    "substrate": { "version": "0.1.0", "adapter": "docker-local-v1", "entrypoint": "runtime/reference-workload/workload.js" },
+    "registry": { "version": "0.1.0", "entrypoint": "src/package-registry-server.js" },
+    "coordinator": { "version": "0.1.0", "entrypoint": "src/hosted-coordinator-server.js" },
+    "reference_package": { "package_id": "com.alphonse.inventory", "semantic_version": "1.0.0" }
+  },
+  "base_images": {
+    "node": "node@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2",
+    "postgres": "postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416"
+  },
+  "migrations": [
+    "001_bootstrap.sql",
+    "002_identity_intent.sql",
+    "003_context_access.sql",
+    "004_context_receipt_constraints.sql",
+    "005_package_publication.sql",
+    "006_deployment_authority.sql",
+    "007_runtime_handoff.sql",
+    "008_accountable_execution.sql",
+    "009_exact_effect_dispatch.sql",
+    "010_effect_recovery.sql",
+    "011_open_applied_accountability.sql",
+    "012_portable_package_trust.sql",
+    "013_environment_promotion.sql",
+    "014_user_space_upgrade.sql",
+    "015_upgrade_canary_gate_results.sql",
+    "016_upgrade_reanalysis_and_reactivation.sql",
+    "017_upgrade_migration_attestations.sql",
+    "018_upgrade_policy_and_repair_verification.sql",
+    "019_upgrade_verification_reattestation.sql",
+    "020_environment_restore.sql",
+    "021_support_coordination.sql"
+  ],
+  "qualification": [
+    "unit",
+    "fresh_install",
+    "kernel_blackbox",
+    "identity_intent",
+    "governed_context",
+    "package_publication",
+    "deployment_authority",
+    "runtime_handoff",
+    "accountable_execution",
+    "effect_dispatch",
+    "uncertainty_recovery",
+    "repeatability_rehearsal",
+    "portable_trust",
+    "environment_promotion_and_outage",
+    "user_space_upgrade",
+    "backup_restore",
+    "governed_support"
+  ],
+  "required_provider": "none",
+  "aws_deployment_included": false
+}

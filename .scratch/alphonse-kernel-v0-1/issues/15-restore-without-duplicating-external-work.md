@@ -4,14 +4,14 @@
 
 **Blocked by:** 11 - Pass The Unfamiliar-Builder Production Proof.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
-- [ ] Encrypted/local backup captures authoritative PostgreSQL state and content-addressed artifacts.
-- [ ] Restore starts Environment suspended with a new execution epoch.
-- [ ] Workload carrying old epoch cannot obtain Dispatch Permit.
-- [ ] Effects possibly occurring after restore point enter explicit reconciliation.
-- [ ] Butler shows unresolved restore obligations before reactivation.
-- [ ] Transition integrity and artifact digests verify after restore.
-- [ ] Projections rebuild to externally equivalent views with visible cursor/health.
-- [ ] Typed tombstone, expiration, identity pseudonymization, and full Environment destruction remain distinguishable.
-- [ ] Restore drill completes without duplicate external correction.
+- [x] Encrypted/local backup captures authoritative PostgreSQL state and content-addressed artifacts.
+- [x] Restore starts Environment suspended with a new execution epoch.
+- [x] Workload carrying old epoch cannot obtain Dispatch Permit.
+- [x] Effects possibly occurring after restore point enter explicit reconciliation.
+- [x] Butler shows unresolved restore obligations before reactivation.
+- [x] Transition integrity and artifact digests verify after restore.
+- [x] Projections rebuild to externally equivalent views with visible cursor/health.
+- [x] Typed tombstone, expiration, identity pseudonymization, and full Environment destruction remain distinguishable.
+- [x] Restore drill completes without duplicate external correction.

@@ -48,6 +48,8 @@ npm run test:blackbox
 
 The acceptance harness uses its own Compose project, ports, and temporary volume. It removes only those isolated resources when finished.
 
+Local backup and fail-closed restore procedures: [docs/environment-restore.md](docs/environment-restore.md). Restore advances the execution epoch, reconciles ambiguous Effects, rebuilds projections, verifies integrity, then explicitly resumes authority.
+
 Ticket 02 identity and intent acceptance:
 
 ```powershell
@@ -141,6 +143,48 @@ npm run test:ticket-12
 ```
 
 This proves delegated Ed25519 release identity, scoped expiring Registry access grants, per-registry row-scoped database authority, atomic publication, complete manifest/artifact identity, manifest/release-bound receipts and transparency checkpoints, trusted signed risk attestations, independent transitive verification, mirror-stable identity, Environment-bound comprehensive Trust Policies, Work-Intent/evidence-bound Import Receipts, quarantine without Deployment authority, signed expiring advisory snapshots, replay-safe idempotency, and equivalent offline import during registry outage. Ticket 11 still gates production qualification of the inventory Package. See `docs/portable-package-trust.md`.
+
+Ticket 13 customer Environment promotion acceptance:
+
+```powershell
+npm run test:ticket-13
+```
+
+This proves three isolated customer Environments coordinate exact Package promotion through signed outbound channels and graph-enforced evidence gates. Configuration, credential references, review, activation, and execution authority remain target-local; hosted status is receipt-derived and grants no authority. Coordinator outage or local revocation does not interrupt existing local operations. See `docs/environment-promotion.md`.
+
+Ticket 14 user-space upgrade acceptance:
+
+```powershell
+npm run test:ticket-14
+```
+
+This proves exact multidimensional compatibility, side-by-side breaking versions, immutable Upgrade Plans, restart-resumable Package-state migration, deterministic canary pause, original-version Run completion after target activation, authority-equivalent preapproval, fresh approval for changed authority, honest rollback/forward repair, and old-version retirement blockers. See `docs/user-space-upgrades.md`.
+
+Ticket 15 restore acceptance:
+
+```powershell
+npm run test:ticket-15
+```
+
+This proves encrypted local backup, epoch fencing, projection rebuild, integrity verification, explicit reconciliation of uncertain Effects, and resume without duplicate external work. See `docs/environment-restore.md`.
+
+Ticket 16 governed support acceptance:
+
+```powershell
+npm run test:ticket-16
+```
+
+This proves signed coarse health, unknown missing heartbeats, exact support requests, customer-issued temporary read-only Support Passports, encrypted redacted diagnostics with immutable access logs, Capability-gated remediation records, host quarantine, and hosted revocation while local authority and history continue. See `docs/support-coordination.md`.
+
+Ticket 17 reproducible V0.1 release:
+
+```powershell
+npm run release:build
+npm run test:ticket-17
+npm run release:qualify
+```
+
+This produces a content-addressed deterministic customer bundle, proves its shipped one-command installer from a clean extraction, and composes the complete local non-AWS regression into content-addressed evidence. See `docs/release-v0.1.md`.
 
 ## Public Boundary
 

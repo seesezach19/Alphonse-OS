@@ -121,6 +121,20 @@ test("uncertain Effects reconcile through a separate read-only authority path", 
   assert.equal(permit.effect_class, "read_only");
 });
 
+test("restore separates suspension, projection rebuild, verification, resume, and retention semantics", () => {
+  const begin = getOperationDescriptor("kernel.environment.restore.begin");
+  const rebuild = getOperationDescriptor("kernel.environment.restore.projection_rebuild");
+  const verify = getOperationDescriptor("kernel.environment.restore.verify");
+  const resume = getOperationDescriptor("kernel.environment.restore.resume");
+  const lifecycle = getOperationDescriptor("kernel.data_lifecycle.record");
+  assert.equal(begin.authority_class, "authenticated_sponsoring_human");
+  assert.deepEqual(begin.emitted_events, ["kernel.environment.restore_started"]);
+  assert.deepEqual(rebuild.emitted_events, ["kernel.environment.restore_projection_rebuilt"]);
+  assert.deepEqual(verify.emitted_events, ["kernel.environment.restore_verified"]);
+  assert.deepEqual(resume.emitted_events, ["kernel.environment.restore_resumed"]);
+  assert.equal(lifecycle.input_schema.properties.input.required.includes("lifecycle_kind"), true);
+});
+
 test("portable import stops at immutable quarantine without deployment authority", () => {
   const policy = getOperationDescriptor("kernel.trust_policy.create");
   const importPackage = getOperationDescriptor("kernel.package.import");
@@ -130,4 +144,58 @@ test("portable import stops at immutable quarantine without deployment authority
   assert.deepEqual(importPackage.emitted_events, ["kernel.package.quarantined", "kernel.package_import.denied"]);
   assert.equal(quarantine.effect_class, "read_only");
   assert.deepEqual(quarantine.next_operations, []);
+});
+
+test("hosted promotion coordinates evidence without receiving local authority", () => {
+  const operationIds = ["kernel.coordinator_binding.create", "kernel.coordinator_binding.revoke",
+    "kernel.coordinator.register_outbound", "kernel.promotion.poll_outbound",
+    "kernel.promotion.request_outbound", "kernel.promotion.resolve_local_plan",
+    "kernel.promotion_receipt.create", "kernel.promotion_receipt.deliver_outbound"];
+  for (const operationId of operationIds) {
+    const descriptor = getOperationDescriptor(operationId);
+    assert.equal(descriptor.authority_class, "authenticated_sponsoring_human");
+    assert.notEqual(descriptor.effect_class, "external_effect");
+  }
+  assert.equal(getOperationDescriptor("kernel.promotion_proposal.get").effect_class, "read_only");
+  assert.equal(getOperationDescriptor("kernel.promotion_resolution.get").effect_class, "read_only");
+  assert.ok(getOperationDescriptor("kernel.promotion_receipt.create").issues
+    .includes("LOCAL_PROMOTION_PREDECESSOR_MISSING"));
+});
+
+test("upgrade operations keep compatibility, migration, activation, recovery, and retirement explicit", () => {
+  for (const operationId of ["kernel.upgrade.compatibility_analyze", "kernel.upgrade.activation_policy_create",
+    "kernel.upgrade.plan_create",
+    "kernel.upgrade.migration_start", "kernel.upgrade.migration_checkpoint", "kernel.upgrade.migration_verify",
+    "kernel.upgrade.canary_evaluate", "kernel.upgrade.activate", "kernel.upgrade.recovery_record",
+    "kernel.package_version.retire"]) {
+    const descriptor = getOperationDescriptor(operationId);
+    assert.equal(descriptor.authority_class, "authenticated_sponsoring_human");
+    assert.equal(descriptor.effect_class, "kernel_state_transition");
+  }
+  assert.equal(getOperationDescriptor("kernel.upgrade_compatibility_report.get").effect_class, "read_only");
+  assert.equal(getOperationDescriptor("kernel.upgrade_activation_policy.get").effect_class, "read_only");
+  assert.equal(getOperationDescriptor("kernel.package_retirement_status.get").effect_class, "read_only");
+  assert.deepEqual(getOperationDescriptor("kernel.upgrade.canary_evaluate").emitted_events,
+    ["kernel.upgrade.canary_passed", "kernel.upgrade.canary_paused"]);
+  assert.ok(getOperationDescriptor("kernel.upgrade.canary_evaluate").input_schema.properties.input.properties
+    .gate_results.items.required.includes("attestation_signature"));
+  assert.ok(getOperationDescriptor("kernel.upgrade.plan_create").input_schema.properties.input.properties
+    .preapproval_policy_id);
+});
+
+test("support coordination grants diagnostics but never standing remediation authority", () => {
+  const health = getOperationDescriptor("kernel.environment_health.publish_outbound");
+  const passport = getOperationDescriptor("kernel.support_case.approve");
+  const diagnostic = getOperationDescriptor("kernel.support_diagnostic.read");
+  const remediation = getOperationDescriptor("kernel.support_remediation.authorize");
+  const quarantine = getOperationDescriptor("kernel.runtime_host.quarantine");
+  const revocation = getOperationDescriptor("kernel.coordinator_binding.revocation_sync");
+  assert.equal(health.effect_class, "kernel_state_transition");
+  assert.equal(passport.authority_class, "authenticated_sponsoring_human");
+  assert.equal(diagnostic.authority_class, "active_read_only_support_passport");
+  assert.equal(diagnostic.effect_class, "read_only");
+  assert.ok(remediation.issues.includes("CAPABILITY_INACTIVE"));
+  assert.notEqual(remediation.effect_class, "external_effect");
+  assert.ok(quarantine.emitted_events.includes("kernel.runtime_host.quarantined"));
+  assert.ok(revocation.emitted_events.includes("kernel.coordinator_binding.revocation_delivered"));
 });

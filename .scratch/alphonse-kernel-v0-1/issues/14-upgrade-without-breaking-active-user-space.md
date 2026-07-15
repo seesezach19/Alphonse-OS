@@ -4,14 +4,14 @@
 
 **Blocked by:** 13 - Promote Across Customer Environments.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
-- [ ] Compatibility report compares protocol, exports, schemas, adapters, context, authority, evidence, and recovery semantics.
-- [ ] Breaking export installs beside old major version rather than mutating it.
-- [ ] Upgrade Plan binds exact versions, dependencies, migration, in-flight Runs, canary, verification, and repair.
-- [ ] Package-owned state migration checkpoints, resumes after interruption, and verifies declared invariants.
-- [ ] Active Run completes on original Package/Skill/adapter versions.
-- [ ] Deterministic canary cohort is reproducible and pauses on failed gates.
-- [ ] Authority-equivalent patch may use preapproved policy; changed authority requires fresh business approval.
-- [ ] Deployment rollback preserves history; incompatible real-world changes use forward repair or compensation.
-- [ ] Old version cannot retire while consumers, Runs, evidence, recovery, or retention reference it.
+- [x] Compatibility report compares protocol, exports, schemas, adapters, context, authority, evidence, and recovery semantics.
+- [x] Breaking export installs beside old major version rather than mutating it.
+- [x] Upgrade Plan binds exact versions, dependencies, migration, in-flight Runs, canary, verification, and repair.
+- [x] Package-owned state migration checkpoints, resumes after interruption, and verifies declared invariants.
+- [x] Active Run completes on original Package/Skill/adapter versions.
+- [x] Deterministic canary cohort is reproducible, attested, and pauses on failed gates.
+- [x] Authority-equivalent patch requires exact report-bound preapproval policy; changed authority requires fresh business approval.
+- [x] Deployment rollback preserves history; incompatible real-world changes require attested forward-repair or compensation verification.
+- [x] Old version cannot retire while consumers, Runs, evidence, recovery, or retention reference it.

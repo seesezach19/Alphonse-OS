@@ -2,6 +2,17 @@ import { randomUUID } from "node:crypto";
 
 import { KernelError } from "./errors.js";
 
+const RESTORE_COMMANDS = new Set([
+  "kernel.environment.restore.begin",
+  "kernel.environment.restore.projection_rebuild",
+  "kernel.environment.restore.verify",
+  "kernel.environment.restore.resume",
+  "kernel.recovery_case.reconcile",
+  "kernel.recovery_case.reconcile.claim",
+  "kernel.recovery_case.reconciliation_failed",
+  "kernel.reconciliation_permit.credential_deliver"
+]);
+
 export function createCommandExecutor(pool) {
   return async function executeCommand({ installationId, environmentId, command, requestDigest, apply }) {
     const client = await pool.connect();
@@ -30,7 +41,8 @@ export function createCommandExecutor(pool) {
       }
 
       const environmentResult = await client.query(
-        `SELECT installation_id, environment_id, display_name, revision, next_sequence, execution_epoch
+        `SELECT installation_id, environment_id, display_name, revision, next_sequence, execution_epoch,
+                operational_state, restore_generation
          FROM kernel_environments
          WHERE installation_id = $1 AND environment_id = $2
          FOR UPDATE`,
@@ -41,6 +53,13 @@ export function createCommandExecutor(pool) {
       }
 
       const environment = environmentResult.rows[0];
+      if (environment.operational_state === "destroyed") {
+        throw new KernelError(410, "ENVIRONMENT_DESTROYED", "Environment authority was permanently destroyed.");
+      }
+      if (environment.operational_state === "restore_suspended" && !RESTORE_COMMANDS.has(command.operation_id)) {
+        throw new KernelError(423, "ENVIRONMENT_RESTORE_SUSPENDED",
+          "Environment authority is suspended until restore verification and reconciliation complete.");
+      }
       const sequence = BigInt(environment.next_sequence).toString();
       const transitionId = randomUUID();
       const outboxId = randomUUID();

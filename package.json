@@ -25,10 +25,19 @@
     "rehearse": "node scripts/rehearsal-ticket-10.js",
     "proof:snapshot": "node scripts/proof-snapshot.js",
     "qualify:ticket-11": "node scripts/qualify-ticket-11.js",
-    "test:ticket-12": "node scripts/acceptance-ticket-12.js"
+    "test:ticket-12": "node scripts/acceptance-ticket-12.js",
+    "test:ticket-13": "node scripts/acceptance-ticket-13.js",
+    "test:ticket-14": "node scripts/acceptance-ticket-14.js",
+    "test:ticket-15": "node scripts/acceptance-ticket-15.js",
+    "test:ticket-16": "node scripts/acceptance-ticket-16.js",
+    "test:ticket-17": "node scripts/acceptance-ticket-17.js",
+    "release:build": "node scripts/build-release-v0.1.js",
+    "release:qualify": "node scripts/qualify-release-v0.1.js",
+    "backup:local": "node scripts/local-backup.js create",
+    "restore:local": "node scripts/local-backup.js restore"
   },
   "dependencies": {
-    "json-logic-js": "^2.0.5",
+    "json-logic-js": "2.0.5",
     "pg": "8.22.0"
   }
 }

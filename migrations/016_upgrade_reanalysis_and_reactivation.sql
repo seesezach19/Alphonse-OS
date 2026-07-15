@@ -1,0 +1,13 @@
+ALTER TABLE kernel_upgrade_compatibility_reports
+  DROP CONSTRAINT kernel_upgrade_compatibility__installation_id_environment__key1;
+
+CREATE INDEX kernel_upgrade_compatibility_pair_idx
+  ON kernel_upgrade_compatibility_reports
+  (installation_id, environment_id, current_deployment_id, target_deployment_id, capability_export_id, created_at DESC);
+
+ALTER TABLE kernel_capability_business_approvals
+  DROP CONSTRAINT kernel_capability_business_ap_installation_id_environment__key1;
+
+CREATE UNIQUE INDEX kernel_capability_business_approval_exact_idx
+  ON kernel_capability_business_approvals
+  (installation_id, environment_id, deployment_id, capability_export_id, authority_digest, approved_against_revision);

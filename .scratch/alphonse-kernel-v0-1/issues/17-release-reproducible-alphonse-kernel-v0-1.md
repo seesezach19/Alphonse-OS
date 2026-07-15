@@ -4,13 +4,13 @@
 
 **Blocked by:** 14 - Upgrade Without Breaking Active User Space; 16 - Coordinate Support Without Standing Authority.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
-- [ ] Fresh local machine prerequisites and one-command Docker installation are documented.
-- [ ] Release pins exact Kernel, Butler, Data Plane, substrate, registry, coordinator, Package, and migration versions.
-- [ ] Fresh install passes complete inventory happy, stale, duplicate, uncertainty, recovery, handoff, and accountability regression.
-- [ ] Upgrade from previous release passes pinned-Run, migration, canary, and rollback/repair checks.
-- [ ] Backup/restore, worker fencing, support access, and coordinator-outage checks pass.
-- [ ] Release contains no secrets, hidden workflow scaffold, direct database authority path, or provider-specific required memory.
-- [ ] Operator documentation explains data/credential custody, trust assumptions, limitations, and non-AWS deployment boundary.
-- [ ] Release artifacts and acceptance evidence are content-addressed and reproducible.
+- [x] Fresh local machine prerequisites and one-command Docker installation are documented.
+- [x] Release pins exact Kernel, Butler, Data Plane, substrate, registry, coordinator, Package, and migration versions.
+- [x] Fresh install passes complete inventory happy, stale, duplicate, uncertainty, recovery, handoff, and accountability regression.
+- [x] Upgrade from previous release passes pinned-Run, migration, canary, and rollback/repair checks.
+- [x] Backup/restore, worker fencing, support access, and coordinator-outage checks pass.
+- [x] Release contains no secrets, hidden workflow scaffold, direct database authority path, or provider-specific required memory.
+- [x] Operator documentation explains data/credential custody, trust assumptions, limitations, and non-AWS deployment boundary.
+- [x] Release artifacts and acceptance evidence are content-addressed and reproducible.

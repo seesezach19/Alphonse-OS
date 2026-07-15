@@ -709,6 +709,16 @@ export function createDeploymentService(database, identityIntent, packageService
         }
         if (card.states.capability_activation === "active") throw new KernelError(409, "CAPABILITY_ALREADY_ACTIVE", "Exact Capability is already active.");
         const details = await capabilityDetails(deploymentId, exportId, client);
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`package-admission:${details.packageVersion.package_version_id}`]);
+        const retirement = await client.query(
+          `SELECT package_retirement_id FROM kernel_package_retirements
+           WHERE installation_id=$1 AND environment_id=$2 AND package_version_id=$3`,
+          [installationId, environmentId, details.packageVersion.package_version_id]
+        );
+        if (retirement.rowCount > 0) {
+          throw new KernelError(409, "PACKAGE_VERSION_RETIRED", "Retired Package Versions cannot receive new Capability activation.");
+        }
         const toRevision = card.current_revision + 1;
         await client.query(
           `INSERT INTO kernel_capability_activations

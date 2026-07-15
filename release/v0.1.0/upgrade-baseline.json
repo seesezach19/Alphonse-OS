@@ -1,0 +1,11 @@
+{
+  "schema_version": "alphonse.upgrade_baseline.v0.1",
+  "baseline_id": "reference-inventory-v1",
+  "kernel_protocol": "0.1.0",
+  "storage_schema_through": "013_environment_promotion.sql",
+  "package_id": "com.alphonse.inventory",
+  "active_package_version": "1.0.0",
+  "target_package_versions": ["2.0.0", "2.1.0"],
+  "proof": "scripts/acceptance-ticket-14.js",
+  "scope": "user_space_upgrade_baseline"
+}

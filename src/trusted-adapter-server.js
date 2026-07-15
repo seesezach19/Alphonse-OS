@@ -10,7 +10,7 @@ const storefrontUrl = process.env.STOREFRONT_URL;
 const storefrontSystem = process.env.STOREFRONT_SYSTEM;
 const testControlToken = process.env.ADAPTER_TEST_CONTROL_TOKEN;
 const faultDelayMs = Number(process.env.ADAPTER_FAULT_DELAY_MS ?? 1_000);
-if (!kernelToken || !brokerToken || !brokerUrl || !storefrontUrl || !storefrontSystem || !testControlToken) {
+if (!kernelToken || !brokerToken || !brokerUrl || !storefrontUrl || !storefrontSystem) {
   throw new Error("Trusted adapter configuration is required.");
 }
 
@@ -31,6 +31,7 @@ async function read(request) {
 const server = http.createServer(async (request, response) => {
   if (request.url === "/healthz") return send(response, 200, { status: "healthy" });
   if (request.method === "POST" && request.url === "/internal/test/faults/next-dispatch") {
+    if (!testControlToken) return send(response, 404, { error: "not_found" });
     if (request.headers.authorization !== `Bearer ${testControlToken}`) return send(response, 403, { error: "test_control_required" });
     const input = await read(request);
     if (!["drop_before_apply", "timeout_after_apply"].includes(input.mode)) {
@@ -40,6 +41,7 @@ const server = http.createServer(async (request, response) => {
     return send(response, 201, { armed: true, mode: input.mode });
   }
   if (request.method === "POST" && request.url === "/internal/test/faults/next-reconciliation") {
+    if (!testControlToken) return send(response, 404, { error: "not_found" });
     if (request.headers.authorization !== `Bearer ${testControlToken}`) return send(response, 403, { error: "test_control_required" });
     const input = await read(request);
     if (input.mode !== "drop_before_observation") return send(response, 400, { error: "invalid_fault_mode" });

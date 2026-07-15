@@ -3,7 +3,8 @@ export const PROTOCOL_VERSION = "0.1.0";
 const emptyInputSchema = { type: "object", additionalProperties: false };
 const environmentOutputSchema = {
   type: "object",
-  required: ["installation_id", "environment_id", "display_name", "environment_class", "revision", "execution_epoch", "created_at", "updated_at"],
+  required: ["installation_id", "environment_id", "display_name", "environment_class", "revision", "execution_epoch",
+    "operational_state", "restore_generation", "created_at", "updated_at"],
   properties: {
     installation_id: { type: "string", format: "uuid" },
     environment_id: { type: "string", format: "uuid" },
@@ -11,6 +12,8 @@ const environmentOutputSchema = {
     environment_class: { enum: ["development", "staging", "production"] },
     revision: { type: "string", pattern: "^[0-9]+$" },
     execution_epoch: { type: "string", pattern: "^[1-9][0-9]*$" },
+    operational_state: { enum: ["active", "restore_suspended", "destroyed"] },
+    restore_generation: { type: "string", pattern: "^[0-9]+$" },
     created_at: { type: "string", format: "date-time" },
     updated_at: { type: "string", format: "date-time" }
   }
@@ -238,6 +241,33 @@ function commandDescriptor(operationId, summary, path, resultKey, issues = [], i
     "kernel.package_version.publish": "kernel.package_version.published",
     "kernel.trust_policy.create": "kernel.trust_policy.created",
     "kernel.package.import": ["kernel.package.quarantined", "kernel.package_import.denied"],
+    "kernel.coordinator_binding.create": "kernel.coordinator_binding.created",
+    "kernel.coordinator_binding.revoke": "kernel.coordinator_binding.revoked",
+    "kernel.coordinator.register_outbound": "kernel.coordinator.registered_outbound",
+    "kernel.promotion.poll_outbound": "kernel.promotion.proposals_pulled",
+    "kernel.promotion.request_outbound": "kernel.promotion.requested_outbound",
+    "kernel.promotion.resolve_local_plan": "kernel.promotion.target_plan_resolved",
+    "kernel.promotion_receipt.create": "kernel.promotion.receipt_created",
+    "kernel.promotion_receipt.deliver_outbound": "kernel.promotion.receipt_delivered_outbound",
+    "kernel.environment_health.publish_outbound": "kernel.environment_health.published",
+    "kernel.support.poll_outbound": "kernel.support_cases.pulled",
+    "kernel.support_case.approve": "kernel.support_passport.issued",
+    "kernel.support_passport.deliver_outbound": "kernel.support_passport.notice_delivered",
+    "kernel.diagnostic_bundle.create": "kernel.diagnostic_bundle.created",
+    "kernel.support_remediation.authorize": "kernel.support_remediation.authorized",
+    "kernel.runtime_host.quarantine": "kernel.runtime_host.quarantined",
+    "kernel.coordinator_binding.revocation_sync": "kernel.coordinator_binding.revocation_delivered",
+    "kernel.upgrade.compatibility_analyze": "kernel.upgrade.compatibility_analyzed",
+    "kernel.upgrade.activation_policy_create": "kernel.upgrade.activation_policy_created",
+    "kernel.upgrade.plan_create": "kernel.upgrade.plan_created",
+    "kernel.upgrade.migration_start": "kernel.upgrade.migration_started",
+    "kernel.upgrade.migration_checkpoint": "kernel.upgrade.migration_checkpointed",
+    "kernel.upgrade.migration_verify": "kernel.upgrade.migration_verified",
+    "kernel.upgrade.canary_evaluate": ["kernel.upgrade.canary_passed", "kernel.upgrade.canary_paused"],
+    "kernel.upgrade.activate": "kernel.upgrade.activated",
+    "kernel.upgrade.recovery_record": ["kernel.upgrade.deployment_rollback", "kernel.upgrade.forward_repair",
+      "kernel.upgrade.compensation", "kernel.upgrade.forward_repair_verified", "kernel.upgrade.compensation_verified"],
+    "kernel.package_version.retire": "kernel.package_version.retired",
     "kernel.artifact.trust_attest": "kernel.artifact.trust_attested",
     "kernel.deployment_plan.validate": "kernel.deployment_plan.validated",
     "kernel.deployment_plan.technical_review": "kernel.deployment_plan.technical_reviewed",
@@ -248,6 +278,13 @@ function commandDescriptor(operationId, summary, path, resultKey, issues = [], i
     "kernel.handoff.accept": "kernel.handoff.accepted",
     "kernel.handoff.reject": "kernel.handoff.rejected",
     "kernel.environment.execution_epoch.advance": "kernel.environment.execution_epoch.advanced",
+    "kernel.environment.restore.begin": "kernel.environment.restore_started",
+    "kernel.environment.restore.projection_rebuild": "kernel.environment.restore_projection_rebuilt",
+    "kernel.environment.restore.verify": "kernel.environment.restore_verified",
+    "kernel.environment.restore.resume": "kernel.environment.restore_resumed",
+    "kernel.data_lifecycle.record": ["kernel.data_lifecycle.typed_tombstone",
+      "kernel.data_lifecycle.authority_expiration", "kernel.data_lifecycle.identity_pseudonymization",
+      "kernel.data_lifecycle.environment_destruction"],
     "kernel.execution_envelope.admit": "kernel.execution_envelope.admitted",
     "kernel.run.complete_comparison": "kernel.run.completed",
     "kernel.effect.admit": "kernel.effect.admitted",
@@ -349,6 +386,56 @@ descriptors.push(
 );
 
 descriptors.push(
+  commandDescriptor("kernel.environment.restore.begin",
+    "Suspend restored Environment authority, advance its epoch, and open reconciliation for ambiguous Effects.",
+    "/kernel/v0/restores", "restore", ["BACKUP_MANIFEST_DIGEST_MISMATCH", "RESTORE_POINT_MISMATCH"],
+    { type: "object", required: ["backup_manifest", "backup_manifest_digest"], additionalProperties: false }),
+  commandDescriptor("kernel.environment.restore.projection_rebuild",
+    "Rebuild the Butler projection from authoritative restored state with visible cursor and health.",
+    "/kernel/v0/restores/{restore_id}/projection-rebuild", "restore", ["RESTORE_NOT_FOUND"],
+    { type: "object", additionalProperties: false }),
+  commandDescriptor("kernel.environment.restore.verify",
+    "Verify transition continuity, artifact digests, projection health, and restore obligations.",
+    "/kernel/v0/restores/{restore_id}/verify", "restore", ["RESTORE_VERIFICATION_FAILED"],
+    { type: "object", required: ["verified_artifact_digests"], additionalProperties: false }),
+  commandDescriptor("kernel.environment.restore.resume",
+    "Resume Environment authority only after restore checks and reconciliation complete.",
+    "/kernel/v0/restores/{restore_id}/resume", "restore", ["RESTORE_NOT_READY"],
+    { type: "object", additionalProperties: false }),
+  readDescriptor("kernel.environment.restore.get", "Inspect restore state, projection health, and unresolved obligations.",
+    "/kernel/v0/restores/{restore_id}", "restore", "RESTORE_NOT_FOUND"),
+  commandDescriptor("kernel.data_lifecycle.record",
+    "Record typed tombstone, expiration, identity pseudonymization, or Environment destruction semantics.",
+    "/kernel/v0/data-lifecycle-records", "lifecycle_record", ["INVALID_LIFECYCLE_KIND"],
+    { type: "object", required: ["lifecycle_kind", "subject_type", "subject_id", "detail"], additionalProperties: false })
+);
+
+const upgradeCheckpointInput = {
+  type: "object", required: ["checkpoint_ordinal", "checkpoint_name", "input_digest", "output_digest",
+    "source_count", "target_count", "invariants", "attestation_signature"], properties: {
+    checkpoint_ordinal: { type: "integer", minimum: 0 }, checkpoint_name: { type: "string", minLength: 1 },
+    input_digest: { type: "string" }, output_digest: { type: "string" },
+    source_count: { type: "integer", minimum: 0 }, target_count: { type: "integer", minimum: 0 },
+    invariants: { type: "object", additionalProperties: { type: "boolean" } },
+    attestation_signature: { type: "string" }
+  }, additionalProperties: false
+};
+
+const upgradeCanaryInput = {
+  type: "object", required: ["upgrade_plan_id", "attempt_number", "routing_keys", "assignment_digest", "gate_results"], properties: {
+    upgrade_plan_id: { type: "string", format: "uuid" },
+    attempt_number: { type: "integer", minimum: 1 },
+    routing_keys: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", minLength: 1 } },
+    assignment_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    gate_results: { type: "array", minItems: 1, items: { type: "object",
+      required: ["gate_id", "passed", "evidence_digest", "attestation_signature"], properties: {
+        gate_id: { type: "string", minLength: 1 }, passed: { type: "boolean" }, evidence_digest: { type: "string" },
+        attestation_signature: { type: "string", pattern: "^hmac-sha256:[0-9a-f]{64}$" }
+      }, additionalProperties: false } }
+  }, additionalProperties: false
+};
+
+descriptors.push(
   commandDescriptor("kernel.trust_policy.create", "Create one immutable destination-local Package Trust Policy.",
     "/kernel/v0/trust-policies", "trust_policy", ["TRUST_POLICY_VERSION_EXISTS", "PRIVATE_KEY_PROHIBITED",
       "TRUST_POLICY_ENVIRONMENT_MISMATCH"], {
@@ -444,7 +531,8 @@ descriptors.push({
 descriptors.push(
   commandDescriptor("kernel.execution_envelope.admit", "Atomically admit exact read work into one Envelope, Run, and initial Obligations.",
     "/kernel/v0/execution-envelopes", "execution_envelope", ["EXECUTION_PASSPORT_MISMATCH", "DELEGATION_EXPIRED",
-      "CAPABILITY_INACTIVE", "STALE_CONTEXT", "EXECUTION_BOUNDS_EXCEEDED", "EXECUTION_IDEMPOTENCY_CONFLICT"],
+      "CAPABILITY_INACTIVE", "PACKAGE_VERSION_RETIRED", "STALE_CONTEXT", "EXECUTION_BOUNDS_EXCEEDED",
+      "EXECUTION_IDEMPOTENCY_CONFLICT"],
     { type: "object", required: ["idempotency_key", "passport_id", "work_intent_id", "delegation_id",
       "capability_activation_id", "package_version_id", "skill", "context_receipt_ids", "limits",
       "evidence_requirements", "expires_at"], additionalProperties: false }, executionAgentAuthority),
@@ -613,7 +701,8 @@ descriptors.push(
     "/kernel/v0/capability-business-approvals/{business_approval_id}", "business_approval", "BUSINESS_APPROVAL_NOT_FOUND"),
   commandDescriptor("kernel.capability_activation.activate", "Activate exact approved Capability authority separately from Deployment.",
     "/kernel/v0/capability-activations", "capability_activation", ["ACTION_CARD_MISMATCH",
-      "STALE_ACTION_REVISION", "STALE_BUSINESS_APPROVAL", "BUSINESS_APPROVAL_VERSION_MISMATCH"], {
+      "STALE_ACTION_REVISION", "STALE_BUSINESS_APPROVAL", "BUSINESS_APPROVAL_VERSION_MISMATCH",
+      "PACKAGE_VERSION_RETIRED"], {
       ...exactDecisionSchema,
       required: ["business_approval_id", ...exactDecisionSchema.required],
       properties: { business_approval_id: { type: "string", format: "uuid" }, ...exactDecisionSchema.properties }
@@ -658,6 +747,259 @@ descriptors.push(
     issues: ["CAPABILITY_UNAPPROVED", "CAPABILITY_INACTIVE", "CAPABILITY_VERSION_MISMATCH", "STALE_ACTION_REVISION"],
     emitted_events: [],
     next_operations: []
+  }
+);
+
+descriptors.push(
+  commandDescriptor("kernel.coordinator_binding.create", "Create one replaceable local binding to a hosted coordinator.",
+    "/kernel/v0/coordinator-bindings", "coordinator_binding", ["ACTIVE_COORDINATOR_BINDING_EXISTS",
+      "SECRET_MATERIAL_PROHIBITED"], {
+      type: "object", required: ["coordinator_id", "coordinator_endpoint", "coordinator_public_key", "customer_id",
+        "promotion_scope", "expires_at"], additionalProperties: false
+    }),
+  commandDescriptor("kernel.coordinator_binding.revoke", "Revoke hosted coordination without changing local authority.",
+    "/kernel/v0/coordinator-bindings/{binding_id}/revoke", "coordinator_binding",
+    ["COORDINATOR_BINDING_NOT_FOUND", "REVISION_CONFLICT"], {
+      type: "object", required: ["reason", "expected_revision"], additionalProperties: false
+    }),
+  commandDescriptor("kernel.coordinator.register_outbound", "Register a minimal signed descriptor over a customer-initiated channel.",
+    "/kernel/v0/coordinator-registration-sync", "registration", ["COORDINATOR_UNAVAILABLE",
+      "COORDINATOR_CHALLENGE_SCOPE_MISMATCH"], { type: "object", additionalProperties: false }),
+  commandDescriptor("kernel.promotion.poll_outbound", "Pull signed Promotion Proposals without opening an inbound administration path.",
+    "/kernel/v0/promotion-polls", "promotion_proposals", ["COORDINATOR_UNAVAILABLE",
+      "PROMOTION_PROPOSAL_SCOPE_MISMATCH"], { type: "object", additionalProperties: false }),
+  commandDescriptor("kernel.promotion.request_outbound", "Request one graph-constrained exact Package promotion with signed gates.",
+    "/kernel/v0/promotion-requests", "promotion_proposal", ["PROMOTION_GATES_INCOMPLETE",
+      "PROMOTION_EDGE_DENIED", "COORDINATOR_UNAVAILABLE"], {
+      type: "object", required: ["target_environment_id", "target_class", "package_identity", "manifest_digest",
+        "package_artifact_digest", "dependency_lock", "source_receipt_digests", "compatibility", "change_summary",
+        "required_configuration_schema", "gate_receipt_ids"], additionalProperties: false
+    }),
+  readDescriptor("kernel.promotion_proposal.get", "Inspect one immutable coordinator-signed local Promotion Proposal.",
+    "/kernel/v0/promotion-proposals/{proposal_id}", "promotion_proposal", "PROMOTION_PROPOSAL_NOT_FOUND"),
+  commandDescriptor("kernel.promotion.resolve_local_plan", "Resolve target-local configuration and credential references without hosted authority.",
+    "/kernel/v0/promotion-proposals/{proposal_id}/resolve", "promotion_resolution",
+    ["TARGET_CONFIGURATION_INCOMPLETE", "TARGET_DEPLOYMENT_PLAN_PACKAGE_MISMATCH"], {
+      type: "object", required: ["deployment_plan_id"], additionalProperties: false
+    }),
+  readDescriptor("kernel.promotion_resolution.get", "Inspect target-local Promotion resolution without configuration values.",
+    "/kernel/v0/promotion-proposals/{proposal_id}/resolution", "promotion_resolution", "PROMOTION_RESOLUTION_NOT_FOUND"),
+  commandDescriptor("kernel.promotion_receipt.create", "Create a signed local receipt without granting operational authority.",
+    "/kernel/v0/promotion-receipts", "promotion_receipt", ["LOCAL_PROMOTION_PREDECESSOR_MISSING",
+      "LOCAL_PACKAGE_VALIDATION_UNVERIFIED", "LOCAL_PACKAGE_COMPATIBILITY_UNVERIFIED",
+      "LOCAL_DEPLOYMENT_PLAN_UNVERIFIED", "LOCAL_DEPLOYMENT_UNVERIFIED", "LOCAL_ACTIVATION_UNVERIFIED",
+      "LOCAL_RECOVERY_UNVERIFIED", "PROMOTION_RECEIPT_SCOPE_MISMATCH", "PROMOTION_PROPOSAL_EXPIRED"], {
+      type: "object", required: ["proposal_id", "package_identity", "receipt_type", "local_reference"],
+      additionalProperties: false
+    }),
+  commandDescriptor("kernel.promotion_receipt.deliver_outbound", "Deliver one signed target receipt over the outbound channel.",
+    "/kernel/v0/promotion-receipts/{receipt_id}/deliver", "delivery",
+    ["PROMOTION_RECEIPT_NOT_FOUND", "COORDINATOR_UNAVAILABLE"], { type: "object", additionalProperties: false })
+);
+
+descriptors.push(
+  commandDescriptor("kernel.upgrade.compatibility_analyze", "Compare exact active and target user-space contracts.",
+    "/kernel/v0/upgrade-compatibility-reports", "compatibility_report",
+    ["CURRENT_DEPLOYMENT_NOT_ACTIVE", "UPGRADE_PACKAGE_MISMATCH", "UPGRADE_TARGET_UNCHANGED"], {
+      type: "object", required: ["current_deployment_id", "target_deployment_id", "capability_export_id"], properties: {
+        current_deployment_id: { type: "string", format: "uuid" },
+        target_deployment_id: { type: "string", format: "uuid" },
+        capability_export_id: { type: "string", minLength: 1 }
+      },
+      additionalProperties: false
+    }),
+  readDescriptor("kernel.upgrade_compatibility_report.get", "Inspect one immutable multidimensional Compatibility Report.",
+    "/kernel/v0/upgrade-compatibility-reports/{compatibility_report_id}", "compatibility_report",
+    "COMPATIBILITY_REPORT_NOT_FOUND"),
+  commandDescriptor("kernel.upgrade.activation_policy_create", "Preapprove one exact authority-equivalent Compatibility Report.",
+    "/kernel/v0/upgrade-activation-policies", "upgrade_activation_policy",
+    ["AUTHORITY_NOT_EQUIVALENT", "INVALID_POLICY_EXPIRY"], {
+      type: "object", required: ["compatibility_report_id", "rationale", "expires_at"], properties: {
+        compatibility_report_id: { type: "string", format: "uuid" },
+        rationale: { type: "string", minLength: 1, maxLength: 2000 },
+        expires_at: { type: "string", format: "date-time" }
+      }, additionalProperties: false
+    }),
+  readDescriptor("kernel.upgrade_activation_policy.get", "Inspect one immutable report-bound Upgrade Activation Policy.",
+    "/kernel/v0/upgrade-activation-policies/{upgrade_activation_policy_id}", "upgrade_activation_policy",
+    "UPGRADE_ACTIVATION_POLICY_NOT_FOUND"),
+  commandDescriptor("kernel.upgrade.plan_create", "Bind exact versions, migration, canary, verification, repair, and retirement.",
+    "/kernel/v0/upgrade-plans", "upgrade_plan", ["UPGRADE_UNSUPPORTED", "BUSINESS_PAYLOAD_PROHIBITED",
+      "FORWARD_REPAIR_REQUIRED", "ROLLBACK_BOUNDARY_REQUIRED", "BREAKING_MAJOR_REQUIRED",
+      "UPGRADE_PREAPPROVAL_MISMATCH", "AUTHORITY_NOT_EQUIVALENT"], {
+      type: "object", required: ["compatibility_report_id", "migration", "canary", "verification", "repair",
+        "retention_until"], properties: {
+        compatibility_report_id: { type: "string", format: "uuid" },
+        preapproval_policy_id: { type: "string", format: "uuid" },
+        migration: { type: "object", required: ["declaration_version", "scope", "checkpoints"], properties: {
+          declaration_version: { type: "string", minLength: 1 }, scope: { type: "string", minLength: 1 },
+          checkpoints: { type: "array", minItems: 1, items: { type: "object", required: ["name", "invariants"],
+            properties: { name: { type: "string", minLength: 1 },
+              invariants: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", minLength: 1 } } },
+            additionalProperties: false } }
+        }, additionalProperties: false },
+        canary: { type: "object", required: ["seed", "basis_points", "gates"], properties: {
+          seed: { type: "string", minLength: 1 }, basis_points: { type: "integer", minimum: 1, maximum: 10000 },
+          gates: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", minLength: 1 } }
+        }, additionalProperties: false },
+        verification: { type: "object", required: ["criteria"], properties: {
+          criteria: { type: "array", minItems: 1, uniqueItems: true, contains: { const: "zero_undeclared_effects" },
+            items: { type: "string", minLength: 1 } }
+        }, additionalProperties: false },
+        repair: { type: "object", required: ["reversibility", "strategy"], properties: {
+          reversibility: { enum: ["reversible", "conditionally_reversible", "forward_only"] },
+          strategy: { type: "string", minLength: 1 }, forward_repair_capability_id: { type: "string", minLength: 1 },
+          rollback_boundary: { type: "object", required: ["allowed_real_world_changes", "expires_at"], properties: {
+            allowed_real_world_changes: { type: "array", minItems: 1, uniqueItems: true,
+              items: { enum: ["none", "compatible"] } },
+            expires_at: { type: "string", format: "date-time" }
+          }, additionalProperties: false }
+        }, additionalProperties: false },
+        retention_until: { type: "string", format: "date-time" }
+      }, additionalProperties: false
+    }),
+  readDescriptor("kernel.upgrade_plan.get", "Inspect one immutable Upgrade Plan and mutable lifecycle state.",
+    "/kernel/v0/upgrade-plans/{upgrade_plan_id}", "upgrade_plan", "UPGRADE_PLAN_NOT_FOUND"),
+  commandDescriptor("kernel.upgrade.migration_start", "Start resumable Package-owned state migration without external effects.",
+    "/kernel/v0/upgrade-migrations", "migration_run", ["UPGRADE_PHASE_MISMATCH"], {
+      type: "object", required: ["upgrade_plan_id"], properties: {
+        upgrade_plan_id: { type: "string", format: "uuid" }
+      }, additionalProperties: false
+    }),
+  readDescriptor("kernel.upgrade_migration.get", "Inspect one resumable migration and its next checkpoint.",
+    "/kernel/v0/upgrade-migrations/{migration_run_id}", "migration_run", "MIGRATION_RUN_NOT_FOUND"),
+  commandDescriptor("kernel.upgrade.migration_checkpoint", "Record one exact ordered migration checkpoint.",
+    "/kernel/v0/upgrade-migrations/{migration_run_id}/checkpoints", "migration_checkpoint",
+    ["MIGRATION_CHECKPOINT_OUT_OF_ORDER", "MIGRATION_CHECKPOINT_UNDECLARED", "MIGRATION_INVARIANT_FAILED"],
+    upgradeCheckpointInput),
+  commandDescriptor("kernel.upgrade.migration_verify", "Verify all migration checkpoints and declared invariants.",
+    "/kernel/v0/upgrade-migrations/{migration_run_id}/verify", "migration_verification",
+    ["MIGRATION_INCOMPLETE", "MIGRATION_VERIFICATION_FAILED"], {
+      type: "object", required: ["criteria", "attestation_signature"], properties: {
+        criteria: { type: "object", additionalProperties: { type: "boolean" } },
+        attestation_signature: { type: "string" }
+      }, additionalProperties: false
+    }),
+  commandDescriptor("kernel.upgrade.canary_evaluate", "Evaluate a reproducible deterministic cohort and pause failed gates.",
+    "/kernel/v0/upgrade-canary-attempts", "canary_attempt", ["CANARY_GATES_MISMATCH", "UPGRADE_PHASE_MISMATCH",
+      "CANARY_COHORT_EMPTY", "DUPLICATE_CANARY_ROUTING_KEY", "CANARY_ASSIGNMENT_MISMATCH",
+      "CANARY_ATTEMPT_MISMATCH", "INVALID_CONTROL_PLANE_ATTESTATION"], upgradeCanaryInput),
+  commandDescriptor("kernel.upgrade.activate", "Activate the exact target after migration, canary, and authority gates.",
+    "/kernel/v0/upgrade-activations", "upgrade_activation", ["UPGRADE_SOURCE_CHANGED",
+      "UPGRADE_PREAPPROVAL_MISSING", "UPGRADE_PREAPPROVAL_MISMATCH", "FRESH_BUSINESS_APPROVAL_REQUIRED",
+      "MIGRATION_ATTESTATION_REQUIRED", "INVALID_CONTROL_PLANE_ATTESTATION"], {
+      type: "object", required: ["upgrade_plan_id"], properties: {
+        upgrade_plan_id: { type: "string", format: "uuid" }, business_approval_id: { type: "string", format: "uuid" }
+      }, additionalProperties: false
+    }),
+  commandDescriptor("kernel.upgrade.recovery_record", "Record honest deployment rollback, forward repair, or compensation.",
+    "/kernel/v0/upgrade-recovery-actions", "upgrade_recovery_action",
+    ["FALSE_ROLLBACK_PROHIBITED", "FORWARD_ONLY_ROLLBACK_PROHIBITED", "UNRESOLVED_REAL_WORLD_CHANGE",
+      "ROLLBACK_BOUNDARY_EXPIRED", "ROLLBACK_REALITY_OUTSIDE_BOUNDARY", "INVALID_CONTROL_PLANE_ATTESTATION",
+      "RECOVERY_ACTION_BINDING_MISMATCH", "REPAIR_VERIFICATION_PHASE_MISMATCH", "UPGRADE_STATE_CHANGED",
+      "FORWARD_REPAIR_BINDING_REQUIRED", "FORWARD_REPAIR_BINDING_MISMATCH", "UPGRADE_NOT_ACTIVE"], {
+      type: "object", required: ["upgrade_plan_id", "action_type", "real_world_change", "reference_digest", "detail"],
+      properties: { upgrade_plan_id: { type: "string", format: "uuid" },
+        action_type: { enum: ["deployment_rollback", "forward_repair", "compensation",
+          "forward_repair_verified", "compensation_verified"] },
+        real_world_change: { enum: ["none", "compatible", "incompatible"] },
+        reference_digest: { type: "string" }, detail: { type: "object" },
+        attestation_signature: { type: "string", pattern: "^hmac-sha256:[0-9a-f]{64}$" },
+        resolves_recovery_action_id: { type: "string", format: "uuid" },
+        expected_state_revision: { type: "integer", minimum: 0 },
+        forward_repair_binding: { type: "object", required: ["deployment_id", "package_version_id",
+          "capability_export_id", "capability_contract_version", "capability_export_digest", "authority_digest"],
+          properties: { deployment_id: { type: "string", format: "uuid" },
+            package_version_id: { type: "string", format: "uuid" }, capability_export_id: { type: "string" },
+            capability_contract_version: { type: "string" }, capability_export_digest: { type: "string" },
+            authority_digest: { type: "string" } }, additionalProperties: false } }, additionalProperties: false
+    }),
+  {
+    ...readDescriptor("kernel.package_retirement_status.get", "Inspect all references blocking old Package retirement.",
+      "/kernel/v0/upgrade-plans/{upgrade_plan_id}/retirement-status", "retirement_status", "UPGRADE_PLAN_NOT_FOUND"),
+    input_schema: { type: "object", required: ["upgrade_plan_id"], properties: {
+      upgrade_plan_id: { type: "string", format: "uuid" }
+    } }
+  },
+  commandDescriptor("kernel.package_version.retire", "Retire old admissions only after every user-space reference closes.",
+    "/kernel/v0/package-retirements", "package_retirement", ["PACKAGE_RETIREMENT_BLOCKED", "UPGRADE_PHASE_MISMATCH"], {
+      type: "object", required: ["upgrade_plan_id"], properties: {
+        upgrade_plan_id: { type: "string", format: "uuid" }
+      }, additionalProperties: false
+    })
+);
+
+descriptors.push(
+  commandDescriptor("kernel.environment_health.publish_outbound",
+    "Publish signed coarse health without business payloads.",
+    "/kernel/v0/environment-health-publications", "environment_health", ["COORDINATOR_UNAVAILABLE"],
+    { type: "object", additionalProperties: false }),
+  commandDescriptor("kernel.support.poll_outbound",
+    "Pull exact signed support requests without opening an inbound administration path.",
+    "/kernel/v0/support-polls", "support_cases", ["COORDINATOR_UNAVAILABLE", "SUPPORT_CASE_SCOPE_MISMATCH"],
+    { type: "object", additionalProperties: false }),
+  commandDescriptor("kernel.support_case.approve",
+    "Issue a customer-approved temporary read-only Support Passport.",
+    "/kernel/v0/support-cases/{support_case_id}/approve", "support_passport",
+    ["SUPPORT_CASE_NOT_FOUND", "SUPPORT_CASE_EXPIRED", "REVISION_CONFLICT"], {
+      type: "object", required: ["authentication_digest", "duration_seconds", "expected_revision"],
+      additionalProperties: false
+    }),
+  commandDescriptor("kernel.support_passport.deliver_outbound",
+    "Notify the coordinator of Support Passport scope without disclosing its credential.",
+    "/kernel/v0/support-passports/{support_passport_id}/deliver", "support_passport_notice",
+    ["SUPPORT_PASSPORT_NOT_FOUND", "COORDINATOR_UNAVAILABLE"], { type: "object", additionalProperties: false }),
+  commandDescriptor("kernel.diagnostic_bundle.create",
+    "Create one explicit immutable encrypted redacted diagnostic bundle.",
+    "/kernel/v0/diagnostic-bundles", "diagnostic_bundle",
+    ["SUPPORT_PASSPORT_INACTIVE", "DIAGNOSTIC_SCOPE_DENIED"], {
+      type: "object", required: ["support_passport_id", "diagnostic_scopes", "expires_in_seconds"],
+      additionalProperties: false
+    }),
+  readDescriptor("kernel.diagnostic_bundle.get",
+    "Inspect encrypted diagnostic metadata and immutable access history.",
+    "/kernel/v0/diagnostic-bundles/{diagnostic_bundle_id}", "diagnostic_bundle", "DIAGNOSTIC_BUNDLE_NOT_FOUND"),
+  commandDescriptor("kernel.support_remediation.authorize",
+    "Ledger a support remediation request behind one exact locally active Capability.",
+    "/kernel/v0/support-remediation-authorizations", "remediation_authorization",
+    ["SUPPORT_PASSPORT_INACTIVE", "CAPABILITY_INACTIVE", "CAPABILITY_VERSION_MISMATCH"], {
+      type: "object", required: ["support_passport_id", "capability_admission", "requested_action"],
+      additionalProperties: false
+    }),
+  commandDescriptor("kernel.runtime_host.quarantine",
+    "Block placement, fence workloads, and revoke and rotate one host key.",
+    "/kernel/v0/runtime-hosts/{host_id}/quarantine", "host",
+    ["HOST_REVISION_CONFLICT", "HOST_ALREADY_QUARANTINED"], {
+      type: "object", required: ["current_key_id", "reason", "expected_revision"], additionalProperties: false
+    }),
+  commandDescriptor("kernel.coordinator_binding.revocation_sync",
+    "Remove hosted visibility and support after local Coordinator Binding revocation.",
+    "/kernel/v0/coordinator-bindings/{binding_id}/revocation-sync", "binding_revocation",
+    ["COORDINATOR_BINDING_NOT_FOUND", "COORDINATOR_UNAVAILABLE"], {
+      type: "object", required: ["reason"], additionalProperties: false
+    }),
+  {
+    operation_id: "kernel.runtime_host.placement_admission", version: "0.1.0",
+    summary: "Deny placement on quarantined hosts and revoked host keys.", visibility: "public",
+    authority_class: "authenticated_substrate_adapter", effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "POST", path: "/internal/v0/runtime-hosts/placement-admission" },
+    input_schema: { type: "object", required: ["host_id", "host_key_id"] },
+    output_schema: { type: "object", required: ["admissible", "basis", "host_id"] },
+    supported_modes: ["live"], preconditions: [], outcomes: ["placement_admissible", "placement_denied"],
+    issues: [], emitted_events: [], next_operations: []
+  },
+  {
+    operation_id: "kernel.support_diagnostic.read", version: "0.1.0",
+    summary: "Read one authorized redacted diagnostic bundle and append an access record.", visibility: "public",
+    authority_class: "active_read_only_support_passport", effect_class: "read_only",
+    idempotency: "read_is_repeatable_but_each_access_is_logged",
+    transport: { method: "GET", path: "/support/v0/diagnostic-bundles/{diagnostic_bundle_id}" },
+    input_schema: { type: "object", required: ["diagnostic_bundle_id"] },
+    output_schema: { type: "object", required: ["diagnostic_bundle_id", "content_digest", "diagnostics", "accessed_at"] },
+    supported_modes: ["live"], preconditions: ["active_unexpired_support_passport", "active_coordinator_binding"],
+    outcomes: ["diagnostic_bundle_returned", "access_recorded"],
+    issues: ["SUPPORT_AUTHENTICATION_FAILED", "DIAGNOSTIC_BUNDLE_UNAVAILABLE"], emitted_events: [], next_operations: []
   }
 );
 

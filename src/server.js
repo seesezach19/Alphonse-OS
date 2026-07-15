@@ -6,6 +6,8 @@ import { createContextService } from "./context-service.js";
 import { createDatabase } from "./database.js";
 import { createDeploymentService } from "./deployment-service.js";
 import { createEffectService } from "./effect-service.js";
+import { createEnvironmentCoordinationService } from "./environment-coordination-service.js";
+import { CoordinationContractError } from "./coordination-contracts.js";
 import { createExecutionService } from "./execution-service.js";
 import { KernelError } from "./errors.js";
 import { createIdentityIntentService, validateCommandEnvelope } from "./identity-intent-service.js";
@@ -14,6 +16,9 @@ import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } fr
 import { createPackageService } from "./package-service.js";
 import { createPackageTrustService } from "./package-trust-service.js";
 import { createRecoveryService } from "./recovery-service.js";
+import { createRestoreService } from "./restore-service.js";
+import { createSupportService } from "./support-service.js";
+import { createUpgradeService } from "./upgrade-service.js";
 import { validateProfileUpdateCommand } from "./validation.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -42,6 +47,9 @@ const trustedAdapterUrl = process.env.TRUSTED_ADAPTER_URL;
 const kernelAdapterToken = process.env.KERNEL_ADAPTER_TOKEN;
 const brokerServiceToken = process.env.BROKER_SERVICE_TOKEN;
 const adapterDispatchTimeoutMs = Number(process.env.ADAPTER_DISPATCH_TIMEOUT_MS ?? 2_000);
+const environmentCoordinationPrivateKey = process.env.KERNEL_COORDINATION_PRIVATE_KEY;
+const coordinatorEnrollmentToken = process.env.COORDINATOR_ENROLLMENT_TOKEN;
+const supportDiagnosticSecret = process.env.KERNEL_SUPPORT_DIAGNOSTIC_SECRET;
 
 if (!databaseUrl) throw new Error("DATABASE_URL is required.");
 if (!bootstrapToken) throw new Error("KERNEL_BOOTSTRAP_TOKEN is required.");
@@ -51,6 +59,7 @@ if (!workloadGrantSecret || !substrateServiceToken || !substrateObservationSecre
 if (!dispatchPermitSecret || !trustedAdapterUrl || !kernelAdapterToken || !brokerServiceToken) {
   throw new Error("Effect dispatch plane configuration is required.");
 }
+if (!supportDiagnosticSecret) throw new Error("KERNEL_SUPPORT_DIAGNOSTIC_SECRET is required.");
 
 const database = createDatabase(databaseUrl);
 await database.migrate();
@@ -61,15 +70,26 @@ const packageService = createPackageService(database, identityIntent, contextSer
   packageSigningSecret, packageSigningKeyId, dataPlaneReceiptSecret, dataPlaneId, packageVerificationKeys);
 const packageTrustService = createPackageTrustService(database, installationId, environmentId, environmentClass);
 const deploymentService = createDeploymentService(database, identityIntent, packageService, installationId, environmentId);
+const upgradeService = createUpgradeService(database, identityIntent, packageService, deploymentService,
+  installationId, environmentId, dataPlaneReceiptSecret);
 const handoffService = createHandoffService(database, identityIntent, contextService, packageService, deploymentService,
   installationId, environmentId, workloadGrantSecret, workloadGrantKeyId, substrateObservationSecret, substrateObservationKeyId);
 const executionService = createExecutionService(database, identityIntent, packageService, deploymentService,
   installationId, environmentId);
 const recoveryService = createRecoveryService(database, contextService, executionService, installationId, environmentId,
   dispatchPermitSecret, dispatchPermitKeyId, trustedAdapterUrl, kernelAdapterToken);
+const restoreService = createRestoreService(database, identityIntent, recoveryService, installationId, environmentId);
 const effectService = createEffectService(database, identityIntent, contextService, packageService, deploymentService,
   handoffService, executionService, installationId, environmentId, dispatchPermitSecret, dispatchPermitKeyId,
   trustedAdapterUrl, kernelAdapterToken, recoveryService, adapterDispatchTimeoutMs);
+const environmentCoordination = createEnvironmentCoordinationService(database, {
+  installationId, environmentId, environmentClass, environmentPrivateKey: environmentCoordinationPrivateKey,
+  coordinatorEnrollmentToken, kernelBuild: process.env.KERNEL_BUILD ?? "0.1.0", protocolVersion: PROTOCOL_VERSION
+});
+const supportService = createSupportService(database, deploymentService, {
+  installationId, environmentId, environmentPrivateKey: environmentCoordinationPrivateKey,
+  diagnosticSecret: supportDiagnosticSecret
+});
 
 function sendJson(response, status, body, headers = {}) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
@@ -106,6 +126,8 @@ function serializeEnvironment(environment) {
     environment_class: environment.environment_class,
     revision: environment.revision,
     execution_epoch: environment.execution_epoch,
+    operational_state: environment.operational_state,
+    restore_generation: environment.restore_generation,
     created_at: environment.created_at,
     updated_at: environment.updated_at
   };
@@ -383,6 +405,139 @@ async function route(request, response) {
       pathId(url.pathname, "/kernel/v0/quarantined-packages/")) });
   }
 
+  if (request.method === "POST" && url.pathname === "/kernel/v0/coordinator-bindings") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.coordinator_binding.create");
+    return sendCommandResult(response, await environmentCoordination.createBinding(command, actor));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/coordinator-bindings\/[^/]+\/revoke$/.test(url.pathname)) {
+    const actor = authenticateBootstrapOperator(request);
+    const bindingId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.coordinator_binding.revoke");
+    return sendCommandResult(response, await environmentCoordination.revokeBinding(command, bindingId, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/coordinator-registration-sync") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.coordinator.register_outbound");
+    return sendCommandResult(response, await environmentCoordination.registerOutbound(command, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/promotion-polls") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.promotion.poll_outbound");
+    return sendCommandResult(response, await environmentCoordination.pollPromotions(command, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/promotion-requests") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request, 512 * 1024), "kernel.promotion.request_outbound");
+    return sendCommandResult(response, await environmentCoordination.requestPromotion(command, actor));
+  }
+
+  if (request.method === "GET" && /^\/kernel\/v0\/promotion-proposals\/[^/]+\/resolution$/.test(url.pathname)) {
+    authenticateBootstrapOperator(request);
+    const proposalId = decodeURIComponent(url.pathname.split("/").at(-2));
+    return sendJson(response, 200, { promotion_resolution: await environmentCoordination.getResolution(proposalId) });
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/promotion-proposals\/[^/]+\/resolve$/.test(url.pathname)) {
+    const actor = authenticateBootstrapOperator(request);
+    const proposalId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.promotion.resolve_local_plan");
+    return sendCommandResult(response, await environmentCoordination.resolveProposal(command, proposalId, actor));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/promotion-proposals/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { promotion_proposal: await environmentCoordination.getProposal(
+      pathId(url.pathname, "/kernel/v0/promotion-proposals/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/promotion-receipts") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.promotion_receipt.create");
+    return sendCommandResult(response, await environmentCoordination.localReceipt(command, actor));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/promotion-receipts\/[^/]+\/deliver$/.test(url.pathname)) {
+    const actor = authenticateBootstrapOperator(request);
+    const receiptId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.promotion_receipt.deliver_outbound");
+    return sendCommandResult(response, await environmentCoordination.pushReceipt(command, receiptId, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/environment-health-publications") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.environment_health.publish_outbound");
+    return sendCommandResult(response, await supportService.publishHealth(command, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/support-polls") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.support.poll_outbound");
+    return sendCommandResult(response, await supportService.pollSupportCases(command, actor));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/support-cases\/[^/]+\/approve$/.test(url.pathname)) {
+    const actor = authenticateBootstrapOperator(request);
+    const supportCaseId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.support_case.approve");
+    return sendCommandResult(response, await supportService.approveSupportCase(command, supportCaseId, actor));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/support-passports\/[^/]+\/deliver$/.test(url.pathname)) {
+    const actor = authenticateBootstrapOperator(request);
+    const passportId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.support_passport.deliver_outbound");
+    return sendCommandResult(response, await supportService.pushSupportPassport(command, passportId, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/diagnostic-bundles") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.diagnostic_bundle.create");
+    return sendCommandResult(response, await supportService.createDiagnostic(command, actor));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/diagnostic-bundles/")) {
+    authenticateBootstrapOperator(request);
+    const bundleId = pathId(url.pathname, "/kernel/v0/diagnostic-bundles/");
+    return sendJson(response, 200, { diagnostic_bundle: await supportService.getDiagnostic(bundleId) });
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/support/v0/diagnostic-bundles/")) {
+    const authorization = request.headers.authorization ?? "";
+    if (!authorization.startsWith("Support ")) throw new KernelError(403, "SUPPORT_AUTHENTICATION_FAILED", "Support Passport credential required.");
+    const bundleId = pathId(url.pathname, "/support/v0/diagnostic-bundles/");
+    return sendJson(response, 200, await supportService.readDiagnostic(bundleId, authorization.slice("Support ".length)));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/support-remediation-authorizations") {
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.support_remediation.authorize");
+    return sendCommandResult(response, await supportService.authorizeRemediation(command, actor));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/runtime-hosts\/[^/]+\/quarantine$/.test(url.pathname)) {
+    const actor = authenticateBootstrapOperator(request);
+    const hostId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.runtime_host.quarantine");
+    return sendCommandResult(response, await supportService.quarantineHost(command, hostId, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/internal/v0/runtime-hosts/placement-admission") {
+    authenticateSubstrate(request);
+    return sendJson(response, 200, await supportService.checkHostPlacement(await readJson(request)));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/coordinator-bindings\/[^/]+\/revocation-sync$/.test(url.pathname)) {
+    const actor = authenticateBootstrapOperator(request);
+    const bindingId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.coordinator_binding.revocation_sync");
+    return sendCommandResult(response, await supportService.syncBindingRevocation(command, bindingId, actor));
+  }
+
   if (request.method === "POST" && url.pathname === "/kernel/v0/deployment-plan-validations") {
     authenticateBootstrapOperator(request);
     const command = validateCommandEnvelope(await readJson(request, 512 * 1024), "kernel.deployment_plan.validate");
@@ -462,6 +617,98 @@ async function route(request, response) {
     return sendJson(response, 200, await deploymentService.checkCapabilityAdmission(await readJson(request)));
   }
 
+  if (request.method === "POST" && url.pathname === "/kernel/v0/upgrade-compatibility-reports") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.compatibility_analyze");
+    return sendCommandResult(response, await upgradeService.createCompatibilityReport(command));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/upgrade-compatibility-reports/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { compatibility_report: await upgradeService.getCompatibilityReport(
+      pathId(url.pathname, "/kernel/v0/upgrade-compatibility-reports/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/upgrade-activation-policies") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.activation_policy_create");
+    return sendCommandResult(response, await upgradeService.createActivationPolicy(command));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/upgrade-activation-policies/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { upgrade_activation_policy: await upgradeService.getActivationPolicy(
+      pathId(url.pathname, "/kernel/v0/upgrade-activation-policies/")) });
+  }
+
+  if (request.method === "GET" && /^\/kernel\/v0\/upgrade-plans\/[^/]+\/retirement-status$/.test(url.pathname)) {
+    authenticateBootstrapOperator(request);
+    const upgradePlanId = decodeURIComponent(url.pathname.split("/").at(-2));
+    return sendJson(response, 200, { retirement_status: await upgradeService.retirementStatus(upgradePlanId) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/upgrade-plans") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.plan_create");
+    return sendCommandResult(response, await upgradeService.createUpgradePlan(command));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/upgrade-plans/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { upgrade_plan: await upgradeService.getUpgradePlan(
+      pathId(url.pathname, "/kernel/v0/upgrade-plans/")) });
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/upgrade-migrations\/[^/]+\/checkpoints$/.test(url.pathname)) {
+    authenticateBootstrapOperator(request);
+    const migrationRunId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.migration_checkpoint");
+    return sendCommandResult(response, await upgradeService.checkpointMigration(command, migrationRunId));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/upgrade-migrations\/[^/]+\/verify$/.test(url.pathname)) {
+    authenticateBootstrapOperator(request);
+    const migrationRunId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.migration_verify");
+    return sendCommandResult(response, await upgradeService.verifyMigration(command, migrationRunId));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/upgrade-migrations") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.migration_start");
+    return sendCommandResult(response, await upgradeService.startMigration(command));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/upgrade-migrations/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { migration_run: await upgradeService.getMigrationRun(
+      pathId(url.pathname, "/kernel/v0/upgrade-migrations/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/upgrade-canary-attempts") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.canary_evaluate");
+    return sendCommandResult(response, await upgradeService.evaluateCanary(command));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/upgrade-activations") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.activate");
+    return sendCommandResult(response, await upgradeService.activateUpgrade(command));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/upgrade-recovery-actions") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.upgrade.recovery_record");
+    return sendCommandResult(response, await upgradeService.recordRecoveryAction(command));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/package-retirements") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.package_version.retire");
+    return sendCommandResult(response, await upgradeService.retirePackage(command));
+  }
+
   if (request.method === "POST" && url.pathname === "/kernel/v0/handoffs") {
     const passport = await authenticateAgent(request);
     const command = validateCommandEnvelope(await readJson(request, 256 * 1024), "kernel.handoff.propose");
@@ -496,6 +743,44 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     const command = validateCommandEnvelope(await readJson(request), "kernel.environment.execution_epoch.advance");
     return sendCommandResult(response, await handoffService.advanceEpoch(command));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/restores") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request, 256 * 1024), "kernel.environment.restore.begin");
+    return sendCommandResult(response, await restoreService.begin(command));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/restores\/[^/]+\/projection-rebuild$/.test(url.pathname)) {
+    authenticateBootstrapOperator(request);
+    const restoreId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.environment.restore.projection_rebuild");
+    return sendCommandResult(response, await restoreService.rebuildProjection(command, restoreId));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/restores\/[^/]+\/verify$/.test(url.pathname)) {
+    authenticateBootstrapOperator(request);
+    const restoreId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.environment.restore.verify");
+    return sendCommandResult(response, await restoreService.verify(command, restoreId));
+  }
+
+  if (request.method === "POST" && /^\/kernel\/v0\/restores\/[^/]+\/resume$/.test(url.pathname)) {
+    authenticateBootstrapOperator(request);
+    const restoreId = decodeURIComponent(url.pathname.split("/").at(-2));
+    const command = validateCommandEnvelope(await readJson(request), "kernel.environment.restore.resume");
+    return sendCommandResult(response, await restoreService.resume(command, restoreId));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/restores/")) {
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { restore: await restoreService.getRestore(pathId(url.pathname, "/kernel/v0/restores/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/data-lifecycle-records") {
+    authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request), "kernel.data_lifecycle.record");
+    return sendCommandResult(response, await restoreService.recordLifecycle(command));
   }
 
   if (request.method === "POST" && url.pathname === "/internal/v0/workloads/admission") {
@@ -646,6 +931,8 @@ async function route(request, response) {
     const runs = await executionService.getButlerProjection();
     const effects = await effectService.getButlerProjection();
     const recoveryCases = await recoveryService.getButlerProjection();
+    const restore = await restoreService.getLatest();
+    const support = await supportService.getButlerProjection();
     return sendJson(response, 200, {
       environment: serializeEnvironment(environment),
       health: "healthy",
@@ -655,6 +942,8 @@ async function route(request, response) {
       runs: { count: runs.length, items: runs },
       effects: { count: effects.length, items: effects },
       recovery_cases: { count: recoveryCases.length, items: recoveryCases },
+      support,
+      restore: restore ? { ...restore, unresolved_obligations: restore.obligations.filter((item) => !item.resolved).length } : null,
       authority: "read_only_projection"
     });
   }
@@ -684,6 +973,7 @@ async function route(request, response) {
     const runs = await executionService.getButlerProjection();
     const effects = await effectService.getButlerProjection();
     const recoveryCases = await recoveryService.getButlerProjection();
+    const restore = await restoreService.getLatest();
     const threads = items.length === 0 ? "<p>No accountable work.</p>" : items.map((item) =>
       `<article><h2>${escapeHtml(item.identity.agent_name)}</h2><dl><dt>Intent</dt><dd>${escapeHtml(item.intent.objective)}</dd><dt>Intent status</dt><dd>${escapeHtml(item.intent.status)}</dd><dt>Build Session</dt><dd>${escapeHtml(item.build_session.build_session_id)} / ${escapeHtml(item.build_session.status)}</dd><dt>Published package</dt><dd>${escapeHtml(item.package_versions[0] ? `${item.package_versions[0].package_id}@${item.package_versions[0].semantic_version} / ${item.package_versions[0].artifact_digest}` : "not_published")}</dd><dt>Package authority</dt><dd>${escapeHtml(item.package_versions[0]?.authority_granted ? "granted" : "not_granted")}</dd><dt>Context authority</dt><dd>${escapeHtml(item.context[0]?.authority ?? "not_granted")}</dd><dt>Context freshness</dt><dd>${escapeHtml(item.context[0]?.latest_receipt?.freshness_claims?.map((claim) => `${claim.source}:${claim.current_age_seconds}s ${claim.status}`).join(", ") ?? "not_observed")}</dd><dt>Redactions</dt><dd>${escapeHtml(item.context[0]?.latest_receipt?.limitations?.fields_redacted?.join(", ") ?? "none")}</dd><dt>Effect authority</dt><dd>${escapeHtml(item.authority.effects)}</dd><dt>Execution authority</dt><dd>${escapeHtml(item.authority.execution)}</dd></dl></article>`
     ).join("");
@@ -701,7 +991,7 @@ async function route(request, response) {
     return sendHtml(response, 200, `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Butler</title>
 <style>*{box-sizing:border-box}body{font:16px ui-monospace,SFMono-Regular,Consolas,monospace;width:min(808px,100%);margin:10vh auto;padding:24px;color:#151515;background:#f7f7f3}header{border-bottom:2px solid #151515;padding-bottom:16px}dl{display:grid;grid-template-columns:180px minmax(0,1fr);gap:10px}dt{font-weight:700}dd{overflow-wrap:anywhere}.ok{color:#087830}@media(max-width:540px){body{margin:4vh auto}dl{grid-template-columns:1fr;gap:4px}dd{margin:0 0 12px}}</style></head>
-<body><header><strong>BUTLER</strong> / accountable operations</header><main><h1>${escapeHtml(environmentName)}</h1><p>Kernel health: <span class="ok">healthy</span></p><p>${items.length} accountable item(s)</p>${threads}<h1>Deployment authority</h1>${deploymentRows}<h1>Runtime handoffs</h1>${handoffRows}<h1>Runs and accountability</h1>${runRows}<h1>Effects</h1>${effectRows}<h1>Recovery Cases</h1>${recoveryRows}<p>Butler derives permitted actions from Kernel state. Execution and accountability remain independently visible.</p></main></body></html>`);
+<body><header><strong>BUTLER</strong> / accountable operations</header><main><h1>${escapeHtml(environmentName)}</h1><p>Kernel health: <span class="ok">healthy</span></p><p>Environment authority: ${escapeHtml((await database.getEnvironment(installationId, environmentId)).operational_state)}</p><p>Restore: ${escapeHtml(restore ? `${restore.status}; ${restore.obligations.filter((item) => !item.resolved).length} unresolved obligation(s)` : "none")}</p><p>${items.length} accountable item(s)</p>${threads}<h1>Deployment authority</h1>${deploymentRows}<h1>Runtime handoffs</h1>${handoffRows}<h1>Runs and accountability</h1>${runRows}<h1>Effects</h1>${effectRows}<h1>Recovery Cases</h1>${recoveryRows}<p>Butler derives permitted actions from Kernel state. Execution and accountability remain independently visible.</p></main></body></html>`);
   }
 
   throw new KernelError(404, "ROUTE_NOT_FOUND", "Route does not exist.");
@@ -718,6 +1008,10 @@ const server = http.createServer((request, response) => {
       return sendJson(response, error.status, {
         error: { code: error.code, message: error.message, details: error.details }
       });
+    }
+    if (error instanceof CoordinationContractError) {
+      return sendJson(response, error.code === "INVALID_COORDINATION_SIGNATURE" ? 403 : 400,
+        { error: { code: error.code, message: error.message, details: {} } });
     }
     console.error(error);
     sendJson(response, 500, { error: { code: "INTERNAL_ERROR", message: "Unexpected Kernel failure." } });

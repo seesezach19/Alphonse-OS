@@ -258,6 +258,16 @@ export function createExecutionService(database, identityIntent, packageService,
         if (deployment.work_intent_id !== input.work_intent_id || activation.package_version_id !== input.package_version_id) {
           throw new KernelError(409, "EXECUTION_BINDING_MISMATCH", "Capability, Package, and Work Intent bindings do not match.");
         }
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`package-admission:${input.package_version_id}`]);
+        const retirement = await client.query(
+          `SELECT package_retirement_id FROM kernel_package_retirements
+           WHERE installation_id=$1 AND environment_id=$2 AND package_version_id=$3`,
+          [installationId, environmentId, input.package_version_id]
+        );
+        if (retirement.rowCount > 0) {
+          throw new KernelError(409, "PACKAGE_VERSION_RETIRED", "Retired Package Versions cannot admit new Runs.");
+        }
         const packageVersion = await packageService.getPackageVersion(input.package_version_id);
         const capability = packageVersion.candidate.exports.find((entry) => entry.export_id === activation.capability_export_id);
         if (capability?.kind !== "capability" || capability.content.effect_class !== "read_only") {

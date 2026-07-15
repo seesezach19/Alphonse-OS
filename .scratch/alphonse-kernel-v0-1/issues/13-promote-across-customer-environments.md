@@ -4,13 +4,13 @@
 
 **Blocked by:** 12 - Distribute Packages Through Portable Trust.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
-- [ ] Three isolated local Environments register through customer-initiated signed outbound channels.
-- [ ] Minimal Environment Descriptor excludes business payloads, credentials, prompts, evidence bodies, and actor activity.
-- [ ] Customer Promotion Graph enforces development to staging to production edges and required receipts.
-- [ ] Promotion Proposal moves exact Package identity and compatibility evidence, never mutable state or authority.
-- [ ] Target independently resolves Deployment Plan with target-local configuration and credential references.
-- [ ] Hosted status reaches deployed/activated only from signed target receipts.
-- [ ] Missing staging recovery evidence blocks production proposal.
-- [ ] Coordinator outage and revocation do not interrupt existing local operations.
+- [x] Three isolated local Environments register through customer-initiated signed outbound channels.
+- [x] Minimal Environment Descriptor excludes business payloads, credentials, prompts, evidence bodies, and actor activity.
+- [x] Customer Promotion Graph enforces development to staging to production edges and required receipts.
+- [x] Promotion Proposal moves exact Package identity and compatibility evidence, never mutable state or authority.
+- [x] Target independently resolves Deployment Plan with target-local configuration and credential references.
+- [x] Hosted status reaches deployed/activated only from signed target receipts.
+- [x] Missing staging recovery evidence blocks production proposal.
+- [x] Coordinator outage and revocation do not interrupt existing local operations.

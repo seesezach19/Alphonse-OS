@@ -79,6 +79,7 @@ export function createDatabase(connectionString) {
     async getEnvironment(installationId, environmentId) {
       const result = await pool.query(
         `SELECT installation_id, environment_id, display_name, environment_class, revision, execution_epoch,
+                operational_state, restore_generation,
                 created_at, updated_at
          FROM kernel_environments WHERE installation_id = $1 AND environment_id = $2`,
         [installationId, environmentId]

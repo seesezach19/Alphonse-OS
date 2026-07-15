@@ -204,6 +204,56 @@ export function createRecoveryService(database, contextService, executionService
     });
   }
 
+  async function openRestoreUncertainty(client, effectId, restoreId, acceptedAt) {
+    const existing = await getRecoveryCaseForEffect(effectId, client);
+    if (existing) return existing;
+    const effect = await effectRecord(effectId, client);
+    const envelope = await executionService.getEnvelope(effect.envelope_id, client);
+    const recoveryCaseId = randomUUID();
+    const obligation = await client.query(`SELECT min(deadline_at) AS deadline_at FROM kernel_operational_obligations
+      WHERE installation_id=$1 AND environment_id=$2 AND run_id=$3`,
+    [installationId, environmentId, effect.run_id]);
+    const deadlineAt = obligation.rows[0]?.deadline_at ?? new Date(Date.parse(acceptedAt) + 15 * 60_000).toISOString();
+    const knownFacts = [
+      { fact: "effect_present_at_restore_point", effect_id: effect.effect_id,
+        request_digest: effect.effect_request_digest ?? sha256Digest(effect.effect_request) },
+      { fact: "restore_point_precedes_possible_external_result", restore_id: restoreId },
+      { fact: "target_may_have_applied_effect", target: effect.target,
+        effect_idempotency_key: effect.effect_idempotency_key }
+    ];
+    const responsibleActor = { type: "agent", principal_id: envelope.agent_principal_id,
+      passport_id: envelope.passport_id };
+    const allowedOptions = [
+      { option: "reconcile", operation_id: "kernel.recovery_case.reconcile",
+        authority: "authenticated_agent_bound_to_original_effect", external_write: false },
+      { option: "separate_corrective_work", available_when: "reconciled_not_applied",
+        authority_sequence: ["work_intent", "delegation", "capability", "execution_envelope", "run", "effect", "evidence"] },
+      { option: "complete_remaining_obligations", available_when: "reconciled_applied_accountability_open",
+        authority: "normal_accountability_contract_evidence_path" }
+    ];
+    await client.query(`INSERT INTO kernel_recovery_cases
+      (recovery_case_id,installation_id,environment_id,effect_id,run_id,known_facts,missing_evidence,
+       responsible_actor,allowed_options,deadline_at,opened_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [recoveryCaseId, installationId, environmentId, effect.effect_id, effect.run_id, JSON.stringify(knownFacts),
+      JSON.stringify(["target_effect_receipt", "post_write_observation"]), JSON.stringify(responsibleActor),
+      JSON.stringify(allowedOptions), deadlineAt, acceptedAt]);
+    await client.query(`INSERT INTO kernel_recovery_case_states
+      (installation_id,environment_id,recovery_case_id,status,reconciliation_status,updated_at)
+      VALUES ($1,$2,$3,'open','pending',$4)`, [installationId, environmentId, recoveryCaseId, acceptedAt]);
+    await issueReconciliationPermit(client, recoveryCaseId, effect, acceptedAt, deadlineAt);
+    await client.query(`UPDATE kernel_dispatch_permit_states SET status='expired',updated_at=$4
+      WHERE installation_id=$1 AND environment_id=$2 AND permit_id IN
+       (SELECT permit_id FROM kernel_dispatch_permits WHERE installation_id=$1 AND environment_id=$2 AND effect_id=$3)
+       AND status='issued'`, [installationId, environmentId, effect.effect_id, acceptedAt]);
+    await client.query(`UPDATE kernel_effect_states SET status='uncertain',was_uncertain=true,recovery_case_id=$4,
+      updated_at=$5 WHERE installation_id=$1 AND environment_id=$2 AND effect_id=$3`,
+    [installationId, environmentId, effect.effect_id, recoveryCaseId, acceptedAt]);
+    await client.query(`UPDATE kernel_run_states SET execution_status='uncertain',accountability_status='pending',
+      updated_at=$4 WHERE installation_id=$1 AND environment_id=$2 AND run_id=$3`,
+    [installationId, environmentId, effect.run_id, acceptedAt]);
+    return getRecoveryCase(recoveryCaseId, client);
+  }
+
   async function claimReconciliation(command, recoveryCase, permit, effect) {
     const claimCommand = { command_id: `${command.command_id}:claim`, operation_id: "kernel.recovery_case.reconcile.claim",
       input: command.input, actor: command.actor };
@@ -512,6 +562,6 @@ export function createRecoveryService(database, contextService, executionService
     return Promise.all(result.rows.map(({ recovery_case_id: recoveryCaseId }) => getRecoveryCase(recoveryCaseId)));
   }
 
-  return { openUncertainty, reconcile, authorizeCredentialDelivery, getRecoveryCase,
+  return { openUncertainty, openRestoreUncertainty, reconcile, authorizeCredentialDelivery, getRecoveryCase,
     getRecoveryCaseForEffect, getReconciliationPermit, getButlerProjection };
 }
