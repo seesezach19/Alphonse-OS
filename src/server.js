@@ -2,9 +2,18 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import { createContentAddressedArtifactStore } from "./content-addressed-artifact-store.js";
 import { createContextService } from "./context-service.js";
 import { createDatabase } from "./database.js";
 import { createDeploymentService } from "./deployment-service.js";
+import { createDiagnosticDatabase } from "./diagnostic-database.js";
+import { createDiagnosticRuntimeService } from "./diagnostic-runtime-service.js";
+import {
+  DIAGNOSTIC_PROTOCOL_VERSION,
+  getDiagnosticOperationDescriptor,
+  listDiagnosticOperationDescriptors
+} from "./diagnostic-operations.js";
+import { createDiagnosticService } from "./diagnostic-service.js";
 import { createEffectService } from "./effect-service.js";
 import { createEnvironmentCoordinationService } from "./environment-coordination-service.js";
 import { CoordinationContractError } from "./coordination-contracts.js";
@@ -20,9 +29,19 @@ import { createRestoreService } from "./restore-service.js";
 import { createSupportService } from "./support-service.js";
 import { createUpgradeService } from "./upgrade-service.js";
 import { validateProfileUpdateCommand } from "./validation.js";
+import { getWorkflowRuntimeAdapterContract } from "./workflow-runtime-adapter-contract.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const databaseUrl = process.env.DATABASE_URL;
+const diagnosticDatabaseUrl = process.env.DIAGNOSTIC_DATABASE_URL;
+const diagnosticArtifactRoot = process.env.DIAGNOSTIC_ARTIFACT_ROOT ?? "/tmp/alphonse-diagnostic-artifacts";
+const diagnosticRuntimeAdapterId = process.env.DIAGNOSTIC_RUNTIME_ADAPTER_ID;
+const diagnosticRuntimeAdapterVersion = process.env.DIAGNOSTIC_RUNTIME_ADAPTER_VERSION;
+const diagnosticRuntimeAdapterKeyId = process.env.DIAGNOSTIC_RUNTIME_ADAPTER_KEY_ID;
+const diagnosticRuntimeAdapterSecret = process.env.DIAGNOSTIC_RUNTIME_ADAPTER_SECRET;
+const diagnosticRuntimeTimestampToleranceSeconds = Number(
+  process.env.DIAGNOSTIC_RUNTIME_TIMESTAMP_TOLERANCE_SECONDS ?? 300
+);
 const installationId = process.env.KERNEL_INSTALLATION_ID ?? "00000000-0000-4000-8000-00000000a001";
 const installationName = process.env.KERNEL_INSTALLATION_NAME ?? "Local Installation";
 const environmentId = process.env.KERNEL_ENVIRONMENT_ID ?? "00000000-0000-4000-8000-000000000001";
@@ -64,6 +83,29 @@ if (!supportDiagnosticSecret) throw new Error("KERNEL_SUPPORT_DIAGNOSTIC_SECRET 
 const database = createDatabase(databaseUrl);
 await database.migrate();
 await database.bootstrapEnvironment(installationId, installationName, environmentId, environmentName, environmentClass);
+let diagnosticDatabase = null;
+let diagnosticService = null;
+let diagnosticRuntimeService = null;
+if (diagnosticDatabaseUrl) {
+  if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
+      || !diagnosticRuntimeAdapterSecret) {
+    throw new Error("Diagnostic Runtime Adapter binding is required when the Diagnostic Plane is configured.");
+  }
+  diagnosticDatabase = createDiagnosticDatabase(diagnosticDatabaseUrl);
+  await diagnosticDatabase.migrate();
+  await diagnosticDatabase.bootstrapNode(installationId);
+  diagnosticService = createDiagnosticService(
+    diagnosticDatabase,
+    createContentAddressedArtifactStore(diagnosticArtifactRoot),
+    installationId
+  );
+  diagnosticRuntimeService = createDiagnosticRuntimeService(diagnosticDatabase, installationId, {
+    adapter_id: diagnosticRuntimeAdapterId,
+    adapter_version: diagnosticRuntimeAdapterVersion,
+    key_id: diagnosticRuntimeAdapterKeyId,
+    secret: diagnosticRuntimeAdapterSecret
+  }, { timestampToleranceSeconds: diagnosticRuntimeTimestampToleranceSeconds });
+}
 const identityIntent = createIdentityIntentService(database, installationId, environmentId, bootstrapPrincipalId);
 const contextService = createContextService(database, identityIntent, installationId, environmentId);
 const packageService = createPackageService(database, identityIntent, contextService, installationId, environmentId,
@@ -162,6 +204,20 @@ function pathId(pathname, prefix) {
   return decodeURIComponent(pathname.slice(prefix.length));
 }
 
+function requireDiagnosticPlane() {
+  if (!diagnosticService || !diagnosticDatabase) {
+    throw new KernelError(503, "DIAGNOSTIC_PLANE_UNAVAILABLE", "Diagnostic Plane is not configured for this Node.");
+  }
+  return diagnosticService;
+}
+
+function requireDiagnosticRuntime() {
+  if (!diagnosticRuntimeService) {
+    throw new KernelError(503, "DIAGNOSTIC_RUNTIME_UNAVAILABLE", "Diagnostic Runtime intake is not configured.");
+  }
+  return diagnosticRuntimeService;
+}
+
 function authenticateDataPlane(request) {
   const supplied = request.headers.authorization?.startsWith("Bearer ")
     ? Buffer.from(request.headers.authorization.slice(7), "utf8") : Buffer.alloc(0);
@@ -200,7 +256,129 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname === "/healthz") {
     await database.ping();
-    return sendJson(response, 200, { status: "healthy", protocol_version: PROTOCOL_VERSION });
+    if (diagnosticDatabase) await diagnosticDatabase.ping();
+    return sendJson(response, 200, {
+      status: "healthy",
+      protocol_version: PROTOCOL_VERSION,
+      diagnostic_plane: diagnosticDatabase ? "healthy" : "not_configured",
+      diagnostic_runtime: diagnosticRuntimeService ? "healthy" : "not_configured"
+    });
+  }
+
+  if (request.method === "GET" && url.pathname === "/diagnostic/v0/bootstrap") {
+    requireDiagnosticPlane();
+    const node = await diagnosticDatabase.getNode(installationId);
+    return sendJson(response, 200, {
+      status: "healthy",
+      protocol: {
+        name: "alphonse-diagnostic-protocol",
+        version: DIAGNOSTIC_PROTOCOL_VERSION,
+        discovery: "/diagnostic/v0/operations"
+      },
+      node: {
+        installation_id: node.installation_id,
+        revision: node.revision,
+        database_boundary: "separate_least_privilege_database",
+        artifact_boundary: "content_addressed_local_storage",
+        authority_granted: false,
+        runtime_adapter_binding: diagnosticRuntimeService ? {
+          adapter_id: diagnosticRuntimeAdapterId,
+          adapter_version: diagnosticRuntimeAdapterVersion,
+          key_id: diagnosticRuntimeAdapterKeyId,
+          secret_persisted: false
+        } : null
+      },
+      operations: listDiagnosticOperationDescriptors()
+    });
+  }
+
+  if (request.method === "GET" && url.pathname === "/diagnostic/v0/operations") {
+    requireDiagnosticPlane();
+    return sendJson(response, 200, {
+      protocol_version: DIAGNOSTIC_PROTOCOL_VERSION,
+      operations: listDiagnosticOperationDescriptors()
+    });
+  }
+
+  if (request.method === "GET" && url.pathname === "/diagnostic/v0/runtime-adapter-contract") {
+    requireDiagnosticPlane();
+    return sendJson(response, 200, getWorkflowRuntimeAdapterContract());
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/operations/")) {
+    requireDiagnosticPlane();
+    const operationId = pathId(url.pathname, "/diagnostic/v0/operations/");
+    const descriptor = getDiagnosticOperationDescriptor(operationId);
+    if (!descriptor) throw new KernelError(404, "OPERATION_NOT_FOUND", "Diagnostic operation does not exist.");
+    return sendJson(response, 200, descriptor);
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/agent-workflows") {
+    const service = requireDiagnosticPlane();
+    const actor = authenticateBootstrapOperator(request);
+    return sendCommandResult(response, await service.registerWorkflow(await readJson(request, 512 * 1024), actor));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/agent-workflows/")) {
+    const service = requireDiagnosticPlane();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, {
+      agent_workflow: await service.getWorkflow(pathId(url.pathname, "/diagnostic/v0/agent-workflows/"))
+    });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/agent-revisions") {
+    const service = requireDiagnosticPlane();
+    const actor = authenticateBootstrapOperator(request);
+    return sendCommandResult(response, await service.registerRevision(await readJson(request, 512 * 1024), actor));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/agent-revisions/")) {
+    const service = requireDiagnosticPlane();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, {
+      agent_revision: await service.getRevision(pathId(url.pathname, "/diagnostic/v0/agent-revisions/"))
+    });
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/artifacts/")) {
+    const service = requireDiagnosticPlane();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, {
+      artifact: await service.getArtifact(pathId(url.pathname, "/diagnostic/v0/artifacts/"))
+    });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/runtime-events") {
+    const service = requireDiagnosticRuntime();
+    const accepted = await service.receiveEvent(await readJson(request, 64 * 1024), {
+      key_id: request.headers["x-alphonse-runtime-key-id"],
+      signed_at: request.headers["x-alphonse-runtime-signed-at"],
+      signature: request.headers["x-alphonse-runtime-signature"]
+    });
+    return sendJson(response, accepted.replayed ? 200 : 201, accepted.result, {
+      "idempotent-replayed": accepted.replayed ? "true" : "false"
+    });
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/external-activity-traces/")) {
+    const service = requireDiagnosticRuntime();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, {
+      external_activity_trace: await service.getTrace(
+        pathId(url.pathname, "/diagnostic/v0/external-activity-traces/")
+      )
+    });
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/runtime-event-conflicts/")) {
+    const service = requireDiagnosticRuntime();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, {
+      runtime_event_conflict: await service.getConflict(
+        pathId(url.pathname, "/diagnostic/v0/runtime-event-conflicts/")
+      )
+    });
   }
 
   if (request.method === "GET" && url.pathname === "/kernel/v0/bootstrap") {
@@ -214,7 +392,11 @@ async function route(request, response) {
       },
       environment: serializeEnvironment(environment),
       operations: listOperationDescriptors(),
-      butler: { overview: "/kernel/v0/accountable-work/overview", shell: "/butler" }
+      butler: { overview: "/kernel/v0/accountable-work/overview", shell: "/butler" },
+      diagnostic: {
+        available: Boolean(diagnosticService),
+        bootstrap: diagnosticService ? "/diagnostic/v0/bootstrap" : null
+      }
     });
   }
 
@@ -1025,6 +1207,7 @@ server.listen(port, "0.0.0.0", () => {
 async function shutdown(signal) {
   console.log(`Received ${signal}; shutting down.`);
   server.close(async () => {
+    if (diagnosticDatabase) await diagnosticDatabase.close();
     await database.close();
     process.exit(0);
   });

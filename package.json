@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "diagnostic:cli": "node src/diagnostic-cli.js",
     "local:up": "docker compose up --build --wait",
     "local:down": "docker compose down",
     "test": "node --test test/unit/*.test.js",
@@ -31,6 +32,8 @@
     "test:ticket-15": "node scripts/acceptance-ticket-15.js",
     "test:ticket-16": "node scripts/acceptance-ticket-16.js",
     "test:ticket-17": "node scripts/acceptance-ticket-17.js",
+    "test:v0.2-ticket-01": "node scripts/acceptance-v0.2-ticket-01.js",
+    "test:v0.2-ticket-02": "node scripts/acceptance-v0.2-ticket-02.js",
     "release:build": "node scripts/build-release-v0.1.js",
     "release:qualify": "node scripts/qualify-release-v0.1.js",
     "backup:local": "node scripts/local-backup.js create",

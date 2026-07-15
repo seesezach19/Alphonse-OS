@@ -16,12 +16,33 @@ services:
       - kernel-postgres-data:/var/lib/postgresql/data
       - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/001-registry-role.sql:ro
 
+  diagnostic-bootstrap:
+    build:
+      context: .
+    command: ["node", "src/diagnostic-db-bootstrap.js"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql://alphonse:local-development-only@postgres:5432/alphonse_kernel
+      KERNEL_DATABASE_NAME: alphonse_kernel
+      DIAGNOSTIC_DATABASE_NAME: alphonse_diagnostic
+      DIAGNOSTIC_DATABASE_ROLE: alphonse_diagnostic
+      DIAGNOSTIC_DATABASE_PASSWORD: local-diagnostic-only
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   kernel:
     build:
       context: .
     environment:
       PORT: 3000
       DATABASE_URL: postgresql://alphonse:local-development-only@postgres:5432/alphonse_kernel
+      DIAGNOSTIC_DATABASE_URL: postgresql://alphonse_diagnostic:local-diagnostic-only@postgres:5432/alphonse_diagnostic
+      DIAGNOSTIC_ARTIFACT_ROOT: /var/lib/alphonse-diagnostics
+      DIAGNOSTIC_RUNTIME_ADAPTER_ID: fixture.workflow-runtime
+      DIAGNOSTIC_RUNTIME_ADAPTER_VERSION: 0.2.0
+      DIAGNOSTIC_RUNTIME_ADAPTER_KEY_ID: fixture-runtime-key-v1
+      DIAGNOSTIC_RUNTIME_ADAPTER_SECRET: local-runtime-event-secret-with-sufficient-length-v1
+      DIAGNOSTIC_RUNTIME_TIMESTAMP_TOLERANCE_SECONDS: 300
       KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
       KERNEL_INSTALLATION_NAME: Local Installation
       KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
@@ -51,6 +72,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      diagnostic-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - diagnostic-artifacts:/var/lib/alphonse-diagnostics
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
       interval: 2s
@@ -390,6 +415,7 @@ services:
 
 volumes:
   kernel-postgres-data:
+  diagnostic-artifacts:
   promotion-development-data:
   promotion-staging-data:
   promotion-production-data:

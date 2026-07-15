@@ -186,8 +186,38 @@ npm run release:qualify
 
 This produces a content-addressed deterministic customer bundle, proves its shipped one-command installer from a clean extraction, and composes the complete local non-AWS regression into content-addressed evidence. See `docs/release-v0.1.md`.
 
+V0.2 Ticket 01 external Agent Workflow registration:
+
+```powershell
+npm run test:v0.2-ticket-01
+```
+
+With the local stack running, inspect the Diagnostic Protocol and use its CLI:
+
+```powershell
+$env:ALPHONSE_URL="http://127.0.0.1:3000"
+$env:ALPHONSE_TOKEN="local-development-bootstrap-token"
+npm run diagnostic:cli -- bootstrap
+npm run diagnostic:cli -- operations
+npm run diagnostic:cli -- register-workflow path\to\workflow-command.json
+npm run diagnostic:cli -- register-revision path\to\revision-command.json
+npm run diagnostic:cli -- get-workflow workflow:inventory-follow-up
+```
+
+The Diagnostic Plane uses a separate PostgreSQL database and runtime role plus local content-addressed artifact storage. Agent Workflow and exact Agent Revision records are immutable diagnostic identity. They grant no Capability, execution, effect, or promotion authority.
+
+V0.2 Ticket 02 signed external activity observation:
+
+```powershell
+npm run test:v0.2-ticket-02
+```
+
+This proves canonical timestamped HMAC authentication, exact replay, preserved identity conflicts, append-only out-of-order claims, honest sequence-based projection, and zero Kernel Run creation. See [docs/runtime-event-observation.md](docs/runtime-event-observation.md).
+
 ## Public Boundary
 
 `GET /kernel/v0/bootstrap` is the canonical discovery entry point. Its Operation Descriptors define available transports, schemas, authority/effect classes, preconditions, outcomes, idempotency, emitted events, and next operations. HTTP is an adapter over this contract; direct database access is not a platform interface.
+
+`GET /diagnostic/v0/bootstrap` is the separate Diagnostic Protocol discovery entry point when the Diagnostic Plane is configured. HTTP and `diagnostic:cli` are adapters over the same public operations; direct Diagnostic database access is not a platform interface.
 
 Butler reads Kernel state through the canonical `GET /kernel/v0/accountable-work/overview` operation. Its shell has no database access or privileged write path.
