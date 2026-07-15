@@ -166,6 +166,20 @@ const workerRuntimeAttribution = {
   }
 };
 
+const diagnosisProvenance = {
+  type: "object", required: ["model", "runtime", "instruction_digest", "input_artifact_digests"],
+  additionalProperties: false,
+  properties: {
+    model: { type: "object", required: ["provider", "model", "version"], additionalProperties: false,
+      properties: { provider: { type: "string" }, model: { type: "string" }, version: { type: "string" } } },
+    runtime: { type: "object", required: ["name", "version"], additionalProperties: false,
+      properties: { name: { type: "string" }, version: { type: "string" } } },
+    instruction_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    input_artifact_digests: { type: "array", minItems: 1, maxItems: 30,
+      items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } }
+  }
+};
+
 function commandDescriptor({
   operationId, summary, path, input, resultKey, event, issues, nextOperations,
   authorityClass = "authenticated_builder_attribution_only",
@@ -440,6 +454,101 @@ const descriptors = [
     nextOperations: ["diagnostic.case.get", "diagnostic.artifact.get", "diagnostic.repair_task.create"]
   }),
   commandDescriptor({
+    operationId: "diagnostic.diagnosis_worker.register",
+    summary: "Attach a distinct customer-controlled Diagnostic Worker with no operational authority.",
+    path: "/diagnostic/v0/diagnosis-workers",
+    input: { type: "object", required: ["passport_id", "work_intent_id", "protocol_version", "runtime_attribution"],
+      additionalProperties: false, properties: {
+        passport_id: { type: "string", format: "uuid" }, work_intent_id: { type: "string", format: "uuid" },
+        protocol_version: { const: "0.2.0" }, runtime_attribution: workerRuntimeAttribution
+      } },
+    resultKey: "diagnosis_worker",
+    event: ["diagnostic.diagnosis_worker.registered", "diagnostic.diagnosis_worker.reused"],
+    issues: ["DIAGNOSIS_INTENT_REQUIRED", "DIAGNOSIS_WORKER_NOT_DISTINCT", "PASSPORT_INTENT_MISMATCH"],
+    nextOperations: ["diagnostic.diagnosis_request.create"],
+    authorityClass: "authenticated_diagnostic_worker_passport", effectClass: "advisory_worker_registration",
+    preconditions: ["demonstrated_failure", "confirmed_diagnostic_analysis_intent", "distinct_worker_identity"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.diagnosis_request.create",
+    summary: "Bind one short-lived advisory request to exact confirmed diagnostic sources and instructions.",
+    path: "/diagnostic/v0/diagnosis-requests",
+    input: { type: "object", required: ["case_id", "worker_registration_id", "reproduction_bundle_id",
+      "instruction", "expires_at"], additionalProperties: false, properties: {
+      case_id: { type: "string", format: "uuid" }, worker_registration_id: { type: "string", format: "uuid" },
+      reproduction_bundle_id: { type: "string", format: "uuid" },
+      instruction: { type: "string", minLength: 1, maxLength: 8000 }, expires_at: { type: "string" }
+    } },
+    resultKey: "diagnosis_request", event: ["diagnostic.diagnosis_request.created", "diagnostic.diagnosis_request.reused"],
+    issues: ["DIAGNOSIS_SOURCE_MISMATCH", "DIAGNOSIS_INTENT_SCOPE_MISMATCH",
+      "DIAGNOSIS_INTENT_CONSTRAINTS_REQUIRED", "DIAGNOSIS_REQUEST_EXPIRY_INVALID"],
+    nextOperations: ["diagnostic.diagnosis_workspace.get", "diagnostic.diagnosis_proposal.submit"],
+    authorityClass: "authenticated_customer_builder", effectClass: "advisory_request_record"
+  }),
+  {
+    operation_id: "diagnostic.diagnosis_workspace.get", version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Retrieve exact confirmed sources assigned to the authenticated Diagnostic Worker.", visibility: "public",
+    authority_class: "authenticated_diagnostic_worker_passport", effect_class: "read_only",
+    idempotency: "naturally_idempotent", transport: { method: "GET",
+      path: "/diagnostic/v0/diagnosis-requests/{request_id}/workspace" },
+    input_schema: { type: "object", required: ["request_id"], additionalProperties: false,
+      properties: { request_id: { type: "string", format: "uuid" } } },
+    output_schema: { type: "object", required: ["confirmed_failure_specification", "agent_revision",
+      "redacted_reproduction_bundle", "trace_references", "authority"] }, supported_modes: ["live"],
+    preconditions: ["authenticated_assigned_diagnostic_worker", "active_request"],
+    outcomes: ["bounded_workspace_returned"],
+    issues: ["AGENT_AUTHENTICATION_REQUIRED", "DIAGNOSIS_WORKER_MISMATCH", "DIAGNOSIS_REQUEST_NOT_ACTIVE"],
+    emitted_events: [], next_operations: ["diagnostic.diagnosis_proposal.submit", "diagnostic.diagnosis_request.fail"]
+  },
+  commandDescriptor({
+    operationId: "diagnostic.diagnosis_proposal.submit",
+    summary: "Submit one immutable structured advisory diagnosis with exact provenance.",
+    path: "/diagnostic/v0/diagnosis-proposals",
+    input: { type: "object", required: ["request_id", "diagnosis"], additionalProperties: false, properties: {
+      request_id: { type: "string", format: "uuid" },
+      diagnosis: { type: "object", required: ["facts", "inferences", "hypotheses", "uncertainties",
+        "recommended_investigation", "artifact_references", "provenance"], additionalProperties: false,
+        properties: { facts: { type: "array" }, inferences: { type: "array" }, hypotheses: { type: "array" },
+          uncertainties: { type: "array" }, recommended_investigation: { type: "array" },
+          artifact_references: { type: "array" }, provenance: diagnosisProvenance } }
+    } },
+    resultKey: "diagnosis_proposal",
+    event: ["diagnostic.diagnosis_proposal.submitted", "diagnostic.diagnosis_proposal.reused"],
+    issues: ["DIAGNOSIS_WORKER_MISMATCH", "DIAGNOSIS_REQUEST_NOT_ACTIVE", "INVALID_DIAGNOSIS",
+      "SENSITIVE_DIAGNOSIS_REJECTED", "DIAGNOSIS_PROVENANCE_MISMATCH"],
+    nextOperations: ["diagnostic.diagnosis_proposal.get", "diagnostic.diagnosis_proposal.review"],
+    authorityClass: "authenticated_assigned_diagnostic_worker", effectClass: "non_authoritative_advisory_proposal",
+    preconditions: ["active_exact_request", "structured_output", "exact_provenance"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.diagnosis_request.fail", summary: "Record worker timeout or failure without blocking the Debug Loop.",
+    path: "/diagnostic/v0/diagnosis-requests/{request_id}/fail",
+    input: { type: "object", required: ["request_id", "reason"], additionalProperties: false,
+      properties: { request_id: { type: "string", format: "uuid" }, reason: { type: "string", maxLength: 1000 } } },
+    resultKey: "diagnosis_request", event: "diagnostic.diagnosis_request.failed",
+    issues: ["DIAGNOSIS_WORKER_MISMATCH", "DIAGNOSIS_REQUEST_NOT_ACTIVE"],
+    nextOperations: ["diagnostic.case.get", "diagnostic.repair_task.create"],
+    authorityClass: "authenticated_assigned_diagnostic_worker", effectClass: "advisory_failure_record"
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.diagnosis_proposal.review",
+    summary: "Accept or reject advisory usefulness without changing truth or authority.",
+    path: "/diagnostic/v0/diagnosis-proposals/{proposal_id}/reviews",
+    input: { type: "object", required: ["proposal_id", "decision", "rationale"], additionalProperties: false,
+      properties: { proposal_id: { type: "string", format: "uuid" }, decision: { enum: ["accepted", "rejected"] },
+        rationale: { type: "string", minLength: 1, maxLength: 2000 } } },
+    resultKey: "diagnosis_proposal", event: ["diagnostic.diagnosis_proposal.accepted",
+      "diagnostic.diagnosis_proposal.rejected"], issues: ["DIAGNOSIS_ALREADY_REVIEWED"],
+    nextOperations: ["diagnostic.case.get"], authorityClass: "authenticated_customer_builder",
+    effectClass: "advisory_usefulness_review"
+  }),
+  readDescriptor({ operationId: "diagnostic.diagnosis_request.get", summary: "Inspect one immutable advisory request.",
+    path: "/diagnostic/v0/diagnosis-requests/{request_id}", idName: "request_id", resultKey: "diagnosis_request",
+    issues: ["DIAGNOSIS_REQUEST_NOT_FOUND"] }),
+  readDescriptor({ operationId: "diagnostic.diagnosis_proposal.get", summary: "Inspect one immutable advisory proposal and usefulness review.",
+    path: "/diagnostic/v0/diagnosis-proposals/{proposal_id}", idName: "proposal_id", resultKey: "diagnosis_proposal",
+    issues: ["DIAGNOSIS_PROPOSAL_NOT_FOUND"] }),
+  commandDescriptor({
     operationId: "diagnostic.repair_worker.register",
     summary: "Attach one customer-controlled Repair Worker using its existing Agent Passport and Work Intent.",
     path: "/diagnostic/v0/repair-workers",
@@ -455,7 +564,8 @@ const descriptors = [
     },
     resultKey: "repair_worker",
     event: ["diagnostic.repair_worker.registered", "diagnostic.repair_worker.reused"],
-    issues: ["AGENT_AUTHENTICATION_REQUIRED", "PASSPORT_INTENT_MISMATCH", "REPAIR_INTENT_REQUIRED"],
+    issues: ["AGENT_AUTHENTICATION_REQUIRED", "PASSPORT_INTENT_MISMATCH", "REPAIR_INTENT_REQUIRED",
+      "REPAIR_WORKER_NOT_DISTINCT"],
     nextOperations: ["diagnostic.repair_task.discover"],
     authorityClass: "authenticated_repair_worker_passport",
     preconditions: ["diagnostic_plane_available", "authenticated_repair_worker", "confirmed_repair_work_intent"]
@@ -733,7 +843,7 @@ const descriptors = [
       "diagnostic.repair_verification.reused"],
     issues: ["VERIFICATION_RUNNER_UNAVAILABLE", "VERIFICATION_SOURCE_MISMATCH",
       "VERIFICATION_ARTIFACT_DIGEST_MISMATCH", "VERIFICATION_IDEMPOTENCY_CONFLICT"],
-    nextOperations: ["diagnostic.repair_verification.get", "diagnostic.promotion.request",
+    nextOperations: ["diagnostic.repair_verification.get", "diagnostic.promotion.authorize",
       "diagnostic.repair_task.create"],
     authorityClass: "authenticated_customer_verification_requester",
     effectClass: "diagnostic_state_transition",
@@ -746,6 +856,113 @@ const descriptors = [
     idName: "verification_id",
     resultKey: "repair_verification",
     issues: ["VERIFICATION_RECEIPT_NOT_FOUND"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.promotion.authorize",
+    summary: "Authorize one exact verified candidate for promotion through customer Owner authority.",
+    path: "/diagnostic/v0/promotions",
+    input: {
+      type: "object",
+      required: ["candidate_id", "verification_id", "expected_target_revision_digest", "idempotency_key"],
+      additionalProperties: false,
+      properties: {
+        candidate_id: { type: "string", format: "uuid" },
+        verification_id: { type: "string", format: "uuid" },
+        expected_target_revision_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    resultKey: "promotion",
+    event: ["diagnostic.promotion.authorized", "diagnostic.promotion.authorization_reused"],
+    issues: ["OWNER_AUTHORITY_REQUIRED", "PROMOTION_CANDIDATE_NOT_VERIFIED",
+      "PROMOTION_VERIFICATION_ARTIFACT_MISMATCH", "PROMOTION_IDEMPOTENCY_CONFLICT", "REPAIR_TARGET_DRIFT"],
+    nextOperations: ["diagnostic.promotion.get", "diagnostic.promotion.apply"],
+    authorityClass: "authenticated_customer_owner",
+    effectClass: "promotion_authorization_record",
+    preconditions: ["current_verified_candidate", "passing_exact_verification_receipt", "unchanged_target_base"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.promotion.apply",
+    summary: "Apply one Owner-authorized candidate once and confirm the exact resulting target revision.",
+    path: "/diagnostic/v0/promotions/{promotion_id}/apply",
+    input: {
+      type: "object",
+      required: ["promotion_id", "idempotency_key"],
+      additionalProperties: false,
+      properties: {
+        promotion_id: { type: "string", format: "uuid" },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    resultKey: "promotion",
+    event: ["diagnostic.promotion.application_requested", "diagnostic.promotion.applying",
+      "diagnostic.promotion.confirmed", "diagnostic.promotion.uncertain",
+      "diagnostic.promotion.application_reused"],
+    issues: ["OWNER_AUTHORITY_REQUIRED", "PROMOTION_NOT_AUTHORIZED",
+      "PROMOTION_APPLY_IDEMPOTENCY_CONFLICT", "REPAIR_TARGET_DRIFT", "PROMOTION_NOT_CONFIRMED",
+      "REPAIR_PROMOTION_RESULT_UNCERTAIN"],
+    nextOperations: ["diagnostic.promotion.get", "diagnostic.promotion.reconcile",
+      "diagnostic.promotion.rollback", "diagnostic.case.get"],
+    authorityClass: "authenticated_customer_owner",
+    effectClass: "owner_authorized_target_change",
+    preconditions: ["durable_owner_authorization", "rollback_snapshot_before_request", "unchanged_target_base"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.promotion.reconcile",
+    summary: "Read the target once to resolve an uncertain Promotion without redispatching it.",
+    path: "/diagnostic/v0/promotions/{promotion_id}/reconcile",
+    input: {
+      type: "object",
+      required: ["promotion_id", "idempotency_key"],
+      additionalProperties: false,
+      properties: {
+        promotion_id: { type: "string", format: "uuid" },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    resultKey: "promotion",
+    event: ["diagnostic.promotion.confirmed", "diagnostic.promotion.failed",
+      "diagnostic.promotion.target_mismatch", "diagnostic.promotion.reconciliation_reused"],
+    issues: ["OWNER_AUTHORITY_REQUIRED", "PROMOTION_NOT_UNCERTAIN",
+      "PROMOTION_RECONCILIATION_IDEMPOTENCY_CONFLICT", "REPAIR_CANDIDATE_TARGET_DRIFT"],
+    nextOperations: ["diagnostic.promotion.get", "diagnostic.promotion.rollback",
+      "diagnostic.case.get"],
+    authorityClass: "authenticated_customer_owner",
+    effectClass: "read_only_external_reconciliation",
+    preconditions: ["uncertain_promotion", "preserved_request_receipt", "read_only_target_inspection"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.promotion.rollback",
+    summary: "Owner-authorize one exact rollback and confirm the restored target revision.",
+    path: "/diagnostic/v0/promotions/{promotion_id}/rollback",
+    input: {
+      type: "object",
+      required: ["promotion_id", "expected_target_revision_digest", "idempotency_key"],
+      additionalProperties: false,
+      properties: {
+        promotion_id: { type: "string", format: "uuid" },
+        expected_target_revision_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    resultKey: "promotion",
+    event: ["diagnostic.promotion.rollback_authorized", "diagnostic.promotion.rolled_back",
+      "diagnostic.promotion.rollback_reused"],
+    issues: ["OWNER_AUTHORITY_REQUIRED", "PROMOTION_NOT_CONFIRMED",
+      "PROMOTION_ROLLBACK_PRECONDITION_MISMATCH", "PROMOTION_ROLLBACK_IDEMPOTENCY_CONFLICT",
+      "REPAIR_TARGET_DRIFT", "PROMOTION_ROLLBACK_ARTIFACT_INVALID"],
+    nextOperations: ["diagnostic.promotion.get", "diagnostic.case.get"],
+    authorityClass: "authenticated_customer_owner",
+    effectClass: "owner_authorized_target_rollback",
+    preconditions: ["confirmed_promotion", "exact_current_target_revision", "immutable_rollback_snapshot"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.promotion.get",
+    summary: "Inspect Owner authorization, application request, confirmation, rollback reference, and history.",
+    path: "/diagnostic/v0/promotions/{promotion_id}",
+    idName: "promotion_id",
+    resultKey: "promotion",
+    issues: ["PROMOTION_NOT_FOUND"]
   }),
   readDescriptor({
     operationId: "diagnostic.case.get",

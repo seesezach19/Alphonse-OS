@@ -87,7 +87,7 @@ try {
       environment: "customer-local"
     },
     external_credential_binding_ref: credentialBindingRef,
-    permitted_operations: ["inspect", "snapshot", "candidate"],
+    permitted_operations: ["inspect", "snapshot", "candidate", "promotion", "confirmation", "rollback"],
     transition_policy: {
       candidate_initial_state: "inactive",
       require_expected_base_revision: true,

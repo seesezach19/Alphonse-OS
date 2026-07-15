@@ -8,8 +8,8 @@
     "candidate": { "supported": true, "effect": "create_inactive_candidate" },
     "candidate_execution": { "supported": false, "effect": "unavailable" },
     "review": { "supported": false, "effect": "unavailable" },
-    "promotion": { "supported": false, "effect": "unavailable" },
-    "confirmation": { "supported": false, "effect": "unavailable" },
-    "rollback": { "supported": false, "effect": "unavailable" }
+    "promotion": { "supported": true, "effect": "promote_candidate" },
+    "confirmation": { "supported": true, "effect": "confirm_target_revision" },
+    "rollback": { "supported": true, "effect": "rollback_target_revision" }
   }
 }

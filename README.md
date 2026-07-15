@@ -214,6 +214,31 @@ npm run test:v0.2-ticket-02
 
 This proves canonical timestamped HMAC authentication, exact replay, preserved identity conflicts, append-only out-of-order claims, honest sequence-based projection, and zero Kernel Run creation. See [docs/runtime-event-observation.md](docs/runtime-event-observation.md).
 
+V0.2 Ticket 10 repeatable fresh-install Debug Loop:
+
+```powershell
+npm run rehearse:v0.2
+```
+
+This runs the confirmed repair and uncertainty/reconciliation journeys twice from isolated clean state, then compares normalized public outcomes. See [docs/v0.2-debug-loop-proof.md](docs/v0.2-debug-loop-proof.md).
+
+V0.2 optional model-assisted diagnosis:
+
+```powershell
+npm run test:v0.2-ticket-12
+```
+
+This attaches a distinct customer-controlled Diagnostic Worker to exact confirmed evidence. Its immutable proposals may be accepted, rejected, or ignored for usefulness, but never change failure truth or gain repair, verification, promotion, or target authority. Provider credentials remain outside Alphonse. See [docs/optional-model-assisted-diagnosis.md](docs/optional-model-assisted-diagnosis.md).
+
+V0.2 reproducible headless release:
+
+```powershell
+npm run release:v0.2:build
+npm run release:v0.2:qualify
+```
+
+See [docs/release-v0.2.md](docs/release-v0.2.md) and the packaged `OPERATOR.md` for installation, custody, licensing, retention, recovery, and limitations.
+
 ## Public Boundary
 
 `GET /kernel/v0/bootstrap` is the canonical discovery entry point. Its Operation Descriptors define available transports, schemas, authority/effect classes, preconditions, outcomes, idempotency, emitted events, and next operations. HTTP is an adapter over this contract; direct database access is not a platform interface.

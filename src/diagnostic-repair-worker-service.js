@@ -267,6 +267,15 @@ export function createDiagnosticRepairWorkerService(
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
           `${installationId}:repair-worker:${input.passport_id}:${input.work_intent_id}`
         ]);
+        const diagnosisIdentity = await client.query(
+          `SELECT registration_id FROM diagnostic_diagnosis_worker_registrations
+           WHERE installation_id=$1 AND agent_principal_id=$2 LIMIT 1`,
+          [installationId, authenticatedPassport.agent_principal_id]
+        );
+        if (diagnosisIdentity.rows[0]) {
+          throw new KernelError(409, "REPAIR_WORKER_NOT_DISTINCT",
+            "Repair Worker must be distinct from Diagnostic Worker.");
+        }
         const registrationDigest = sha256Digest({
           passport_id: input.passport_id,
           agent_principal_id: authenticatedPassport.agent_principal_id,

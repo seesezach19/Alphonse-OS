@@ -35,6 +35,13 @@ const patch = {
   ]
 };
 
+function jsonResponse(value, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}
+
 test("n8n repair preserves inventory_unknown and removes the false delay draft", () => {
   const candidate = materializeInventoryRepair(baseWorkflow, patch, "candidate-601");
   assert.equal(candidate.active, false);
@@ -93,7 +100,7 @@ test("n8n adapter inspects exact base then creates one inactive target-native ca
   assert.equal("active" in JSON.parse(calls.at(-1).init.body), false);
 });
 
-test("n8n adapter rejects target drift before POST and has no promotion method", async () => {
+test("n8n candidate creation rejects target drift before POST", async () => {
   let posts = 0;
   const adapter = createN8nRepairDeliveryAdapter({
     baseUrl: "http://n8n.test/api/v1", apiKey: "customer-owned-key",
@@ -110,5 +117,138 @@ test("n8n adapter rejects target drift before POST and has no promotion method",
     repair_artifact: patch, idempotency_key: "delivery-drift"
   }), (error) => error.code === "REPAIR_TARGET_DRIFT");
   assert.equal(posts, 0);
-  assert.equal(adapter.promote, undefined);
+});
+
+test("n8n promotion applies exact candidate behavior to the bound target and confirms it", async () => {
+  const original = structuredClone(baseWorkflow);
+  original.active = true;
+  const candidate = materializeInventoryRepair(original, patch, "candidate-801");
+  candidate.id = "CandidateNative801";
+  let active = structuredClone(original);
+  const calls = [];
+  const adapter = createN8nRepairDeliveryAdapter({
+    baseUrl: "http://n8n.test/api/v1",
+    apiKey: "test-only-key",
+    fetchImpl: async (url, init = {}) => {
+      const path = new URL(url).pathname;
+      calls.push({ path, method: init.method ?? "GET" });
+      if (path.endsWith("/workflows/CandidateNative801")) return jsonResponse(candidate);
+      if (path.endsWith("/workflows/InventoryDefect1") && init.method === "PUT") {
+        const body = JSON.parse(init.body);
+        active = { ...active, ...body, id: original.id, active: true, versionId: "promoted-version-801" };
+        return jsonResponse(active);
+      }
+      if (path.endsWith("/workflows/InventoryDefect1")) return jsonResponse(active);
+      return jsonResponse({ message: "missing" }, 404);
+    }
+  });
+  const expectedBase = sha256Digest(n8nTargetRevisionMaterial(original));
+  const candidateDigest = sha256Digest(n8nTargetRevisionMaterial(candidate));
+  const result = await adapter.promote({
+    target: { target_id: "InventoryDefect1" },
+    expected_base_revision_digest: expectedBase,
+    candidate_target_id: candidate.id,
+    candidate_target_revision_digest: candidateDigest,
+    idempotency_key: "promotion-801"
+  });
+  assert.equal(result.previous.target_revision_digest, expectedBase);
+  assert.equal(result.confirmation.target_revision_digest,
+    sha256Digest(n8nTargetRevisionMaterial(active)));
+  assert.equal(result.confirmation.candidate_behavior_confirmed, true);
+  assert.deepEqual(calls.map((call) => call.method), ["GET", "GET", "PUT", "GET"]);
+  assert.equal(calls.some((call) => call.path.includes("executions")), false);
+});
+
+test("n8n promotion rejects stale base before PUT", async () => {
+  const drifted = { ...baseWorkflow, active: true, versionId: "newer-work" };
+  let writes = 0;
+  const adapter = createN8nRepairDeliveryAdapter({
+    baseUrl: "http://n8n.test/api/v1",
+    apiKey: "test-only-key",
+    fetchImpl: async (_url, init = {}) => {
+      if (init.method === "PUT") writes += 1;
+      return jsonResponse(drifted);
+    }
+  });
+  await assert.rejects(() => adapter.promote({
+    target: { target_id: "InventoryDefect1" },
+    expected_base_revision_digest: `sha256:${"a".repeat(64)}`,
+    candidate_target_id: "CandidateNative801",
+    candidate_target_revision_digest: `sha256:${"b".repeat(64)}`,
+    idempotency_key: "promotion-drift"
+  }), (error) => error.code === "REPAIR_TARGET_DRIFT");
+  assert.equal(writes, 0);
+});
+
+test("n8n reconciliation distinguishes applied, not applied, and mismatch without writes", async () => {
+  const original = structuredClone(baseWorkflow);
+  original.active = true;
+  const candidate = materializeInventoryRepair(original, patch, "candidate-901");
+  candidate.id = "CandidateNative901";
+  const originalDigest = sha256Digest(n8nTargetRevisionMaterial(original));
+  const candidateDigest = sha256Digest(n8nTargetRevisionMaterial(candidate));
+  let current = structuredClone(candidate);
+  current.id = original.id;
+  current.name = original.name;
+  current.active = true;
+  current.versionId = "applied-901";
+  let writes = 0;
+  const adapter = createN8nRepairDeliveryAdapter({
+    baseUrl: "http://n8n.test/api/v1", apiKey: "test-only-key",
+    fetchImpl: async (url, init = {}) => {
+      if (init.method === "PUT") writes += 1;
+      return jsonResponse(new URL(url).pathname.endsWith("/CandidateNative901") ? candidate : current);
+    }
+  });
+  const input = {
+    target: { target_id: original.id },
+    previous_target_revision_digest: originalDigest,
+    candidate_target_id: candidate.id,
+    candidate_target_revision_digest: candidateDigest
+  };
+  assert.equal((await adapter.reconcilePromotion(input)).outcome, "applied");
+  current = original;
+  assert.equal((await adapter.reconcilePromotion(input)).outcome, "not_applied");
+  current = { ...original, settings: { executionOrder: "v1", unrelatedChange: true },
+    versionId: "mismatch-901" };
+  assert.equal((await adapter.reconcilePromotion(input)).outcome, "target_mismatch");
+  assert.equal(writes, 0);
+});
+
+test("n8n rollback is separately fenced and confirms restored behavior", async () => {
+  const original = structuredClone(baseWorkflow);
+  original.active = true;
+  const candidate = materializeInventoryRepair(original, patch, "candidate-rollback-901");
+  let current = { ...candidate, id: original.id, name: original.name, active: true,
+    versionId: "promoted-901" };
+  const promotedDigest = sha256Digest(n8nTargetRevisionMaterial(current));
+  let writes = 0;
+  const adapter = createN8nRepairDeliveryAdapter({
+    baseUrl: "http://n8n.test/api/v1", apiKey: "test-only-key",
+    fetchImpl: async (_url, init = {}) => {
+      if (init.method === "PUT") {
+        writes += 1;
+        current = { ...current, ...JSON.parse(init.body), id: original.id, active: true,
+          versionId: "rollback-901" };
+      }
+      return jsonResponse(current);
+    }
+  });
+  const result = await adapter.rollback({
+    target: { target_id: original.id },
+    expected_current_revision_digest: promotedDigest,
+    rollback_representation: n8nTargetRevisionMaterial(original),
+    idempotency_key: "rollback-901"
+  });
+  assert.equal(result.confirmation.rollback_behavior_confirmed, true);
+  assert.equal(writes, 1);
+  assert.match(JSON.stringify(current), /customer_delay_follow_up/);
+
+  await assert.rejects(() => adapter.rollback({
+    target: { target_id: original.id },
+    expected_current_revision_digest: promotedDigest,
+    rollback_representation: n8nTargetRevisionMaterial(original),
+    idempotency_key: "rollback-stale-901"
+  }), (error) => error.code === "REPAIR_TARGET_DRIFT");
+  assert.equal(writes, 1);
 });

@@ -128,9 +128,21 @@ test("case projection advances only for live repair work or eligible candidates"
   assert.equal(projectDiagnosticCaseWithRepair({ ...base, tasks: [], candidates: [{ status: "proposed" }] }).state,
     "candidate_available");
   assert.deepEqual(projectDiagnosticCaseWithRepair({ ...base, tasks: [], candidates: [{ status: "verified" }] }), {
-    state: "verified",
-    legal_next_operations: ["diagnostic.repair_verification.get", "diagnostic.promotion.request"]
+      state: "verified",
+      legal_next_operations: ["diagnostic.repair_verification.get", "diagnostic.promotion.authorize"]
   });
   assert.equal(projectDiagnosticCaseWithRepair({ ...base, tasks: [], candidates: [{ status: "rejected" }] }).state,
     "reproducible");
+});
+
+test("case resolves only after a confirmed Promotion", () => {
+  const base = { failureSpecification: {}, bundles: [], attempts: [], tasks: [],
+    candidates: [{ status: "verified" }] };
+  assert.equal(projectDiagnosticCaseWithRepair(base).state, "verified");
+  assert.equal(projectDiagnosticCaseWithRepair({ ...base, promotions: [{
+    projection: { state: "authorized" }
+  }] }).state, "verified");
+  assert.equal(projectDiagnosticCaseWithRepair({ ...base, promotions: [{
+    projection: { state: "confirmed" }
+  }] }).state, "resolved");
 });

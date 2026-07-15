@@ -7,6 +7,7 @@ import {
   validateFailureSpecification
 } from "./diagnostic-reproduction-contracts.js";
 import { projectDiagnosticCaseWithRepair, projectRepairTask } from "./diagnostic-repair-worker-contracts.js";
+import { projectPromotion } from "./diagnostic-promotion-contracts.js";
 import { KernelError } from "./errors.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -172,6 +173,17 @@ export function createDiagnosticReproductionService(
        WHERE installation_id=$1 AND case_id=$2 ORDER BY verified_at,verification_id`,
       [installationId, caseId]
     );
+    const promotionResult = await client.query(
+      `SELECT * FROM diagnostic_promotions
+       WHERE installation_id=$1 AND case_id=$2 ORDER BY authorized_at,promotion_id`,
+      [installationId, caseId]
+    );
+    const promotionEventResult = await client.query(
+      `SELECT e.* FROM diagnostic_promotion_events e
+       JOIN diagnostic_promotions p ON p.promotion_id=e.promotion_id
+       WHERE e.installation_id=$1 AND p.case_id=$2 ORDER BY e.promotion_id,e.event_index`,
+      [installationId, caseId]
+    );
     const failureSpecification = failureSpecificationView(specResult.rows[0]);
     const attempts = attemptResult.rows.map(attemptView);
     const bundles = bundleResult.rows.map(bundleView);
@@ -218,6 +230,30 @@ export function createDiagnosticReproductionService(
       submitted_at: candidate.submitted_at,
       immutable: true
     }));
+    const promotions = promotionResult.rows.map((promotion) => {
+      const events = promotionEventResult.rows
+        .filter((event) => event.promotion_id === promotion.promotion_id)
+        .map((event) => ({
+          event_index: Number(event.event_index),
+          event_type: event.event_type,
+          detail: event.detail,
+          actor: { type: event.actor_type, id: event.actor_id },
+          occurred_at: event.occurred_at,
+          immutable: true
+        }));
+      return {
+        promotion_id: promotion.promotion_id,
+        candidate_id: promotion.candidate_id,
+        verification_id: promotion.verification_id,
+        authorization_digest: promotion.authorization_digest,
+        expected_target_revision_digest: promotion.expected_target_revision_digest,
+        candidate_target_revision_digest: promotion.candidate_target_revision_digest,
+        owner: { type: promotion.owner_actor_type, id: promotion.owner_actor_id },
+        events,
+        projection: projectPromotion(events),
+        immutable: true
+      };
+    });
     return {
       case_id: row.case_id,
       trace_id: row.trace_id,
@@ -247,7 +283,10 @@ export function createDiagnosticReproductionService(
         verified_at: verification.verified_at,
         immutable: true
       })),
-      projection: projectDiagnosticCaseWithRepair({ failureSpecification, bundles, attempts, tasks, candidates }),
+      promotions,
+      projection: projectDiagnosticCaseWithRepair({
+        failureSpecification, bundles, attempts, tasks, candidates, promotions
+      }),
       transitions: transitionResult.rows,
       authority: { ...AUTHORITY }
     };

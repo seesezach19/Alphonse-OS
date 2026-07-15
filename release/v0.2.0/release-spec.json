@@ -1,0 +1,72 @@
+{
+  "schema_version": "alphonse.release_spec.v0.2",
+  "release_version": "0.2.0",
+  "kernel_protocol_version": "0.1.0",
+  "diagnostic_protocol_version": "0.2.0",
+  "components": {
+    "kernel": { "version": "0.1.0", "entrypoint": "src/server.js" },
+    "diagnostic_plane": { "version": "0.2.0", "entrypoint": "src/diagnostic-service.js" },
+    "diagnostic_cli": { "version": "0.2.0", "entrypoint": "src/diagnostic-cli.js" },
+    "verification_runner": { "version": "0.2.0", "entrypoint": "src/verification-runner-process.js" },
+    "n8n_operational_package": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/operational-package.json" },
+    "n8n_runtime_adapter": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/runtime-adapter-manifest.json" },
+    "n8n_repair_delivery_adapter": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/repair-delivery-adapter-manifest.json" },
+    "reference_workflow": { "version": "inventory-follow-up-defective-v1", "entrypoint": "packages/n8n-operational-package/workflows/inventory-follow-up-defective.json" },
+    "event_reporter": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/workflows/alphonse-event-reporter.json" }
+  },
+  "base_images": {
+    "node": "node@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2",
+    "postgres": "postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416",
+    "n8n": "n8nio/n8n@sha256:761374d4eb841b0a22771d6bd68f0e8d827b4979ae4e490045517b13fc1259dd"
+  },
+  "compatible_n8n": {
+    "range": ">=2.25.0 <3.0.0",
+    "reference_version": "2.25.7",
+    "reference_image": "n8nio/n8n@sha256:761374d4eb841b0a22771d6bd68f0e8d827b4979ae4e490045517b13fc1259dd",
+    "redistributed": false,
+    "customer_owned": true,
+    "license_url": "https://docs.n8n.io/sustainable-use-license/"
+  },
+  "kernel_migrations": [
+    "001_bootstrap.sql",
+    "002_identity_intent.sql",
+    "003_context_access.sql",
+    "004_context_receipt_constraints.sql",
+    "005_package_publication.sql",
+    "006_deployment_authority.sql",
+    "007_runtime_handoff.sql",
+    "008_accountable_execution.sql",
+    "009_exact_effect_dispatch.sql",
+    "010_effect_recovery.sql",
+    "011_open_applied_accountability.sql",
+    "012_portable_package_trust.sql",
+    "013_environment_promotion.sql",
+    "014_user_space_upgrade.sql",
+    "015_upgrade_canary_gate_results.sql",
+    "016_upgrade_reanalysis_and_reactivation.sql",
+    "017_upgrade_migration_attestations.sql",
+    "018_upgrade_policy_and_repair_verification.sql",
+    "019_upgrade_verification_reattestation.sql",
+    "020_environment_restore.sql",
+    "021_support_coordination.sql"
+  ],
+  "diagnostic_migrations": [
+    "001_bootstrap.sql",
+    "002_runtime_events.sql",
+    "003_reproduction.sql",
+    "004_repair_workers.sql",
+    "005_repair_delivery.sql",
+    "006_verification.sql",
+    "007_promotions.sql",
+    "008_diagnostic_workers.sql"
+  ],
+  "qualification": [
+    "v0.2_release_policy",
+    "v0.2_clean_extraction",
+    "v0.2_repeatable_debug_loop",
+    "v0.1_complete_release_qualification"
+  ],
+  "required_provider": "none",
+  "managed_cloud_required": false,
+  "aws_deployment_included": false
+}

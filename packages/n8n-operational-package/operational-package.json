@@ -18,7 +18,7 @@
     "revision_identity": "exported workflow JSON, runtime image, node versions, model declaration, and configuration",
     "event_receipt": "successful n8n execution to signed minimal Runtime Event Envelope",
     "health": "runtime and reporting reachability evaluated separately from workflow activity",
-    "repair_delivery": "provider-neutral repair patch to inactive n8n workflow through the public API",
+    "repair_delivery": "provider-neutral repair patch to inactive n8n workflow and Owner-authorized target promotion through the public API",
     "verification": "exact n8n Code-node revisions to deterministic provider-neutral outcomes"
   },
   "fingerprint_rules": {
@@ -54,6 +54,7 @@
     "manifest_conformance", "workflow_import", "event_reporter_primitives",
     "real_n8n_successful_but_wrong_execution", "exact_revision_resolution", "no_external_effects",
     "inactive_candidate_materialization", "active_workflow_preservation", "repair_delivery_drift_fencing",
-    "independent_deterministic_verification", "negative_candidate_rejection"
+    "independent_deterministic_verification", "negative_candidate_rejection",
+    "owner_authorized_promotion", "exact_target_confirmation", "rollback_snapshot_preservation"
   ]
 }

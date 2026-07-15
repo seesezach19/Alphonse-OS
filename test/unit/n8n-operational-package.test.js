@@ -41,6 +41,9 @@ test("first-party n8n Operational Package is pinned, complete, and conforming", 
   assert.ok(packageManifest.health_checks.runtime_reachability);
   assert.deepEqual(packageManifest.detail_policy.redact_paths, ["input.customer_email"]);
   assert.equal(adapterManifest.capabilities.detail_retrieval.supported, true);
+  assert.equal(repairDeliveryManifest.operations.promotion.supported, true);
+  assert.equal(repairDeliveryManifest.operations.confirmation.supported, true);
+  assert.equal(repairDeliveryManifest.operations.rollback.supported, true);
   assert.ok(packageManifest.tests.includes("real_n8n_successful_but_wrong_execution"));
   assert.doesNotMatch(JSON.stringify(packageManifest), /password|api_key|access_token|credential_value/i);
 });
@@ -57,6 +60,14 @@ test("Event Reporter is importable and uses only approved standard n8n primitive
   assert.equal(workflow.active, false);
   assert.match(JSON.stringify(workflow), /x-alphonse-runtime-signature/);
   assert.doesNotMatch(JSON.stringify(workflow), /n8n-nodes-[^b]|community/i);
+});
+
+test("n8n adapter fault controls are disabled unless explicitly enabled", async () => {
+  const source = await readFile(path.join(packageRoot, "src", "detail-adapter-server.js"), "utf8");
+  const releaseCompose = await readFile(path.join(root, "release", "v0.2.0", "compose.yaml"), "utf8")
+    .catch(() => "");
+  assert.match(source, /N8N_ADAPTER_TEST_CONTROLS_ENABLED === "true"/);
+  assert.doesNotMatch(releaseCompose, /N8N_ADAPTER_TEST_CONTROLS_ENABLED:\s*"true"/);
 });
 
 test("defective workflow deterministically converts missing SKU to zero and drafts delay for local review", async () => {

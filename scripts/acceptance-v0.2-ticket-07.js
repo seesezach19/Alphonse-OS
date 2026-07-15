@@ -20,6 +20,7 @@ const composeFiles = ["-f", "compose.yaml", "-f", "packages/n8n-operational-pack
 Object.assign(process.env, { ALPHONSE_TICKET06_KEEP_STACK: "1" });
 const environment = { ...process.env, COMPOSE_PROJECT_NAME: project };
 const ownerHeaders = { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" };
+const keepStack = process.env.ALPHONSE_TICKET07_KEEP_STACK === "1";
 let passed = false;
 
 function run(command, args, { timeout = 8 * 60_000 } = {}) {
@@ -297,6 +298,11 @@ try {
     });
   assert.equal(failed.response.status, 201, JSON.stringify(failed.body));
   const badReceipt = failed.body.repair_verification;
+  Object.assign(process.env, {
+    ALPHONSE_TICKET07_VERIFICATION_ID: good.verification_id,
+    ALPHONSE_TICKET07_BAD_CANDIDATE_ID: bad.candidateId,
+    ALPHONSE_TICKET07_BAD_VERIFICATION_ID: badReceipt.verification_id
+  });
   assert.equal(badReceipt.overall_result, "failed");
   assert.equal(badReceipt.outcomes.original_demonstrates_failure.status, "passed");
   assert.equal(badReceipt.outcomes.candidate_satisfies_target.status, "failed");
@@ -353,5 +359,7 @@ try {
         "n8n-runtime-adapter").stdout);
     } catch {}
   }
-  try { compose("down", "--volumes", "--remove-orphans"); } catch {}
+  if (!keepStack) {
+    try { compose("down", "--volumes", "--remove-orphans"); } catch {}
+  }
 }

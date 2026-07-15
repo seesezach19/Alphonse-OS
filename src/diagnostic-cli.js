@@ -24,6 +24,14 @@ const commands = {
   "confirm-failure-spec": { method: "POST", path: "/diagnostic/v0/failure-specifications", file: true },
   "create-reproduction": { method: "POST", path: "/diagnostic/v0/reproductions", file: true },
   "register-repair-worker": { method: "POST", path: "/diagnostic/v0/repair-workers", file: true, agentAuth: true },
+  "register-diagnosis-worker": { method: "POST", path: "/diagnostic/v0/diagnosis-workers", file: true, agentAuth: true },
+  "create-diagnosis-request": { method: "POST", path: "/diagnostic/v0/diagnosis-requests", file: true },
+  "get-diagnosis-workspace": { method: "GET", agentAuth: true, diagnosisWorkspace: true, argumentRequired: true },
+  "fail-diagnosis-request": { method: "POST", file: true, agentAuth: true, diagnosisRequestAction: "fail" },
+  "submit-diagnosis-proposal": { method: "POST", path: "/diagnostic/v0/diagnosis-proposals", file: true, agentAuth: true },
+  "review-diagnosis-proposal": { method: "POST", file: true, diagnosisProposalReview: true },
+  "get-diagnosis-request": { method: "GET", path: `/diagnostic/v0/diagnosis-requests/${encodeURIComponent(argument ?? "")}`, argumentRequired: true },
+  "get-diagnosis-proposal": { method: "GET", path: `/diagnostic/v0/diagnosis-proposals/${encodeURIComponent(argument ?? "")}`, argumentRequired: true },
   "create-repair-task": { method: "POST", path: "/diagnostic/v0/repair-tasks", file: true },
   "discover-repair-tasks": { method: "GET", path: "/diagnostic/v0/repair-tasks", agentAuth: true },
   "claim-repair-task": { method: "POST", file: true, agentAuth: true, taskAction: "claim" },
@@ -41,6 +49,11 @@ const commands = {
   "get-repair-delivery": { method: "GET", path: `/diagnostic/v0/repair-deliveries/${encodeURIComponent(argument ?? "")}`, argumentRequired: true },
   "verify-repair": { method: "POST", path: "/diagnostic/v0/repair-verifications", file: true },
   "get-repair-verification": { method: "GET", path: `/diagnostic/v0/repair-verifications/${encodeURIComponent(argument ?? "")}`, argumentRequired: true },
+  "authorize-promotion": { method: "POST", path: "/diagnostic/v0/promotions", file: true },
+  "apply-promotion": { method: "POST", file: true, promotionAction: "apply" },
+  "reconcile-promotion": { method: "POST", file: true, promotionAction: "reconcile" },
+  "rollback-promotion": { method: "POST", file: true, promotionAction: "rollback" },
+  "get-promotion": { method: "GET", path: `/diagnostic/v0/promotions/${encodeURIComponent(argument ?? "")}`, argumentRequired: true },
   "get-repair-artifact": { method: "GET", agentAuth: true, repairArtifact: true, argumentRequired: true },
   "get-case": { method: "GET", path: `/diagnostic/v0/cases/${encodeURIComponent(argument ?? "")}`, argumentRequired: true },
   "retire-artifact": { method: "POST", path: "/diagnostic/v0/artifact-retirements", file: true }
@@ -67,6 +80,14 @@ function usage() {
     "  confirm-failure-spec <command-json-file>",
     "  create-reproduction <command-json-file>",
     "  register-repair-worker <command-json-file>",
+    "  register-diagnosis-worker <command-json-file>",
+    "  create-diagnosis-request <command-json-file>",
+    "  get-diagnosis-workspace <request-id>",
+    "  fail-diagnosis-request <command-json-file>",
+    "  submit-diagnosis-proposal <command-json-file>",
+    "  review-diagnosis-proposal <command-json-file>",
+    "  get-diagnosis-request <request-id>",
+    "  get-diagnosis-proposal <proposal-id>",
     "  create-repair-task <command-json-file>",
     "  discover-repair-tasks",
     "  claim-repair-task <command-json-file>",
@@ -84,6 +105,11 @@ function usage() {
     "  get-repair-delivery <delivery-id>",
     "  verify-repair <command-json-file>",
     "  get-repair-verification <verification-id>",
+    "  authorize-promotion <command-json-file>",
+    "  apply-promotion <command-json-file>",
+    "  reconcile-promotion <command-json-file>",
+    "  rollback-promotion <command-json-file>",
+    "  get-promotion <promotion-id>",
     "  get-repair-artifact <task-id>,<sha256-digest>",
     "  get-case <case-id>",
     "  retire-artifact <command-json-file>",
@@ -144,6 +170,25 @@ if (selected.file) {
   } else {
     options.body = fileBody;
   }
+}
+if (selected.promotionAction) {
+  const body = JSON.parse(await readFile(argument, "utf8"));
+  selectedPath = `/diagnostic/v0/promotions/${encodeURIComponent(body?.input?.promotion_id ?? "")}/${selected.promotionAction}`;
+}
+
+if (selected.diagnosisRequestAction) {
+  const body = JSON.parse(await readFile(argument, "utf8"));
+  selectedPath = `/diagnostic/v0/diagnosis-requests/${encodeURIComponent(body?.input?.request_id ?? "")}` +
+    `/${selected.diagnosisRequestAction}`;
+}
+
+if (selected.diagnosisProposalReview) {
+  const body = JSON.parse(await readFile(argument, "utf8"));
+  selectedPath = `/diagnostic/v0/diagnosis-proposals/${encodeURIComponent(body?.input?.proposal_id ?? "")}/reviews`;
+}
+
+if (selected.diagnosisWorkspace) {
+  selectedPath = `/diagnostic/v0/diagnosis-requests/${encodeURIComponent(argument)}/workspace`;
 }
 
 if (selected.repairArtifact) {

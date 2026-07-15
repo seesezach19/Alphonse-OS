@@ -280,11 +280,19 @@ export function projectRepairTask(task, events, now = Date.now()) {
   };
 }
 
-export function projectDiagnosticCaseWithRepair({ failureSpecification, bundles, attempts, tasks = [], candidates = [] }) {
+export function projectDiagnosticCaseWithRepair({
+  failureSpecification, bundles, attempts, tasks = [], candidates = [], promotions = []
+}) {
+  if (promotions.some((promotion) => promotion.projection?.state === "confirmed")) {
+    return {
+      state: "resolved",
+      legal_next_operations: ["diagnostic.promotion.get", "diagnostic.case.get"]
+    };
+  }
   if (candidates.some((candidate) => candidate.status === "verified")) {
     return {
       state: "verified",
-      legal_next_operations: ["diagnostic.repair_verification.get", "diagnostic.promotion.request"]
+      legal_next_operations: ["diagnostic.repair_verification.get", "diagnostic.promotion.authorize"]
     };
   }
   if (candidates.some((candidate) => ["proposed", "verification_pending"].includes(candidate.status))) {

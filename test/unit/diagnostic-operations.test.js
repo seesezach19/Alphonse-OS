@@ -25,6 +25,14 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.case.report_failure",
     "diagnostic.failure_specification.confirm",
     "diagnostic.reproduction.create",
+    "diagnostic.diagnosis_worker.register",
+    "diagnostic.diagnosis_request.create",
+    "diagnostic.diagnosis_workspace.get",
+    "diagnostic.diagnosis_proposal.submit",
+    "diagnostic.diagnosis_request.fail",
+    "diagnostic.diagnosis_proposal.review",
+    "diagnostic.diagnosis_request.get",
+    "diagnostic.diagnosis_proposal.get",
     "diagnostic.repair_worker.register",
     "diagnostic.repair_task.create",
     "diagnostic.repair_task.discover",
@@ -44,6 +52,11 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.repair_delivery.get",
     "diagnostic.repair_verification.create",
     "diagnostic.repair_verification.get",
+    "diagnostic.promotion.authorize",
+    "diagnostic.promotion.apply",
+    "diagnostic.promotion.reconcile",
+    "diagnostic.promotion.rollback",
+    "diagnostic.promotion.get",
     "diagnostic.case.get",
     "diagnostic.artifact.retire"
   ]);
@@ -60,6 +73,17 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     assert.ok(Array.isArray(operation.emitted_events));
     assert.ok(Array.isArray(operation.next_operations));
   }
+});
+
+test("Diagnostic Worker protocol is advisory, provenance-bound, and authority-free", () => {
+  const worker = getDiagnosticOperationDescriptor("diagnostic.diagnosis_worker.register");
+  assert.equal(worker.authority_class, "authenticated_diagnostic_worker_passport");
+  assert.equal(worker.effect_class, "advisory_worker_registration");
+  const proposal = getDiagnosticOperationDescriptor("diagnostic.diagnosis_proposal.submit");
+  assert.equal(proposal.effect_class, "non_authoritative_advisory_proposal");
+  assert.doesNotMatch(JSON.stringify(proposal), /provider_token|provider_credential/i);
+  const review = getDiagnosticOperationDescriptor("diagnostic.diagnosis_proposal.review");
+  assert.equal(review.effect_class, "advisory_usefulness_review");
 });
 
 test("Repair Worker protocol is exact, replaceable, and excludes promotion authority", () => {
@@ -93,8 +117,22 @@ test("verification creates eligibility through an independent authority-free rec
   assert.equal(verification.effect_class, "diagnostic_state_transition");
   assert.equal(verification.authority_class, "authenticated_customer_verification_requester");
   assert.ok(verification.preconditions.includes("independent_runner"));
-  assert.ok(verification.next_operations.includes("diagnostic.promotion.request"));
+  assert.ok(verification.next_operations.includes("diagnostic.promotion.authorize"));
   assert.doesNotMatch(JSON.stringify(verification), /n8n|provider_credential|promotion_authority/i);
+});
+
+test("promotion requires Owner authority and exact confirmed target evidence", () => {
+  const authorize = getDiagnosticOperationDescriptor("diagnostic.promotion.authorize");
+  assert.equal(authorize.authority_class, "authenticated_customer_owner");
+  assert.ok(authorize.preconditions.includes("current_verified_candidate"));
+  const apply = getDiagnosticOperationDescriptor("diagnostic.promotion.apply");
+  assert.equal(apply.effect_class, "owner_authorized_target_change");
+  assert.ok(apply.preconditions.includes("rollback_snapshot_before_request"));
+  const reconcile = getDiagnosticOperationDescriptor("diagnostic.promotion.reconcile");
+  assert.equal(reconcile.effect_class, "read_only_external_reconciliation");
+  const rollback = getDiagnosticOperationDescriptor("diagnostic.promotion.rollback");
+  assert.equal(rollback.effect_class, "owner_authorized_target_rollback");
+  assert.doesNotMatch(JSON.stringify([authorize, apply, reconcile, rollback]), /n8n|provider_credential/i);
 });
 
 test("Runtime Event discovery exposes exact provider-neutral observation semantics", () => {

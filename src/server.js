@@ -10,8 +10,10 @@ import { createDiagnosticDatabase } from "./diagnostic-database.js";
 import { createDiagnosticRuntimeService } from "./diagnostic-runtime-service.js";
 import { createDiagnosticReproductionService } from "./diagnostic-reproduction-service.js";
 import { createDiagnosticRepairWorkerService } from "./diagnostic-repair-worker-service.js";
+import { createDiagnosticDiagnosisService } from "./diagnostic-diagnosis-service.js";
 import { createDiagnosticRepairDeliveryService } from "./diagnostic-repair-delivery-service.js";
 import { createDiagnosticVerificationService } from "./diagnostic-verification-service.js";
+import { createDiagnosticPromotionService } from "./diagnostic-promotion-service.js";
 import {
   DIAGNOSTIC_PROTOCOL_VERSION,
   getDiagnosticOperationDescriptor,
@@ -38,10 +40,6 @@ import { getWorkflowRuntimeAdapterContract } from "./workflow-runtime-adapter-co
 import { getRepairDeliveryAdapterContract } from "./repair-delivery-adapter-contract.js";
 import { getVerificationRunnerContract } from "./diagnostic-verification-contracts.js";
 import { createVerificationRunnerClient } from "./verification-runner-client.js";
-import {
-  createN8nRepairDeliveryAdapter,
-  N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST
-} from "../packages/n8n-operational-package/src/repair-delivery-adapter.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const databaseUrl = process.env.DATABASE_URL;
@@ -59,6 +57,7 @@ const diagnosticRuntimeDetailToken = process.env.DIAGNOSTIC_RUNTIME_DETAIL_TOKEN
 const n8nRepairDeliveryUrl = process.env.N8N_REPAIR_DELIVERY_URL;
 const n8nRepairDeliveryApiKey = process.env.N8N_REPAIR_DELIVERY_API_KEY;
 const n8nRepairDeliveryCredentialBindingRef = process.env.N8N_REPAIR_DELIVERY_CREDENTIAL_BINDING_REF;
+const n8nRepairDeliveryTimeoutMs = Number(process.env.N8N_REPAIR_DELIVERY_TIMEOUT_MS ?? 5_000);
 const verificationRunnerId = process.env.VERIFICATION_RUNNER_ID
   ?? "00000000-0000-4000-8000-000000000700";
 const verificationRunnerVersion = process.env.VERIFICATION_RUNNER_VERSION ?? "0.2.0";
@@ -119,8 +118,10 @@ let diagnosticService = null;
 let diagnosticRuntimeService = null;
 let diagnosticReproductionService = null;
 let diagnosticRepairWorkerService = null;
+let diagnosticDiagnosisService = null;
 let diagnosticRepairDeliveryService = null;
 let diagnosticVerificationService = null;
+let diagnosticPromotionService = null;
 let diagnosticArtifactStore = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
@@ -161,18 +162,37 @@ if (diagnosticDatabase) {
   diagnosticRepairWorkerService = createDiagnosticRepairWorkerService(
     diagnosticDatabase, diagnosticArtifactStore, installationId, identityIntent
   );
+  diagnosticDiagnosisService = createDiagnosticDiagnosisService(
+    diagnosticDatabase, diagnosticArtifactStore, installationId, identityIntent
+  );
   const repairDeliveryConfigured = n8nRepairDeliveryUrl && n8nRepairDeliveryApiKey &&
     n8nRepairDeliveryCredentialBindingRef;
-  diagnosticRepairDeliveryService = createDiagnosticRepairDeliveryService({
-    database: diagnosticDatabase,
-    artifactStore: diagnosticArtifactStore,
-    installationId,
-    adapter: repairDeliveryConfigured ? createN8nRepairDeliveryAdapter({
-      baseUrl: n8nRepairDeliveryUrl, apiKey: n8nRepairDeliveryApiKey
-    }) : null,
-    adapterManifest: N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST,
-    credentialBindingRef: n8nRepairDeliveryCredentialBindingRef
-  });
+  if (repairDeliveryConfigured) {
+    const {
+      createN8nRepairDeliveryAdapter,
+      N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST
+    } = await import("../packages/n8n-operational-package/src/repair-delivery-adapter.js");
+    const repairDeliveryAdapter = createN8nRepairDeliveryAdapter({
+      baseUrl: n8nRepairDeliveryUrl, apiKey: n8nRepairDeliveryApiKey,
+      requestTimeoutMs: n8nRepairDeliveryTimeoutMs
+    });
+    diagnosticRepairDeliveryService = createDiagnosticRepairDeliveryService({
+      database: diagnosticDatabase,
+      artifactStore: diagnosticArtifactStore,
+      installationId,
+      adapter: repairDeliveryAdapter,
+      adapterManifest: N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST,
+      credentialBindingRef: n8nRepairDeliveryCredentialBindingRef
+    });
+    diagnosticPromotionService = createDiagnosticPromotionService({
+      database: diagnosticDatabase,
+      artifactStore: diagnosticArtifactStore,
+      installationId,
+      adapter: repairDeliveryAdapter,
+      adapterManifest: N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST,
+      credentialBindingRef: n8nRepairDeliveryCredentialBindingRef
+    });
+  }
   diagnosticVerificationService = createDiagnosticVerificationService({
     database: diagnosticDatabase,
     artifactStore: diagnosticArtifactStore,
@@ -325,6 +345,13 @@ function requireDiagnosticRepairWorker() {
   return diagnosticRepairWorkerService;
 }
 
+function requireDiagnosticDiagnosis() {
+  if (!diagnosticDiagnosisService) {
+    throw new KernelError(503, "DIAGNOSTIC_PLANE_UNAVAILABLE", "Diagnostic workers are not configured.");
+  }
+  return diagnosticDiagnosisService;
+}
+
 function requireDiagnosticRepairDelivery() {
   if (!diagnosticRepairDeliveryService) {
     throw new KernelError(503, "DIAGNOSTIC_PLANE_UNAVAILABLE", "Diagnostic repair delivery is not configured.");
@@ -337,6 +364,13 @@ function requireDiagnosticVerification() {
     throw new KernelError(503, "DIAGNOSTIC_PLANE_UNAVAILABLE", "Diagnostic verification is not configured.");
   }
   return diagnosticVerificationService;
+}
+
+function requireDiagnosticPromotion() {
+  if (!diagnosticPromotionService) {
+    throw new KernelError(503, "DIAGNOSTIC_PLANE_UNAVAILABLE", "Diagnostic promotion is not configured.");
+  }
+  return diagnosticPromotionService;
 }
 
 function authenticateDataPlane(request) {
@@ -537,6 +571,68 @@ async function route(request, response) {
     return sendCommandResult(response, await service.registerWorker(await readJson(request, 64 * 1024), passport));
   }
 
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/diagnosis-workers") {
+    const service = requireDiagnosticDiagnosis();
+    const passport = await authenticateAgent(request);
+    return sendCommandResult(response, await service.registerWorker(await readJson(request, 64 * 1024), passport));
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/diagnosis-requests") {
+    const service = requireDiagnosticDiagnosis();
+    const actor = authenticateBootstrapOperator(request);
+    return sendCommandResult(response, await service.createRequest(await readJson(request, 64 * 1024), actor));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/diagnosis-requests\/[^/]+\/workspace$/.test(url.pathname)) {
+    const service = requireDiagnosticDiagnosis();
+    const passport = await authenticateAgent(request);
+    return sendJson(response, 200, await service.getWorkspace(
+      decodeURIComponent(url.pathname.split("/").at(-2)), passport
+    ));
+  }
+
+  if (request.method === "POST" && /^\/diagnostic\/v0\/diagnosis-requests\/[^/]+\/fail$/.test(url.pathname)) {
+    const service = requireDiagnosticDiagnosis();
+    const passport = await authenticateAgent(request);
+    const body = await readJson(request, 64 * 1024);
+    if (body?.input?.request_id !== decodeURIComponent(url.pathname.split("/").at(-2))) {
+      throw new KernelError(409, "DIAGNOSIS_REQUEST_ROUTE_MISMATCH", "Route request ID must match command input.");
+    }
+    return sendCommandResult(response, await service.failRequest(body, passport));
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/diagnosis-proposals") {
+    const service = requireDiagnosticDiagnosis();
+    const passport = await authenticateAgent(request);
+    return sendCommandResult(response, await service.submitProposal(await readJson(request, 512 * 1024), passport));
+  }
+
+  if (request.method === "POST" && /^\/diagnostic\/v0\/diagnosis-proposals\/[^/]+\/reviews$/.test(url.pathname)) {
+    const service = requireDiagnosticDiagnosis();
+    const actor = authenticateBootstrapOperator(request);
+    const body = await readJson(request, 64 * 1024);
+    if (body?.input?.proposal_id !== decodeURIComponent(url.pathname.split("/").at(-2))) {
+      throw new KernelError(409, "DIAGNOSIS_PROPOSAL_ROUTE_MISMATCH", "Route proposal ID must match command input.");
+    }
+    return sendCommandResult(response, await service.reviewProposal(body, actor));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/diagnosis-requests/")) {
+    const service = requireDiagnosticDiagnosis();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnosis_request: await service.getRequest(
+      pathId(url.pathname, "/diagnostic/v0/diagnosis-requests/")
+    ) });
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/diagnosis-proposals/")) {
+    const service = requireDiagnosticDiagnosis();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnosis_proposal: await service.getProposal(
+      pathId(url.pathname, "/diagnostic/v0/diagnosis-proposals/")
+    ) });
+  }
+
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/repair-tasks") {
     const service = requireDiagnosticRepairWorker();
     const actor = authenticateBootstrapOperator(request);
@@ -668,6 +764,49 @@ async function route(request, response) {
       repair_verification: await service.getVerification(
         pathId(url.pathname, "/diagnostic/v0/repair-verifications/")
       )
+    });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/promotions") {
+    const service = requireDiagnosticPromotion();
+    const actor = authenticateBootstrapOperator(request);
+    return sendCommandResult(response,
+      await service.authorizePromotion(await readJson(request, 64 * 1024), actor));
+  }
+
+  if (request.method === "POST" && /^\/diagnostic\/v0\/promotions\/[^/]+\/apply$/.test(url.pathname)) {
+    const service = requireDiagnosticPromotion();
+    const actor = authenticateBootstrapOperator(request);
+    const body = await readJson(request, 64 * 1024);
+    const promotionId = decodeURIComponent(url.pathname.split("/").at(-2));
+    if (body?.input?.promotion_id !== promotionId) {
+      throw new KernelError(409, "PROMOTION_ROUTE_MISMATCH",
+        "Route Promotion ID must match command input.");
+    }
+    return sendCommandResult(response, await service.applyPromotion(body, actor));
+  }
+
+  if (request.method === "POST" &&
+      /^\/diagnostic\/v0\/promotions\/[^/]+\/(reconcile|rollback)$/.test(url.pathname)) {
+    const service = requireDiagnosticPromotion();
+    const actor = authenticateBootstrapOperator(request);
+    const body = await readJson(request, 64 * 1024);
+    const segments = url.pathname.split("/");
+    const promotionId = decodeURIComponent(segments.at(-2));
+    if (body?.input?.promotion_id !== promotionId) {
+      throw new KernelError(409, "PROMOTION_ROUTE_MISMATCH",
+        "Route Promotion ID must match command input.");
+    }
+    return sendCommandResult(response, segments.at(-1) === "reconcile"
+      ? await service.reconcilePromotion(body, actor)
+      : await service.rollbackPromotion(body, actor));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/promotions/")) {
+    const service = requireDiagnosticPromotion();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, {
+      promotion: await service.getPromotion(pathId(url.pathname, "/diagnostic/v0/promotions/"))
     });
   }
 

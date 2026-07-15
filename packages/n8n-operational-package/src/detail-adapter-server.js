@@ -5,6 +5,7 @@ import http from "node:http";
 const port = Number(process.env.PORT ?? 5680);
 const token = process.env.N8N_DETAIL_ADAPTER_TOKEN;
 const repairApiKey = process.env.N8N_REPAIR_API_KEY ?? "local-customer-owned-n8n-api-key-v1";
+const testControlsEnabled = process.env.N8N_ADAPTER_TEST_CONTROLS_ENABLED === "true";
 if (!token) throw new Error("N8N_DETAIL_ADAPTER_TOKEN is required.");
 const baseWorkflow = {
   ...JSON.parse(await readFile(new URL("../workflows/inventory-follow-up-defective.json", import.meta.url), "utf8")),
@@ -15,6 +16,8 @@ const baseWorkflow = {
 };
 const workflows = new Map([[baseWorkflow.id, baseWorkflow]]);
 let candidateSequence = 0;
+let promotionSequence = 0;
+let nextPromotionMode = "normal";
 
 const policy = Object.freeze({
   policy_id: "alphonse.runtime.n8n.detail.v1",
@@ -101,6 +104,21 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/healthz") {
       return send(response, 200, { status: "healthy", api: "alphonse.n8n.runtime.detail/0.2.0" });
     }
+    if (testControlsEnabled && request.method === "POST" && request.url === "/test/v0/promotion-mode") {
+      if (!authenticated(request)) return send(response, 403, { error: { code: "AUTHENTICATION_FAILED" } });
+      const body = await readJson(request);
+      if (!["normal", "apply_then_timeout", "no_apply_timeout", "mismatch_then_timeout"].includes(body.mode)) {
+        return send(response, 400, { error: { code: "INVALID_PROMOTION_MODE" } });
+      }
+      nextPromotionMode = body.mode;
+      return send(response, 200, { next_promotion_mode: nextPromotionMode });
+    }
+    if (testControlsEnabled && request.method === "POST" && request.url === "/test/v0/reset-workflow") {
+      if (!authenticated(request)) return send(response, 403, { error: { code: "AUTHENTICATION_FAILED" } });
+      workflows.set(baseWorkflow.id, structuredClone(baseWorkflow));
+      nextPromotionMode = "normal";
+      return send(response, 200, { reset: true, workflow_id: baseWorkflow.id });
+    }
     if (request.url?.startsWith("/api/v1/workflows")) {
       if (!repairApiAuthenticated(request)) {
         return send(response, 401, { message: "Unauthorized" });
@@ -128,6 +146,37 @@ const server = http.createServer(async (request, response) => {
         };
         workflows.set(id, created);
         return send(response, 200, created);
+      }
+      if (request.method === "PUT" && /^\/api\/v1\/workflows\/[^/?]+$/.test(request.url)) {
+        const workflowId = decodeURIComponent(request.url.split("/").at(-1));
+        const current = workflows.get(workflowId);
+        if (!current) return send(response, 404, { message: "Not found" });
+        const input = await readJson(request);
+        const fields = Object.keys(input).sort();
+        if (JSON.stringify(fields) !== JSON.stringify(["connections", "name", "nodes", "settings"]) ||
+            !Array.isArray(input.nodes) || !input.connections || input.active !== undefined) {
+          return send(response, 400, { message: "Invalid workflow update" });
+        }
+        const mode = nextPromotionMode;
+        nextPromotionMode = "normal";
+        if (mode === "no_apply_timeout") {
+          await new Promise((resolve) => setTimeout(resolve, 1_500));
+          return send(response, 200, current);
+        }
+        const updated = {
+          ...current,
+          ...input,
+          id: current.id,
+          active: current.active,
+          updatedAt: new Date().toISOString(),
+          versionId: `fixture-promotion-v${++promotionSequence}`
+        };
+        if (mode === "mismatch_then_timeout") {
+          updated.settings = { ...updated.settings, injectedTargetMismatch: true };
+        }
+        workflows.set(workflowId, updated);
+        if (mode !== "normal") await new Promise((resolve) => setTimeout(resolve, 1_500));
+        return send(response, 200, updated);
       }
       return send(response, 404, { message: "Not found" });
     }
