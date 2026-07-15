@@ -40,3 +40,21 @@ test("artifact retrieval rejects malformed digests before filesystem access", as
     return true;
   });
 });
+
+test("artifact byte deletion is exact and leaves metadata decisions to the caller", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "alphonse-diagnostic-artifacts-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = createContentAddressedArtifactStore(root);
+  const stored = await store.putJson({ selected_payload: true });
+
+  assert.deepEqual(await store.deleteJson(stored.artifact_digest), {
+    artifact_digest: stored.artifact_digest,
+    bytes_deleted: true
+  });
+  await assert.rejects(store.getJson(stored.artifact_digest), (error) => error.code === "ARTIFACT_NOT_FOUND");
+  assert.deepEqual(await store.deleteJson(stored.artifact_digest), {
+    artifact_digest: stored.artifact_digest,
+    bytes_deleted: false
+  });
+  await assert.rejects(store.deleteJson("../../outside"), (error) => error.code === "INVALID_ARTIFACT_DIGEST");
+});

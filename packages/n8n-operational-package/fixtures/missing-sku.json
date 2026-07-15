@@ -1,0 +1,22 @@
+{
+  "order": {
+    "order_id": "ORDER-FIXTURE-42",
+    "sku": "SKU-MISSING",
+    "quantity": 1
+  },
+  "erp_inventory": [
+    { "sku": "SKU-EXISTS", "quantity": 12 }
+  ],
+  "storefront_inventory": {
+    "sku": "SKU-MISSING",
+    "quantity": 4
+  },
+  "expected": {
+    "erp_quantity": 0,
+    "fulfillment_risk": "delay_likely",
+    "draft_kind": "customer_delay_follow_up",
+    "delivery_channel": "local_review",
+    "sent": false,
+    "defect_path": "missing_sku -> zero_inventory -> delay_draft"
+  }
+}

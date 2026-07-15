@@ -1,0 +1,15 @@
+{
+  "adapter_id": "alphonse.n8n.repair-delivery",
+  "adapter_version": "0.2.0",
+  "target_system": "n8n",
+  "operations": {
+    "inspect": { "supported": true, "effect": "read_only" },
+    "snapshot": { "supported": true, "effect": "read_only" },
+    "candidate": { "supported": true, "effect": "create_inactive_candidate" },
+    "candidate_execution": { "supported": false, "effect": "unavailable" },
+    "review": { "supported": false, "effect": "unavailable" },
+    "promotion": { "supported": false, "effect": "unavailable" },
+    "confirmation": { "supported": false, "effect": "unavailable" },
+    "rollback": { "supported": false, "effect": "unavailable" }
+  }
+}

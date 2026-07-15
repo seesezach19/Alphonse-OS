@@ -320,6 +320,31 @@ export function createDiagnosticService(database, artifactStore, installationId)
   }
 
   async function getArtifact(artifactDigest) {
+    if (typeof artifactDigest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(artifactDigest)) {
+      throw new KernelError(400, "INVALID_ARTIFACT_DIGEST", "Artifact digest must be an exact SHA-256 digest.");
+    }
+    const tombstoneResult = await pool.query(
+      `SELECT * FROM diagnostic_artifact_tombstones
+       WHERE installation_id=$1 AND artifact_digest=$2`, [installationId, artifactDigest]
+    );
+    if (tombstoneResult.rows[0]) {
+      const row = tombstoneResult.rows[0];
+      return {
+        artifact_digest: row.artifact_digest,
+        size_bytes: String(row.original_size_bytes),
+        media_type: row.original_media_type,
+        verified: false,
+        retention_state: "deleted",
+        content: null,
+        tombstone: {
+          deletion_reason: row.deletion_reason,
+          deleted_by: { type: row.deleted_by_actor_type, id: row.deleted_by_actor_id },
+          deleted_at: row.deleted_at,
+          bytes_deleted: row.bytes_deleted,
+          retained_identity: true
+        }
+      };
+    }
     const result = await pool.query(
       `SELECT * FROM diagnostic_artifacts
        WHERE installation_id=$1 AND artifact_digest=$2`, [installationId, artifactDigest]
@@ -334,6 +359,7 @@ export function createDiagnosticService(database, artifactStore, installationId)
       artifact_digest: artifactDigest,
       size_bytes: String(row.size_bytes),
       media_type: row.media_type,
+      retention_state: "retained",
       verified: true,
       content: stored.content
     };

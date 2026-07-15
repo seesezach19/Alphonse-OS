@@ -1,0 +1,9 @@
+{
+  "adapter_id": "alphonse.n8n.deterministic-verification",
+  "adapter_version": "0.2.0",
+  "target_system": "n8n",
+  "fixture_version": "inventory-v1",
+  "execution": "disposable_process",
+  "network": "not_required",
+  "external_effects": false
+}

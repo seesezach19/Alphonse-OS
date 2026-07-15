@@ -12,6 +12,8 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
   const operations = listDiagnosticOperationDescriptors();
   assert.deepEqual(operations.map((item) => item.operation_id), [
     "diagnostic.workflow_runtime_adapter.contract.get",
+    "diagnostic.repair_delivery_adapter.contract.get",
+    "diagnostic.verification_runner.contract.get",
     "diagnostic.agent_workflow.register",
     "diagnostic.agent_workflow.get",
     "diagnostic.agent_revision.register",
@@ -19,7 +21,31 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.artifact.get",
     "diagnostic.runtime_event.receive",
     "diagnostic.external_activity_trace.get",
-    "diagnostic.runtime_event_conflict.get"
+    "diagnostic.runtime_event_conflict.get",
+    "diagnostic.case.report_failure",
+    "diagnostic.failure_specification.confirm",
+    "diagnostic.reproduction.create",
+    "diagnostic.repair_worker.register",
+    "diagnostic.repair_task.create",
+    "diagnostic.repair_task.discover",
+    "diagnostic.repair_task.claim",
+    "diagnostic.repair_task.heartbeat",
+    "diagnostic.repair_workspace_artifact.get",
+    "diagnostic.repair_candidate.submit",
+    "diagnostic.repair_task.fail",
+    "diagnostic.repair_task.release",
+    "diagnostic.repair_task.cancel",
+    "diagnostic.repair_task.get",
+    "diagnostic.repair_candidate.get",
+    "diagnostic.repair_delivery_binding.register",
+    "diagnostic.repair_delivery_binding.get",
+    "diagnostic.repair_delivery_target.inspect",
+    "diagnostic.repair_delivery.materialize",
+    "diagnostic.repair_delivery.get",
+    "diagnostic.repair_verification.create",
+    "diagnostic.repair_verification.get",
+    "diagnostic.case.get",
+    "diagnostic.artifact.retire"
   ]);
 
   for (const operation of operations) {
@@ -34,6 +60,41 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     assert.ok(Array.isArray(operation.emitted_events));
     assert.ok(Array.isArray(operation.next_operations));
   }
+});
+
+test("Repair Worker protocol is exact, replaceable, and excludes promotion authority", () => {
+  const registration = getDiagnosticOperationDescriptor("diagnostic.repair_worker.register");
+  assert.equal(registration.authority_class, "authenticated_repair_worker_passport");
+  assert.equal(registration.input_schema.properties.input.additionalProperties, false);
+
+  const submission = getDiagnosticOperationDescriptor("diagnostic.repair_candidate.submit");
+  assert.equal(submission.authority_class, "authenticated_repair_worker_live_lease");
+  assert.ok(submission.issues.includes("LEASE_EPOCH_FENCED"));
+  assert.doesNotMatch(JSON.stringify(submission), /provider_token|repository_credential/i);
+
+  const operations = listDiagnosticOperationDescriptors()
+    .filter((operation) => operation.authority_class.includes("repair_worker"));
+  assert.ok(operations.length >= 5);
+  assert.ok(operations.every((operation) => !/promotion|rollback|verification/.test(operation.operation_id)));
+});
+
+test("reproduction operations preserve human confirmation and authority-free repair boundaries", () => {
+  const confirmation = getDiagnosticOperationDescriptor("diagnostic.failure_specification.confirm");
+  assert.equal(confirmation.authority_class, "authenticated_human_confirmation");
+  assert.equal(confirmation.input_schema.properties.input.additionalProperties, false);
+  const reproduction = getDiagnosticOperationDescriptor("diagnostic.reproduction.create");
+  assert.equal(reproduction.effect_class, "diagnostic_state_transition");
+  assert.ok(reproduction.outcomes.includes("reproduction_attempt_created"));
+  assert.doesNotMatch(JSON.stringify(reproduction), /promotion_authority|model_confidence/i);
+});
+
+test("verification creates eligibility through an independent authority-free receipt", () => {
+  const verification = getDiagnosticOperationDescriptor("diagnostic.repair_verification.create");
+  assert.equal(verification.effect_class, "diagnostic_state_transition");
+  assert.equal(verification.authority_class, "authenticated_customer_verification_requester");
+  assert.ok(verification.preconditions.includes("independent_runner"));
+  assert.ok(verification.next_operations.includes("diagnostic.promotion.request"));
+  assert.doesNotMatch(JSON.stringify(verification), /n8n|provider_credential|promotion_authority/i);
 });
 
 test("Runtime Event discovery exposes exact provider-neutral observation semantics", () => {

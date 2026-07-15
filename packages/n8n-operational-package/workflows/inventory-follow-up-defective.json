@@ -1,0 +1,84 @@
+{
+  "id": "InventoryDefect1",
+  "name": "Inventory Follow-up - Defective Missing SKU Mapping",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "id": "inventory-manual-trigger",
+      "name": "Start Fixture",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {}
+    },
+    {
+      "id": "inventory-load-fixture",
+      "name": "Load Deterministic Fixtures",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0],
+      "parameters": {
+        "jsCode": "return [{ json: { order: { order_id: 'ORDER-FIXTURE-42', sku: 'SKU-MISSING', quantity: 1 }, erp_inventory: [{ sku: 'SKU-EXISTS', quantity: 12 }], storefront_inventory: { sku: 'SKU-MISSING', quantity: 4 } } }];"
+      }
+    },
+    {
+      "id": "inventory-defective-map",
+      "name": "Defective Missing SKU Mapping",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 0],
+      "parameters": {
+        "jsCode": "const erpRecord = $json.erp_inventory.find((record) => record.sku === $json.order.sku);\nreturn [{ json: { ...$json, erp_quantity: erpRecord?.quantity ?? 0, defect_path: erpRecord ? 'matched_sku' : 'missing_sku -> zero_inventory -> delay_draft' } }];"
+      }
+    },
+    {
+      "id": "inventory-draft-review",
+      "name": "Draft for Local Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 0],
+      "parameters": {
+        "jsCode": "const risk = $json.erp_quantity < $json.order.quantity ? 'delay_likely' : 'ready';\nreturn [{ json: { order_id: $json.order.order_id, sku: $json.order.sku, erp_quantity: $json.erp_quantity, storefront_quantity: $json.storefront_inventory.quantity, inventory_state: $json.erp_quantity === 0 ? 'out_of_stock' : 'in_stock', fulfillment_risk: risk, draft: risk === 'delay_likely' ? { kind: 'customer_delay_follow_up', subject: `Possible delay for ${$json.order.order_id}` } : null, delivery: { channel: 'local_review', sent: false }, defect_path: $json.defect_path } }];"
+      }
+    },
+    {
+      "id": "inventory-build-event",
+      "name": "Build Minimal Runtime Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1020, 0],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst result = $json;\nconst executionId = String($execution.id);\nconst payloadDigest = `sha256:${crypto.createHash('sha256').update(JSON.stringify(result)).digest('hex')}`;\nreturn [{ json: { result, runtime_event: { schema_version: '0.2.0', adapter: { adapter_id: 'alphonse.n8n.runtime', adapter_version: '0.2.0' }, workflow_id: $env.ALPHONSE_WORKFLOW_ID, revision_id: $env.ALPHONSE_REVISION_ID, external_execution_id: `n8n-${executionId}`, event_id: `n8n-${executionId}-succeeded`, event_sequence: 1, lifecycle_claim: 'succeeded', correlation_id: `inventory-${result.order_id}`, idempotency_key: `n8n-${executionId}:1`, occurred_at: new Date().toISOString(), payload: { digest: payloadDigest, reference: null } } } }];"
+      }
+    },
+    {
+      "id": "inventory-report-event",
+      "name": "Report Successful Execution",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1280, 0],
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "AlphonseReport01", "mode": "id" },
+        "workflowInputs": { "mappingMode": "passThrough", "value": {}, "matchingColumns": [], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": true },
+        "options": { "waitForSubWorkflow": true }
+      }
+    },
+    {
+      "id": "inventory-complete",
+      "name": "Complete Locally",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 0],
+      "parameters": { "jsCode": "return [{ json: { n8n_status: 'succeeded', alphonse_receipt: $json, external_effects: [], delivery: { channel: 'local_review', sent: false } } }];" }
+    }
+  ],
+  "connections": {
+    "Start Fixture": { "main": [[{ "node": "Load Deterministic Fixtures", "type": "main", "index": 0 }]] },
+    "Load Deterministic Fixtures": { "main": [[{ "node": "Defective Missing SKU Mapping", "type": "main", "index": 0 }]] },
+    "Defective Missing SKU Mapping": { "main": [[{ "node": "Draft for Local Review", "type": "main", "index": 0 }]] },
+    "Draft for Local Review": { "main": [[{ "node": "Build Minimal Runtime Event", "type": "main", "index": 0 }]] },
+    "Build Minimal Runtime Event": { "main": [[{ "node": "Report Successful Execution", "type": "main", "index": 0 }]] },
+    "Report Successful Execution": { "main": [[{ "node": "Complete Locally", "type": "main", "index": 0 }]] }
+  }
+}

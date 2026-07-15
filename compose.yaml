@@ -38,10 +38,10 @@ services:
       DATABASE_URL: postgresql://alphonse:local-development-only@postgres:5432/alphonse_kernel
       DIAGNOSTIC_DATABASE_URL: postgresql://alphonse_diagnostic:local-diagnostic-only@postgres:5432/alphonse_diagnostic
       DIAGNOSTIC_ARTIFACT_ROOT: /var/lib/alphonse-diagnostics
-      DIAGNOSTIC_RUNTIME_ADAPTER_ID: fixture.workflow-runtime
-      DIAGNOSTIC_RUNTIME_ADAPTER_VERSION: 0.2.0
-      DIAGNOSTIC_RUNTIME_ADAPTER_KEY_ID: fixture-runtime-key-v1
-      DIAGNOSTIC_RUNTIME_ADAPTER_SECRET: local-runtime-event-secret-with-sufficient-length-v1
+      DIAGNOSTIC_RUNTIME_ADAPTER_ID: ${DIAGNOSTIC_RUNTIME_ADAPTER_ID:-fixture.workflow-runtime}
+      DIAGNOSTIC_RUNTIME_ADAPTER_VERSION: ${DIAGNOSTIC_RUNTIME_ADAPTER_VERSION:-0.2.0}
+      DIAGNOSTIC_RUNTIME_ADAPTER_KEY_ID: ${DIAGNOSTIC_RUNTIME_ADAPTER_KEY_ID:-fixture-runtime-key-v1}
+      DIAGNOSTIC_RUNTIME_ADAPTER_SECRET: ${DIAGNOSTIC_RUNTIME_ADAPTER_SECRET:-local-runtime-event-secret-with-sufficient-length-v1}
       DIAGNOSTIC_RUNTIME_TIMESTAMP_TOLERANCE_SECONDS: 300
       KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
       KERNEL_INSTALLATION_NAME: Local Installation
@@ -66,6 +66,11 @@ services:
       DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
       DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
       KERNEL_SUPPORT_DIAGNOSTIC_SECRET: local-support-diagnostic-encryption-secret-v1
+      VERIFICATION_RUNNER_ID: 00000000-0000-4000-8000-000000000700
+      VERIFICATION_RUNNER_VERSION: 0.2.0
+      VERIFICATION_FIXTURE_VERSION: inventory-v1
+      VERIFICATION_RUNNER_SIGNING_KEY_ID: local-verification-runner-key-v1
+      VERIFICATION_RUNNER_SIGNING_SECRET: local-verification-runner-signing-secret-v1
       DATA_PLANE_ID: reference-data-plane
     ports:
       - "127.0.0.1:${KERNEL_PORT:-3000}:3000"

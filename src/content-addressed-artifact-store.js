@@ -89,5 +89,16 @@ export function createContentAddressedArtifactStore(root) {
     };
   }
 
-  return { getJson, putJson };
+  async function deleteJson(digest) {
+    const { absolutePath } = location(resolvedRoot, digest);
+    try {
+      await rm(absolutePath);
+      return { artifact_digest: digest, bytes_deleted: true };
+    } catch (error) {
+      if (error.code === "ENOENT") return { artifact_digest: digest, bytes_deleted: false };
+      throw error;
+    }
+  }
+
+  return { deleteJson, getJson, putJson };
 }

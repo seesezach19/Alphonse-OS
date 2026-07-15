@@ -59,12 +59,12 @@ const CAPABILITIES = Object.freeze({
       direction: "alphonse_to_adapter",
       input_schema: objectSchema(["external_execution_id", "payload_reference", "requested_fields"], {
         external_execution_id: { type: "string" },
-        payload_reference: { type: "string" },
+        payload_reference: { type: ["string", "null"] },
         requested_fields: { type: "array", items: { type: "string" } }
       }),
-      output_schema: objectSchema(["artifact_digest", "redaction_applied", "omitted_fields"], {
-        artifact_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        redaction_applied: { type: "boolean" },
+      output_schema: objectSchema(["external_execution_id", "detail", "omitted_fields"], {
+        external_execution_id: { type: "string" },
+        detail: { type: "object" },
         omitted_fields: { type: "array", items: { type: "string" } }
       })
     }

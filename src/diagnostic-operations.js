@@ -126,14 +126,60 @@ const runtimeEventInput = {
   }
 };
 
-function commandDescriptor({ operationId, summary, path, input, resultKey, event, issues, nextOperations }) {
+const repairTaskReference = {
+  type: "object",
+  required: ["task_id"],
+  additionalProperties: false,
+  properties: { task_id: { type: "string", format: "uuid" } }
+};
+
+const leasedRepairTaskInput = (extraRequired = [], extraProperties = {}) => ({
+  type: "object",
+  required: ["task_id", "lease_epoch", ...extraRequired],
+  additionalProperties: false,
+  properties: {
+    task_id: { type: "string", format: "uuid" },
+    lease_epoch: { type: "integer", minimum: 1 },
+    ...extraProperties
+  }
+});
+
+const repairArtifactLimits = {
+  type: "object",
+  required: ["max_artifact_bytes", "max_total_bytes", "allowed_media_types"],
+  additionalProperties: false,
+  properties: {
+    max_artifact_bytes: { type: "integer", minimum: 256, maximum: 2097152 },
+    max_total_bytes: { type: "integer", minimum: 256, maximum: 6291456 },
+    allowed_media_types: { type: "array", minItems: 1, maxItems: 10, items: { type: "string" } }
+  }
+};
+
+const workerRuntimeAttribution = {
+  type: "object",
+  required: ["worker_kind", "runtime_version", "attachment_version"],
+  additionalProperties: false,
+  properties: {
+    worker_kind: { type: "string", minLength: 1, maxLength: 100 },
+    runtime_version: { type: "string", minLength: 1, maxLength: 100 },
+    attachment_version: { type: "string", minLength: 1, maxLength: 100 }
+  }
+};
+
+function commandDescriptor({
+  operationId, summary, path, input, resultKey, event, issues, nextOperations,
+  authorityClass = "authenticated_builder_attribution_only",
+  effectClass = "diagnostic_state_transition",
+  preconditions = ["diagnostic_plane_available", "authenticated_builder"],
+  outcomes = [`${resultKey}_created`, `${resultKey}_reused`, "command_replayed"]
+}) {
   return {
     operation_id: operationId,
     version: DIAGNOSTIC_PROTOCOL_VERSION,
     summary,
     visibility: "public",
-    authority_class: "authenticated_builder_attribution_only",
-    effect_class: "diagnostic_state_transition",
+    authority_class: authorityClass,
+    effect_class: effectClass,
     idempotency: "required_command_id_and_canonical_request_digest",
     transport: { method: "POST", path },
     input_schema: commandEnvelope(operationId, input),
@@ -142,8 +188,8 @@ function commandDescriptor({ operationId, summary, path, input, resultKey, event
       required: ["command_id", "request_digest", resultKey, "transition"]
     },
     supported_modes: ["live"],
-    preconditions: ["diagnostic_plane_available", "authenticated_builder"],
-    outcomes: [`${resultKey}_created`, `${resultKey}_reused`, "command_replayed"],
+    preconditions,
+    outcomes,
     issues: ["AUTHENTICATION_REQUIRED", "INVALID_INPUT", "IDEMPOTENCY_CONFLICT", ...issues],
     emitted_events: Array.isArray(event) ? event : [event],
     next_operations: nextOperations
@@ -194,6 +240,42 @@ const descriptors = [
     issues: ["DIAGNOSTIC_PLANE_UNAVAILABLE"],
     emitted_events: [],
     next_operations: ["diagnostic.runtime_event.receive"]
+  },
+  {
+    operation_id: "diagnostic.repair_delivery_adapter.contract.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Discover independently declared provider-neutral repair delivery operations.",
+    visibility: "public",
+    authority_class: "none",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/repair-delivery-adapter-contract" },
+    input_schema: { type: "object", additionalProperties: false },
+    output_schema: { type: "object", required: ["contract_name", "contract_version", "operations"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available"],
+    outcomes: ["repair_delivery_adapter_contract_returned"],
+    issues: ["DIAGNOSTIC_PLANE_UNAVAILABLE"],
+    emitted_events: [],
+    next_operations: ["diagnostic.repair_delivery_binding.register"]
+  },
+  {
+    operation_id: "diagnostic.verification_runner.contract.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Discover the deterministic independent Verification Runner boundary.",
+    visibility: "public",
+    authority_class: "none",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/verification-runner-contract" },
+    input_schema: { type: "object", additionalProperties: false },
+    output_schema: { type: "object", required: ["contract_name", "contract_version", "invariants"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available"],
+    outcomes: ["verification_runner_contract_returned"],
+    issues: ["DIAGNOSTIC_PLANE_UNAVAILABLE"],
+    emitted_events: [],
+    next_operations: ["diagnostic.repair_verification.create"]
   },
   commandDescriptor({
     operationId: "diagnostic.agent_workflow.register",
@@ -284,7 +366,7 @@ const descriptors = [
     idName: "trace_id",
     resultKey: "external_activity_trace",
     issues: ["EXTERNAL_ACTIVITY_TRACE_NOT_FOUND"],
-    nextOperations: []
+    nextOperations: ["diagnostic.case.report_failure"]
   }),
   readDescriptor({
     operationId: "diagnostic.runtime_event_conflict.get",
@@ -294,6 +376,402 @@ const descriptors = [
     resultKey: "runtime_event_conflict",
     issues: ["RUNTIME_EVENT_CONFLICT_NOT_FOUND"],
     nextOperations: ["diagnostic.external_activity_trace.get"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.case.report_failure",
+    summary: "Open one authority-free Diagnostic Case from an explicit authenticated failure report.",
+    path: "/diagnostic/v0/cases",
+    input: {
+      type: "object", required: ["trace_id", "summary"], additionalProperties: false,
+      properties: { trace_id: { type: "string", format: "uuid" }, summary: { type: "string", minLength: 1, maxLength: 1000 } }
+    },
+    resultKey: "diagnostic_case",
+    event: ["diagnostic.case.failure_reported", "diagnostic.case.failure_report_reused"],
+    issues: ["EXTERNAL_ACTIVITY_TRACE_NOT_FOUND", "DIAGNOSTIC_CASE_IDENTITY_CONFLICT"],
+    nextOperations: ["diagnostic.case.get", "diagnostic.failure_specification.confirm"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.failure_specification.confirm",
+    summary: "Record immutable human-confirmed expected and actual behavior for one case.",
+    path: "/diagnostic/v0/failure-specifications",
+    input: {
+      type: "object",
+      required: ["case_id", "expected_behavior", "actual_behavior", "reproduction_conditions", "targeted_verification"],
+      additionalProperties: false,
+      properties: {
+        case_id: { type: "string", format: "uuid" },
+        expected_behavior: { type: "string", minLength: 1, maxLength: 1000 },
+        actual_behavior: { type: "string", minLength: 1, maxLength: 1000 },
+        reproduction_conditions: { type: "array", minItems: 1, maxItems: 20, items: { type: "string" } },
+        targeted_verification: {
+          type: "object", required: ["expected_behavior", "prohibited_behavior"], additionalProperties: false
+        }
+      }
+    },
+    resultKey: "failure_specification",
+    event: ["diagnostic.failure_specification.confirmed", "diagnostic.failure_specification.reused"],
+    issues: [
+      "DIAGNOSTIC_CASE_NOT_FOUND", "HUMAN_CONFIRMATION_REQUIRED",
+      "FAILURE_SPECIFICATION_INCONSISTENT", "FAILURE_SPECIFICATION_IMMUTABLE"
+    ],
+    nextOperations: ["diagnostic.case.get", "diagnostic.reproduction.create"],
+    authorityClass: "authenticated_human_confirmation"
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.reproduction.create",
+    summary: "Retrieve minimal runtime detail, redact it, and deterministically demonstrate the confirmed defect.",
+    path: "/diagnostic/v0/reproductions",
+    input: {
+      type: "object", required: ["case_id", "fixture_bindings", "assumptions"], additionalProperties: false,
+      properties: {
+        case_id: { type: "string", format: "uuid" },
+        fixture_bindings: {
+          type: "object", required: ["erp", "storefront", "model", "review"], additionalProperties: false
+        },
+        assumptions: { type: "array", minItems: 1, maxItems: 20, items: { type: "string" } }
+      }
+    },
+    resultKey: "reproduction_attempt",
+    event: [
+      "diagnostic.reproduction.incomplete", "diagnostic.reproduction.rejected",
+      "diagnostic.reproduction.demonstrated", "diagnostic.reproduction_bundle.reused"
+    ],
+    issues: ["DIAGNOSTIC_CASE_NOT_FOUND", "FAILURE_SPECIFICATION_REQUIRED", "RUNTIME_DETAIL_UNAVAILABLE"],
+    nextOperations: ["diagnostic.case.get", "diagnostic.artifact.get", "diagnostic.repair_task.create"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_worker.register",
+    summary: "Attach one customer-controlled Repair Worker using its existing Agent Passport and Work Intent.",
+    path: "/diagnostic/v0/repair-workers",
+    input: {
+      type: "object", required: ["passport_id", "work_intent_id", "protocol_version", "runtime_attribution"],
+      additionalProperties: false,
+      properties: {
+        passport_id: { type: "string", format: "uuid" },
+        work_intent_id: { type: "string", format: "uuid" },
+        protocol_version: { const: "0.2.0" },
+        runtime_attribution: workerRuntimeAttribution
+      }
+    },
+    resultKey: "repair_worker",
+    event: ["diagnostic.repair_worker.registered", "diagnostic.repair_worker.reused"],
+    issues: ["AGENT_AUTHENTICATION_REQUIRED", "PASSPORT_INTENT_MISMATCH", "REPAIR_INTENT_REQUIRED"],
+    nextOperations: ["diagnostic.repair_task.discover"],
+    authorityClass: "authenticated_repair_worker_passport",
+    preconditions: ["diagnostic_plane_available", "authenticated_repair_worker", "confirmed_repair_work_intent"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_task.create",
+    summary: "Create one immutable bounded Repair Task attempt from a demonstrated reproduction.",
+    path: "/diagnostic/v0/repair-tasks",
+    input: {
+      type: "object",
+      required: ["case_id", "worker_registration_id", "reproduction_bundle_id", "allowed_operations",
+        "artifact_limits", "lease_duration_seconds", "expected_outputs"],
+      additionalProperties: false,
+      properties: {
+        case_id: { type: "string", format: "uuid" },
+        worker_registration_id: { type: "string", format: "uuid" },
+        reproduction_bundle_id: { type: "string", format: "uuid" },
+        allowed_operations: { type: "array", minItems: 2, maxItems: 10, items: { type: "string" } },
+        artifact_limits: repairArtifactLimits,
+        lease_duration_seconds: { type: "integer", minimum: 5, maximum: 3600 },
+        expected_outputs: { type: "array", minItems: 3, maxItems: 3, items: { type: "string" } }
+      }
+    },
+    resultKey: "repair_task",
+    event: "diagnostic.repair_task.created",
+    issues: ["REPAIR_TASK_INPUT_MISMATCH", "ACTIVE_REPAIR_TASK_EXISTS", "REPRODUCTION_BUNDLE_RETIRED",
+      "REPAIR_INTENT_SCOPE_MISMATCH", "REPAIR_INTENT_CONSTRAINTS_REQUIRED"],
+    nextOperations: ["diagnostic.repair_task.get", "diagnostic.repair_task.discover"],
+    authorityClass: "authenticated_customer_repair_commissioner"
+  }),
+  {
+    operation_id: "diagnostic.repair_task.discover",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Discover available or currently leased Repair Tasks assigned to the authenticated worker.",
+    visibility: "public",
+    authority_class: "authenticated_repair_worker_passport",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/repair-tasks" },
+    input_schema: { type: "object", additionalProperties: false },
+    output_schema: { type: "object", required: ["repair_tasks", "authority"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_repair_worker", "worker_registered"],
+    outcomes: ["active_tasks_returned"],
+    issues: ["AGENT_AUTHENTICATION_REQUIRED", "REPAIR_WORKER_NOT_REGISTERED"],
+    emitted_events: [],
+    next_operations: ["diagnostic.repair_task.claim"]
+  },
+  commandDescriptor({
+    operationId: "diagnostic.repair_task.claim",
+    summary: "Claim one available Repair Task under its exact worker identity and lease epoch.",
+    path: "/diagnostic/v0/repair-tasks/{task_id}/claim",
+    input: repairTaskReference,
+    resultKey: "repair_task",
+    event: "diagnostic.repair_task.leased",
+    issues: ["REPAIR_TASK_NOT_FOUND", "REPAIR_TASK_WORKER_MISMATCH", "REPAIR_TASK_LEASE_CONFLICT"],
+    nextOperations: ["diagnostic.repair_workspace_artifact.get", "diagnostic.repair_task.heartbeat",
+      "diagnostic.repair_candidate.submit", "diagnostic.repair_task.fail", "diagnostic.repair_task.release"],
+    authorityClass: "authenticated_repair_worker_passport",
+    preconditions: ["authenticated_repair_worker", "task_available", "passport_current"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_task.heartbeat",
+    summary: "Renew one live Repair Task lease without expanding its scope.",
+    path: "/diagnostic/v0/repair-tasks/{task_id}/heartbeat",
+    input: leasedRepairTaskInput(["status_note"], {
+      status_note: { type: "string", minLength: 1, maxLength: 500 }
+    }),
+    resultKey: "repair_task",
+    event: "diagnostic.repair_task.heartbeat",
+    issues: ["LEASE_EPOCH_FENCED", "LEASE_EXPIRED", "LEASE_NOT_ACTIVE"],
+    nextOperations: ["diagnostic.repair_candidate.submit", "diagnostic.repair_task.fail", "diagnostic.repair_task.release"],
+    authorityClass: "authenticated_repair_worker_passport",
+    preconditions: ["authenticated_repair_worker", "live_matching_lease"]
+  }),
+  {
+    operation_id: "diagnostic.repair_workspace_artifact.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Retrieve one exact task-bound workspace artifact under a live worker lease.",
+    visibility: "public",
+    authority_class: "authenticated_repair_worker_live_lease",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/repair-tasks/{task_id}/artifacts/{artifact_digest}" },
+    input_schema: { type: "object", required: ["task_id", "artifact_digest"], additionalProperties: false },
+    output_schema: { type: "object", required: ["artifact"] },
+    supported_modes: ["live"],
+    preconditions: ["authenticated_repair_worker", "live_matching_lease", "artifact_bound_to_task"],
+    outcomes: ["verified_artifact_returned"],
+    issues: ["LEASE_EXPIRED", "REPAIR_ARTIFACT_SCOPE_DENIED", "REPAIR_ARTIFACT_UNAVAILABLE"],
+    emitted_events: [],
+    next_operations: ["diagnostic.repair_candidate.submit"]
+  },
+  commandDescriptor({
+    operationId: "diagnostic.repair_candidate.submit",
+    summary: "Submit one immutable candidate, regression, logs, attribution, and hashes from a live lease.",
+    path: "/diagnostic/v0/repair-candidates",
+    input: leasedRepairTaskInput(["output"], {
+      output: {
+        type: "object",
+        required: ["intended_behavior_change", "candidate_artifact", "targeted_regression_artifact",
+          "logs_artifact", "runtime_attribution"],
+        additionalProperties: false,
+        properties: {
+          intended_behavior_change: { type: "string", minLength: 1, maxLength: 2000 },
+          candidate_artifact: { type: "object", required: ["media_type", "content"], additionalProperties: false },
+          targeted_regression_artifact: { type: "object", required: ["media_type", "content"], additionalProperties: false },
+          logs_artifact: { type: "object", required: ["media_type", "content"], additionalProperties: false },
+          runtime_attribution: workerRuntimeAttribution
+        }
+      }
+    }),
+    resultKey: "repair_candidate",
+    event: ["diagnostic.repair_candidate.submitted", "diagnostic.repair_candidate.reused",
+      "diagnostic.repair_task.failed"],
+    issues: ["LEASE_EPOCH_FENCED", "LEASE_EXPIRED", "REPAIR_CANDIDATE_CONFLICT",
+      "REPAIR_ARTIFACT_LIMIT_EXCEEDED", "SENSITIVE_WORKER_OUTPUT_REJECTED", "RUNTIME_ATTRIBUTION_MISMATCH"],
+    nextOperations: ["diagnostic.repair_candidate.get", "diagnostic.case.get"],
+    authorityClass: "authenticated_repair_worker_live_lease",
+    preconditions: ["authenticated_repair_worker", "live_matching_lease", "output_within_task_bounds"],
+    outcomes: ["repair_candidate_created", "repair_candidate_reused", "invalid_output_attempt_preserved", "command_replayed"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_task.fail",
+    summary: "Preserve one visible worker failure and terminate its lease.",
+    path: "/diagnostic/v0/repair-tasks/{task_id}/fail",
+    input: leasedRepairTaskInput(["failure_type", "summary"], {
+      failure_type: { enum: ["timeout", "process_loss", "worker_error", "invalid_output"] },
+      summary: { type: "string", minLength: 1, maxLength: 500 }
+    }),
+    resultKey: "repair_task",
+    event: "diagnostic.repair_task.failed",
+    issues: ["LEASE_EPOCH_FENCED", "LEASE_EXPIRED", "LEASE_NOT_ACTIVE"],
+    nextOperations: ["diagnostic.repair_task.create", "diagnostic.case.get"],
+    authorityClass: "authenticated_repair_worker_live_lease",
+    preconditions: ["authenticated_repair_worker", "live_matching_lease"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_task.release",
+    summary: "Release one live worker lease and fence later submission from that attempt.",
+    path: "/diagnostic/v0/repair-tasks/{task_id}/release",
+    input: leasedRepairTaskInput(["reason"], { reason: { type: "string", minLength: 1, maxLength: 500 } }),
+    resultKey: "repair_task",
+    event: "diagnostic.repair_task.released",
+    issues: ["LEASE_EPOCH_FENCED", "LEASE_EXPIRED", "LEASE_NOT_ACTIVE"],
+    nextOperations: ["diagnostic.repair_task.create", "diagnostic.case.get"],
+    authorityClass: "authenticated_repair_worker_live_lease",
+    preconditions: ["authenticated_repair_worker", "live_matching_lease"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_task.cancel",
+    summary: "Cancel one available or leased Repair Task under customer authority.",
+    path: "/diagnostic/v0/repair-tasks/{task_id}/cancel",
+    input: {
+      type: "object", required: ["task_id", "reason"], additionalProperties: false,
+      properties: { task_id: { type: "string", format: "uuid" },
+        reason: { type: "string", minLength: 1, maxLength: 500 } }
+    },
+    resultKey: "repair_task",
+    event: "diagnostic.repair_task.cancelled",
+    issues: ["REPAIR_TASK_NOT_CANCELLABLE"],
+    nextOperations: ["diagnostic.repair_task.create", "diagnostic.case.get"],
+    authorityClass: "authenticated_customer_repair_commissioner"
+  }),
+  readDescriptor({
+    operationId: "diagnostic.repair_task.get",
+    summary: "Inspect one immutable Repair Task and its append-only lease attempt.",
+    path: "/diagnostic/v0/repair-tasks/{task_id}",
+    idName: "task_id",
+    resultKey: "repair_task",
+    issues: ["REPAIR_TASK_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.repair_candidate.get",
+    summary: "Inspect one immutable Repair Candidate and exact artifact hashes.",
+    path: "/diagnostic/v0/repair-candidates/{candidate_id}",
+    idName: "candidate_id",
+    resultKey: "repair_candidate",
+    issues: ["REPAIR_CANDIDATE_NOT_FOUND"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_delivery_binding.register",
+    summary: "Register one secret-free exact Repair Delivery Adapter binding.",
+    path: "/diagnostic/v0/repair-delivery-bindings",
+    input: {
+      type: "object",
+      required: ["binding_id", "adapter", "target", "external_credential_binding_ref",
+        "permitted_operations", "transition_policy"],
+      additionalProperties: false,
+      properties: {
+        binding_id: { type: "string", format: "uuid" },
+        adapter: { type: "object", required: ["adapter_id", "adapter_version"], additionalProperties: false },
+        target: { type: "object", required: ["system", "target_type", "target_id", "environment"],
+          additionalProperties: false },
+        external_credential_binding_ref: { type: "string", minLength: 1, maxLength: 300 },
+        permitted_operations: { type: "array", minItems: 3, maxItems: 8, items: { type: "string" } },
+        transition_policy: { type: "object", required: ["candidate_initial_state",
+          "require_expected_base_revision", "preserve_prechange_snapshot", "promotion_authority"],
+        additionalProperties: false }
+      }
+    },
+    resultKey: "repair_delivery_binding",
+    event: ["diagnostic.repair_delivery_binding.registered", "diagnostic.repair_delivery_binding.reused"],
+    issues: ["REPAIR_DELIVERY_ADAPTER_MISMATCH", "REPAIR_DELIVERY_OPERATION_UNAVAILABLE",
+      "REPAIR_DELIVERY_BINDING_CONFLICT"],
+    nextOperations: ["diagnostic.repair_delivery_binding.get", "diagnostic.repair_delivery_target.inspect"],
+    authorityClass: "authenticated_customer_integration_operator"
+  }),
+  readDescriptor({
+    operationId: "diagnostic.repair_delivery_binding.get",
+    summary: "Inspect one immutable secret-free Repair Delivery Binding.",
+    path: "/diagnostic/v0/repair-delivery-bindings/{binding_id}",
+    idName: "binding_id",
+    resultKey: "repair_delivery_binding",
+    issues: ["REPAIR_DELIVERY_BINDING_NOT_FOUND"],
+    nextOperations: ["diagnostic.repair_delivery_target.inspect"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.repair_delivery_target.inspect",
+    summary: "Resolve the exact current target revision through the selected read-only adapter operation.",
+    path: "/diagnostic/v0/repair-delivery-bindings/{binding_id}/target",
+    idName: "binding_id",
+    resultKey: "target",
+    issues: ["REPAIR_DELIVERY_BINDING_NOT_FOUND", "REPAIR_DELIVERY_ADAPTER_UNAVAILABLE"],
+    nextOperations: ["diagnostic.repair_delivery.materialize"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_delivery.materialize",
+    summary: "Materialize one exact inactive target-native candidate behind an expected-base fence.",
+    path: "/diagnostic/v0/repair-deliveries",
+    input: {
+      type: "object",
+      required: ["candidate_id", "binding_id", "expected_base_revision_digest", "idempotency_key"],
+      additionalProperties: false,
+      properties: {
+        candidate_id: { type: "string", format: "uuid" },
+        binding_id: { type: "string", format: "uuid" },
+        expected_base_revision_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    resultKey: "repair_delivery",
+    event: ["diagnostic.repair_delivery.materialized", "diagnostic.repair_delivery.reused"],
+    issues: ["REPAIR_TARGET_DRIFT", "REPAIR_DELIVERY_CONFLICT", "ACTIVE_REPAIR_TARGET_MUTATED",
+      "REPAIR_CANDIDATE_NOT_DELIVERABLE", "REPAIR_CANDIDATE_NOT_INACTIVE"],
+    nextOperations: ["diagnostic.repair_delivery.get", "diagnostic.repair_verification.create"],
+    authorityClass: "authenticated_customer_repair_delivery_operator",
+    effectClass: "external_inactive_candidate_creation",
+    preconditions: ["proposed_repair_candidate", "exact_delivery_binding", "unchanged_expected_target_base"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.repair_delivery.get",
+    summary: "Inspect exact base, inactive target candidate, retained artifacts, receipt, and next operation.",
+    path: "/diagnostic/v0/repair-deliveries/{delivery_id}",
+    idName: "delivery_id",
+    resultKey: "repair_delivery",
+    issues: ["REPAIR_DELIVERY_NOT_FOUND"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.repair_verification.create",
+    summary: "Independently execute the exact original and inactive candidate and retain one signed result.",
+    path: "/diagnostic/v0/repair-verifications",
+    input: {
+      type: "object",
+      required: ["candidate_id", "delivery_id", "idempotency_key"],
+      additionalProperties: false,
+      properties: {
+        candidate_id: { type: "string", format: "uuid" },
+        delivery_id: { type: "string", format: "uuid" },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    resultKey: "repair_verification",
+    event: ["diagnostic.repair_verification.passed", "diagnostic.repair_verification.failed",
+      "diagnostic.repair_verification.reused"],
+    issues: ["VERIFICATION_RUNNER_UNAVAILABLE", "VERIFICATION_SOURCE_MISMATCH",
+      "VERIFICATION_ARTIFACT_DIGEST_MISMATCH", "VERIFICATION_IDEMPOTENCY_CONFLICT"],
+    nextOperations: ["diagnostic.repair_verification.get", "diagnostic.promotion.request",
+      "diagnostic.repair_task.create"],
+    authorityClass: "authenticated_customer_verification_requester",
+    effectClass: "diagnostic_state_transition",
+    preconditions: ["exact_inactive_candidate", "verified_immutable_artifacts", "independent_runner"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.repair_verification.get",
+    summary: "Inspect one immutable signed Verification Receipt, outcomes, evidence, and eligibility.",
+    path: "/diagnostic/v0/repair-verifications/{verification_id}",
+    idName: "verification_id",
+    resultKey: "repair_verification",
+    issues: ["VERIFICATION_RECEIPT_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.case.get",
+    summary: "Inspect one Diagnostic Case projection, immutable evidence links, attempts, and legal next operations.",
+    path: "/diagnostic/v0/cases/{case_id}",
+    idName: "case_id",
+    resultKey: "diagnostic_case",
+    issues: ["DIAGNOSTIC_CASE_NOT_FOUND"]
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.artifact.retire",
+    summary: "Delete selected Reproduction Bundle bytes while preserving an immutable identity tombstone.",
+    path: "/diagnostic/v0/artifact-retirements",
+    input: {
+      type: "object", required: ["artifact_digest", "reason"], additionalProperties: false,
+      properties: {
+        artifact_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        reason: { type: "string", minLength: 1, maxLength: 500 }
+      }
+    },
+    resultKey: "artifact_tombstone",
+    event: ["diagnostic.artifact.bytes_retired", "diagnostic.artifact.tombstone_reused"],
+    issues: ["RETIRABLE_ARTIFACT_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
+    nextOperations: ["diagnostic.artifact.get", "diagnostic.case.get"],
+    authorityClass: "authenticated_customer_retention_operator",
+    effectClass: "diagnostic_payload_retention"
   })
 ];
 

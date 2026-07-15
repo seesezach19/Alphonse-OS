@@ -52,3 +52,13 @@ test("Adapter conformance requires core capabilities and rejects provider fields
   assert.throws(() => assertWorkflowRuntimeAdapterManifest({ ...manifest(), n8n_workflow_id: "42" }),
     (error) => error.code === "INVALID_RUNTIME_ADAPTER_MANIFEST");
 });
+
+test("optional detail retrieval returns scoped transient detail through the provider-neutral contract", () => {
+  const contract = getWorkflowRuntimeAdapterContract();
+  const detail = contract.capabilities.detail_retrieval.operation;
+  assert.deepEqual(detail.input_schema.required,
+    ["external_execution_id", "payload_reference", "requested_fields"]);
+  assert.deepEqual(detail.output_schema.required, ["external_execution_id", "detail", "omitted_fields"]);
+  assert.equal(detail.output_schema.additionalProperties, false);
+  assert.doesNotMatch(JSON.stringify(detail), /n8n/i);
+});

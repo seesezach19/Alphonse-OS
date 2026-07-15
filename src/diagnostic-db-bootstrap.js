@@ -25,10 +25,26 @@ const diagnosticDatabaseIdentifier = identifier(diagnosticDatabase, "DIAGNOSTIC_
 const kernelDatabaseIdentifier = identifier(kernelDatabase, "KERNEL_DATABASE_NAME");
 const adminUser = new URL(adminDatabaseUrl).username;
 const adminIdentifier = identifier(adminUser, "ADMIN_DATABASE_URL username");
-const client = new Client({ connectionString: adminDatabaseUrl });
+let client;
+
+async function connectWithRetry() {
+  let lastError;
+  for (let attempt = 1; attempt <= 30; attempt += 1) {
+    const candidate = new Client({ connectionString: adminDatabaseUrl });
+    try {
+      await candidate.connect();
+      return candidate;
+    } catch (error) {
+      lastError = error;
+      await candidate.end().catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError;
+}
 
 try {
-  await client.connect();
+  client = await connectWithRetry();
   const role = await client.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [diagnosticRole]);
   if (!role.rows[0]) {
     await client.query(`CREATE ROLE ${roleIdentifier} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD ${literal(diagnosticPassword)}`);
@@ -55,5 +71,5 @@ try {
   }
   console.log(`Diagnostic database ${diagnosticDatabase} is ready for least-privilege role ${diagnosticRole}.`);
 } finally {
-  await client.end();
+  if (client) await client.end();
 }
