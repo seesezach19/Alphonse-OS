@@ -15,8 +15,6 @@
     "openclaw:provision": "node scripts/provision-openclaw-diagnostic.js",
     "test:openclaw-client": "node --test test/unit/openclaw-diagnostic-client.test.js",
     "lab:lead-duplicate-webhook": "node scripts/lab-lead-duplicate-webhook.js",
-    "lab:lead-evidence-package": "node scripts/lab-lead-evidence-package.js",
-    "lab:lead-diagnosis-evaluate": "node scripts/lab-lead-diagnosis-evaluate.js",
     "lab:agency": "node scripts/agency-lab.js",
     "lab:agency:score": "node scripts/agency-lab-score.js",
     "lab:lead-case-002": "node scripts/agency-lab.js run agency-lab/cases/lead-ingestion/case-002/case.json",
