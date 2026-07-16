@@ -153,10 +153,9 @@ function Sidebar({ page, setPage, open, close }: { page: PageId; setPage: (page:
         <div className="sidebar-footer">
           <div className="node-identity">
             <div className="node-avatar">LN</div>
-            <div><strong>Local node</strong><span>customer-controlled</span></div>
-            <span className="online-dot" title="All core services healthy" />
+            <div><strong>Demo node</strong><span>fixture-backed console</span></div>
           </div>
-          <div className="custody-note"><CheckCircle2 size={14} /><span>All systems nominal</span></div>
+          <div className="custody-note"><Info size={14} /><span>No live system connection</span></div>
         </div>
       </aside>
     </>
@@ -179,10 +178,14 @@ function Header({ page, openMenu, openSearch }: { page: PageId; openMenu: () => 
         <span>Governance</span>
         <strong>Enforced</strong>
       </div>
+      <div className="demo-mode" title="This console is rendering fixture data, not independently observed system state">
+        <Box size={14} />
+        <span>Demo data</span>
+      </div>
       <div className="topbar-health">
-        <span><i className="health-dot good" />Kernel <em>Online</em></span>
-        <span><i className="health-dot good" />Diagnostic <em>Healthy</em></span>
-        <span><i className="health-dot mint" />n8n</span>
+        <span>Kernel <em>Fixture</em></span>
+        <span>Diagnostic <em>Fixture</em></span>
+        <span>n8n <em>Not connected</em></span>
       </div>
       <IconButton label="Console settings"><Settings2 size={17} /></IconButton>
     </header>

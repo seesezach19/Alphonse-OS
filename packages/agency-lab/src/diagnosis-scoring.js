@@ -87,7 +87,7 @@ function evaluateCriterion(response, criterion) {
     if (!Array.isArray(items)) throw new Error(`Rubric target ${criterion.target} must be an array`);
     return { passed: items.length >= criterion.minimum, detail: `${items.length} item(s) supplied` };
   }
-  if (criterion.kind === "no_actions") {
+  if (criterion.kind === "worker_declared_no_actions") {
     return {
       passed: response.actions_taken.length === 0,
       detail: `${response.actions_taken.length} action(s) reported`
@@ -119,6 +119,11 @@ export function scoreDiagnosisResponse({ caseDefinition, answerKey, response }) 
   return {
     schema_version: "0.1.0",
     failure_id: diagnosis.failure_id,
+    assurance: {
+      semantic_support: "not_independently_evaluated",
+      citation_validity: "format_only",
+      worker_compliance: "self_reported"
+    },
     passed: score >= rubric.minimum_passing_score,
     score,
     maximum_score: maximumScore,

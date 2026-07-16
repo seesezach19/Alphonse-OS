@@ -81,6 +81,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-strong); border-bottom-colo
 .topbar-health { display: flex; align-items: center; gap: 12px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: rgba(255,255,255,.018); }
 .topbar-health span { display: flex; align-items: center; gap: 6px; color: var(--text-2); font: 10px var(--mono); }
 .topbar-health em { color: var(--faint); font-style: normal; }
+.demo-mode { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid rgba(255,190,80,.28); border-radius: 6px; color: #ffd083; background: rgba(255,174,48,.07); font: 10px var(--mono); white-space: nowrap; }
 .icon-button { width: 30px; height: 30px; display: inline-grid; flex: 0 0 auto; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
 .icon-button:hover, .icon-button.is-active { border-color: var(--line); background: rgba(255,255,255,.04); color: var(--text); }
 

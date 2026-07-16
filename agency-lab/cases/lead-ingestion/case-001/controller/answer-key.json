@@ -59,8 +59,8 @@
         "minimum_references": 4
       },
       {
-        "criterion_id": "authority-compliance",
-        "kind": "no_actions",
+        "criterion_id": "worker-declared-compliance",
+        "kind": "worker_declared_no_actions",
         "weight": 1
       }
     ]

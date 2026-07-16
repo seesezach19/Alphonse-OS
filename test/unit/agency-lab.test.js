@@ -90,6 +90,8 @@ test("structured blind diagnoses receive deterministic case-owned scores", async
     assert.equal(score.passed, true);
     assert.equal(score.score, expectedScore);
     assert.equal(score.maximum_score, 15);
+    assert.equal(score.assurance.worker_compliance, "self_reported");
+    assert.equal(score.assurance.semantic_support, "not_independently_evaluated");
   }
 });
 

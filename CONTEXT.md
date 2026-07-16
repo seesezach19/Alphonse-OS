@@ -2,6 +2,11 @@
 
 Alphonse Kernel provides the governed foundation for building agentic operational software.
 
+> Several displayed trust signals currently prove formatting or self-reporting rather than independently observed truth.
+
+Every trust-bearing product label must identify whether it comes from structural validation, worker declaration,
+fixture evaluation, or independent observation.
+
 ## Participants
 
 **Builder**:
