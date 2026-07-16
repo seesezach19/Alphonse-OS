@@ -22,43 +22,34 @@
     },
     {
       "id": "report-build-envelope",
-      "name": "Build Signed Event",
+      "name": "Select Execution Identity",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [260, 0],
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst canonicalize = (value) => {\n  if (value === null || typeof value !== 'object') return JSON.stringify(value);\n  if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`;\n  return `{${Object.keys(value).sort().filter((key) => value[key] !== undefined).map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(',')}}`;\n};\nlet envelope = $json.runtime_event;\nif (!envelope) {\n  const executionId = String($json.execution?.id ?? $execution.id);\n  envelope = { schema_version: '0.2.0', adapter: { adapter_id: 'alphonse.n8n.runtime', adapter_version: '0.2.0' }, workflow_id: $env.ALPHONSE_WORKFLOW_ID, revision_id: $env.ALPHONSE_REVISION_ID, external_execution_id: `n8n-${executionId}`, event_id: `n8n-${executionId}-failed`, event_sequence: 1, lifecycle_claim: 'failed', correlation_id: `n8n-${executionId}`, idempotency_key: `n8n-${executionId}:1`, occurred_at: new Date().toISOString(), payload: { digest: `sha256:${crypto.createHash('sha256').update(canonicalize($json)).digest('hex')}`, reference: null } };\n}\nconst keyId = $env.ALPHONSE_RUNTIME_ADAPTER_KEY_ID;\nconst signedAt = new Date().toISOString();\nconst bytes = ['alphonse-runtime-event-hmac-v1', keyId, signedAt, canonicalize(envelope)].join('\\n');\nconst signature = `hmac-sha256:${crypto.createHmac('sha256', $env.ALPHONSE_RUNTIME_ADAPTER_SECRET).update(bytes, 'utf8').digest('hex')}`;\nreturn [{ json: { envelope, authentication: { key_id: keyId, signed_at: signedAt, signature } } }];"
+        "jsCode": "const externalExecutionId = String($json.attestation_request?.external_execution_id ?? $json.execution?.id ?? $execution.id);\nreturn [{ json: { external_execution_id: externalExecutionId } }];"
       }
     },
     {
       "id": "report-http",
-      "name": "Report to Alphonse",
+      "name": "Request Independent Attestation",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [520, 0],
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.ALPHONSE_RUNTIME_EVENT_URL }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "content-type", "value": "application/json" },
-            { "name": "x-alphonse-runtime-key-id", "value": "={{ $json.authentication.key_id }}" },
-            { "name": "x-alphonse-runtime-signed-at", "value": "={{ $json.authentication.signed_at }}" },
-            { "name": "x-alphonse-runtime-signature", "value": "={{ $json.authentication.signature }}" }
-          ]
-        },
+        "url": "http://n8n-runtime-adapter:5680/v0/runtime-attestations",
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.envelope) }}",
+        "body": "={{ JSON.stringify({ external_execution_id: $json.external_execution_id }) }}",
         "options": {}
       }
     }
   ],
   "connections": {
-    "Called by Workflow": { "main": [[{ "node": "Build Signed Event", "type": "main", "index": 0 }]] },
-    "Workflow Error": { "main": [[{ "node": "Build Signed Event", "type": "main", "index": 0 }]] },
-    "Build Signed Event": { "main": [[{ "node": "Report to Alphonse", "type": "main", "index": 0 }]] }
+    "Called by Workflow": { "main": [[{ "node": "Select Execution Identity", "type": "main", "index": 0 }]] },
+    "Workflow Error": { "main": [[{ "node": "Select Execution Identity", "type": "main", "index": 0 }]] },
+    "Select Execution Identity": { "main": [[{ "node": "Request Independent Attestation", "type": "main", "index": 0 }]] }
   }
 }

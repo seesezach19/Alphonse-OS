@@ -23,6 +23,14 @@ services:
       N8N_REPAIR_API_KEY: ${N8N_REPAIR_DELIVERY_API_KEY:-local-customer-owned-n8n-api-key-v1}
       N8N_ADAPTER_TEST_CONTROLS_ENABLED: "true"
       N8N_ADAPTER_STATE_FILE: /var/lib/alphonse-n8n-adapter/state.json
+      N8N_API_URL: http://n8n:5678
+      N8N_API_KEY: ${N8N_API_KEY:-}
+      N8N_ATTESTATION_BINDINGS: '{"InventoryFollowupDefect1":{"workflow_id":"workflow:inventory-follow-up","revision_id":"${ALPHONSE_REVISION_ID:-00000000-0000-4000-8000-000000000000}"}}'
+      ALPHONSE_RUNTIME_EVENT_URL: http://kernel:3000/diagnostic/v0/runtime-events
+      ALPHONSE_RUNTIME_ADAPTER_ID: alphonse.n8n.runtime
+      ALPHONSE_RUNTIME_ADAPTER_VERSION: 0.2.0
+      ALPHONSE_RUNTIME_ADAPTER_KEY_ID: ${ALPHONSE_RUNTIME_ADAPTER_KEY_ID:-n8n-runtime-key-v1}
+      ALPHONSE_RUNTIME_ADAPTER_SECRET: ${ALPHONSE_RUNTIME_ADAPTER_SECRET:-local-n8n-runtime-event-secret-with-sufficient-length-v1}
     volumes:
       - ./packages/n8n-operational-package:/package:ro
       - n8n-adapter-state:/var/lib/alphonse-n8n-adapter
@@ -41,14 +49,8 @@ services:
       N8N_DIAGNOSTICS_ENABLED: false
       N8N_PERSONALIZATION_ENABLED: false
       N8N_VERSION_NOTIFICATIONS_ENABLED: false
-      N8N_BLOCK_ENV_ACCESS_IN_NODE: false
-      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: true
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-customer-owned-local-n8n-encryption-key-v1}
-      ALPHONSE_WORKFLOW_ID: workflow:inventory-follow-up
-      ALPHONSE_REVISION_ID: ${ALPHONSE_REVISION_ID:-00000000-0000-4000-8000-000000000000}
-      ALPHONSE_RUNTIME_ADAPTER_KEY_ID: ${ALPHONSE_RUNTIME_ADAPTER_KEY_ID:-n8n-runtime-key-v1}
-      ALPHONSE_RUNTIME_ADAPTER_SECRET: ${ALPHONSE_RUNTIME_ADAPTER_SECRET:-local-n8n-runtime-event-secret-with-sufficient-length-v1}
-      ALPHONSE_RUNTIME_EVENT_URL: http://kernel:3000/diagnostic/v0/runtime-events
     ports:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     volumes:

@@ -3,11 +3,44 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 
+import {
+  assertAttestationCandidate,
+  assertExecutionBinding,
+  buildAttestedRuntimeEvent,
+  normalizeAttestationRequest,
+  normalizeN8nExecutionObservation
+} from "./runtime-attestation.js";
+
 const port = Number(process.env.PORT ?? 5680);
 const token = process.env.N8N_DETAIL_ADAPTER_TOKEN;
 const repairApiKey = process.env.N8N_REPAIR_API_KEY ?? "local-customer-owned-n8n-api-key-v1";
 const testControlsEnabled = process.env.N8N_ADAPTER_TEST_CONTROLS_ENABLED === "true";
 const stateFile = process.env.N8N_ADAPTER_STATE_FILE;
+const n8nApiUrl = process.env.N8N_API_URL?.replace(/\/$/, "");
+const n8nApiKey = process.env.N8N_API_KEY;
+const kernelRuntimeEventUrl = process.env.ALPHONSE_RUNTIME_EVENT_URL;
+const runtimeAdapter = {
+  adapter_id: process.env.ALPHONSE_RUNTIME_ADAPTER_ID,
+  adapter_version: process.env.ALPHONSE_RUNTIME_ADAPTER_VERSION
+};
+const runtimeSigning = {
+  key_id: process.env.ALPHONSE_RUNTIME_ADAPTER_KEY_ID,
+  secret: process.env.ALPHONSE_RUNTIME_ADAPTER_SECRET
+};
+const attestationBindings = new Map(Object.entries(
+  JSON.parse(process.env.N8N_ATTESTATION_BINDINGS ?? "{}")
+).map(([providerWorkflowId, binding]) => [providerWorkflowId, {
+  provider_workflow_id: providerWorkflowId,
+  workflow_id: binding.workflow_id,
+  revision_id: binding.revision_id
+}]));
+const attestationConfigured = Boolean(
+  n8nApiUrl && n8nApiKey && kernelRuntimeEventUrl && runtimeAdapter.adapter_id
+  && runtimeAdapter.adapter_version && runtimeSigning.key_id && runtimeSigning.secret
+  && attestationBindings.size > 0
+);
+const attestationJobs = new Map();
+const attestationReceipts = new Map();
 if (!token) throw new Error("N8N_DETAIL_ADAPTER_TOKEN is required.");
 const baseWorkflow = {
   ...JSON.parse(await readFile(new URL("../workflows/inventory-follow-up-defective.json", import.meta.url), "utf8")),
@@ -132,13 +165,95 @@ function canonicalize(value) {
     .map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(",")}}`;
 }
 
+async function fetchN8nExecution(executionId) {
+  const response = await fetch(`${n8nApiUrl}/api/v1/executions/${encodeURIComponent(executionId)}?includeData=false`, {
+    headers: { "x-n8n-api-key": n8nApiKey, accept: "application/json" }
+  });
+  if (!response.ok) throw new Error(`n8n execution lookup failed with HTTP ${response.status}`);
+  const observation = normalizeN8nExecutionObservation(await response.json());
+  if (observation.execution_id !== String(executionId)) {
+    throw new Error("n8n API returned a different execution identity");
+  }
+  return observation;
+}
+
+async function submitAttestedEvent(attestation) {
+  const response = await fetch(kernelRuntimeEventUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-alphonse-runtime-key-id": attestation.authentication.key_id,
+      "x-alphonse-runtime-signed-at": attestation.authentication.signed_at,
+      "x-alphonse-runtime-signature": attestation.authentication.signature
+    },
+    body: JSON.stringify(attestation.envelope)
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Kernel runtime event intake failed with HTTP ${response.status}`);
+  return body;
+}
+
+async function observeTerminalExecution(executionId, initialObservation) {
+  let observation = initialObservation;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const binding = attestationBindings.get(observation.provider_workflow_id);
+    assertExecutionBinding(observation, binding);
+    if (["success", "error", "crashed", "canceled"].includes(observation.status)) {
+      const attestation = buildAttestedRuntimeEvent({
+        observation,
+        binding,
+        adapter: runtimeAdapter,
+        signing: runtimeSigning,
+        signedAt: new Date().toISOString()
+      });
+      const receipt = await submitAttestedEvent(attestation);
+      attestationReceipts.set(executionId, {
+        envelope: attestation.envelope,
+        attestation_basis: attestation.attestation_basis,
+        kernel_receipt: receipt
+      });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    observation = await fetchN8nExecution(executionId);
+  }
+  throw new Error("n8n execution did not reach a terminal state inside the attestation window");
+}
+
+function queueAttestation(executionId, observation) {
+  if (attestationJobs.has(executionId) || attestationReceipts.has(executionId)) return false;
+  const job = observeTerminalExecution(executionId, observation)
+    .catch((error) => process.stderr.write(`n8n attestation ${executionId} failed: ${error.message}\n`))
+    .finally(() => attestationJobs.delete(executionId));
+  attestationJobs.set(executionId, job);
+  return true;
+}
+
 const server = http.createServer(async (request, response) => {
   try {
     if (request.method === "GET" && request.url === "/healthz") {
       return send(response, 200, {
         status: "healthy",
         api: "alphonse.n8n.runtime.detail/0.2.0",
-        state_persistence: stateFile ? "configured" : "ephemeral"
+        state_persistence: stateFile ? "configured" : "ephemeral",
+        runtime_attestation: attestationConfigured ? "independent_n8n_api_observation" : "not_configured"
+      });
+    }
+    if (request.method === "POST" && request.url === "/v0/runtime-attestations") {
+      if (!attestationConfigured) {
+        return send(response, 503, { error: { code: "RUNTIME_ATTESTATION_NOT_CONFIGURED" } });
+      }
+      const body = await readJson(request);
+      const candidate = normalizeAttestationRequest(body);
+      const executionId = candidate.external_execution_id;
+      const observation = await fetchN8nExecution(executionId);
+      const binding = attestationBindings.get(observation.provider_workflow_id);
+      assertAttestationCandidate(candidate, observation, binding);
+      const queued = queueAttestation(executionId, observation);
+      return send(response, 202, {
+        external_execution_id: executionId,
+        queued,
+        claim_source: "independent_n8n_api_observation"
       });
     }
     if (testControlsEnabled && request.method === "POST" && request.url === "/test/v0/promotion-mode") {

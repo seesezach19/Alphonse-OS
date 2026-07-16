@@ -34,12 +34,12 @@
     },
     {
       "id": "lead-build-event",
-      "name": "Build Minimal Runtime Event",
+      "name": "Select Execution for Attestation",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [800, 0],
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst result = $json;\nconst executionId = String($execution.id);\nconst payloadDigest = `sha256:${crypto.createHash('sha256').update(JSON.stringify(result)).digest('hex')}`;\nreturn [{ json: { result, runtime_event: { schema_version: '0.2.0', adapter: { adapter_id: 'alphonse.n8n.runtime', adapter_version: '0.2.0' }, workflow_id: $env.ALPHONSE_WORKFLOW_ID, revision_id: $env.ALPHONSE_REVISION_ID, external_execution_id: `n8n-${executionId}`, event_id: `n8n-${executionId}-succeeded`, event_sequence: 1, lifecycle_claim: 'succeeded', correlation_id: 'lead-FORM-LEAD-1001', idempotency_key: `n8n-${executionId}:1`, occurred_at: new Date().toISOString(), payload: { digest: payloadDigest, reference: null } } } }];"
+        "jsCode": "return [{ json: { result: $json, attestation_request: { external_execution_id: String($execution.id) } } }];"
       }
     },
     {
@@ -68,8 +68,8 @@
   "connections": {
     "Start Fixture": { "main": [[{ "node": "Load Duplicate Lead Webhook Fixture", "type": "main", "index": 0 }]] },
     "Load Duplicate Lead Webhook Fixture": { "main": [[{ "node": "Defective Create CRM Lead Per Delivery", "type": "main", "index": 0 }]] },
-    "Defective Create CRM Lead Per Delivery": { "main": [[{ "node": "Build Minimal Runtime Event", "type": "main", "index": 0 }]] },
-    "Build Minimal Runtime Event": { "main": [[{ "node": "Report Successful Execution", "type": "main", "index": 0 }]] },
+    "Defective Create CRM Lead Per Delivery": { "main": [[{ "node": "Select Execution for Attestation", "type": "main", "index": 0 }]] },
+    "Select Execution for Attestation": { "main": [[{ "node": "Report Successful Execution", "type": "main", "index": 0 }]] },
     "Report Successful Execution": { "main": [[{ "node": "Complete Locally", "type": "main", "index": 0 }]] }
   }
 }

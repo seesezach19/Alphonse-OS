@@ -44,12 +44,12 @@
     },
     {
       "id": "inventory-build-event",
-      "name": "Build Minimal Runtime Event",
+      "name": "Select Execution for Attestation",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [1020, 0],
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst result = $json;\nconst executionId = String($execution.id);\nconst payloadDigest = `sha256:${crypto.createHash('sha256').update(JSON.stringify(result)).digest('hex')}`;\nreturn [{ json: { result, runtime_event: { schema_version: '0.2.0', adapter: { adapter_id: 'alphonse.n8n.runtime', adapter_version: '0.2.0' }, workflow_id: $env.ALPHONSE_WORKFLOW_ID, revision_id: $env.ALPHONSE_REVISION_ID, external_execution_id: `n8n-${executionId}`, event_id: `n8n-${executionId}-succeeded`, event_sequence: 1, lifecycle_claim: 'succeeded', correlation_id: `inventory-${result.order_id}`, idempotency_key: `n8n-${executionId}:1`, occurred_at: new Date().toISOString(), payload: { digest: payloadDigest, reference: null } } } }];"
+        "jsCode": "return [{ json: { result: $json, attestation_request: { external_execution_id: String($execution.id) } } }];"
       }
     },
     {
@@ -77,8 +77,8 @@
     "Start Fixture": { "main": [[{ "node": "Load Deterministic Fixtures", "type": "main", "index": 0 }]] },
     "Load Deterministic Fixtures": { "main": [[{ "node": "Defective Missing SKU Mapping", "type": "main", "index": 0 }]] },
     "Defective Missing SKU Mapping": { "main": [[{ "node": "Draft for Local Review", "type": "main", "index": 0 }]] },
-    "Draft for Local Review": { "main": [[{ "node": "Build Minimal Runtime Event", "type": "main", "index": 0 }]] },
-    "Build Minimal Runtime Event": { "main": [[{ "node": "Report Successful Execution", "type": "main", "index": 0 }]] },
+    "Draft for Local Review": { "main": [[{ "node": "Select Execution for Attestation", "type": "main", "index": 0 }]] },
+    "Select Execution for Attestation": { "main": [[{ "node": "Report Successful Execution", "type": "main", "index": 0 }]] },
     "Report Successful Execution": { "main": [[{ "node": "Complete Locally", "type": "main", "index": 0 }]] }
   }
 }

@@ -19,7 +19,14 @@ import {
   evaluateRepairedStaleRoutingFixture,
   validateN8nOperationalPackage
 } from "../../packages/n8n-operational-package/src/index.js";
+import {
+  assertAttestationCandidate,
+  assertExecutionBinding,
+  buildAttestedRuntimeEvent,
+  normalizeAttestationRequest
+} from "../../packages/n8n-operational-package/src/runtime-attestation.js";
 import { assertRepairDeliveryAdapterManifest } from "../../src/repair-delivery-adapter-contract.js";
+import { verifyRuntimeEventEnvelope } from "../../src/runtime-event-envelope.js";
 import { assertWorkflowRuntimeAdapterManifest } from "../../src/workflow-runtime-adapter-contract.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -66,8 +73,71 @@ test("Event Reporter is importable and uses only approved standard n8n primitive
     "n8n-nodes-base.httpRequest"
   ]);
   assert.equal(workflow.active, false);
-  assert.match(JSON.stringify(workflow), /x-alphonse-runtime-signature/);
+  assert.match(JSON.stringify(workflow), /v0\/runtime-attestations/);
+  assert.match(JSON.stringify(workflow), /external_execution_id/);
+  assert.doesNotMatch(JSON.stringify(workflow), /createHmac|RUNTIME_ADAPTER_SECRET|lifecycle_claim|revision_id/);
   assert.doesNotMatch(JSON.stringify(workflow), /n8n-nodes-[^b]|community/i);
+});
+
+test("n8n cannot access the runtime attestation signing secret", async () => {
+  const compose = await readFile(path.join(packageRoot, "compose.customer.yaml"), "utf8");
+  const n8nService = compose.slice(compose.indexOf("\n  n8n:\n"), compose.indexOf("\nvolumes:\n"));
+  assert.match(n8nService, /N8N_BLOCK_ENV_ACCESS_IN_NODE: true/);
+  assert.doesNotMatch(n8nService, /ALPHONSE_RUNTIME_ADAPTER_SECRET|ALPHONSE_RUNTIME_ADAPTER_KEY_ID/);
+  const reporter = await json("workflows/alphonse-event-reporter.json");
+  assert.doesNotMatch(JSON.stringify(reporter), /\$env|createHmac|hmac-sha256/);
+});
+
+test("sidecar attestation derives identity and lifecycle from an independently observed execution", () => {
+  const secret = "local-n8n-runtime-event-secret-with-sufficient-length-v1";
+  const binding = {
+    provider_workflow_id: "InventoryFollowupDefect1",
+    workflow_id: "workflow:inventory-follow-up",
+    revision_id: "00000000-0000-4000-8000-000000000201"
+  };
+  const observation = {
+    id: "42",
+    workflowId: binding.provider_workflow_id,
+    status: "success",
+    startedAt: "2026-07-16T16:00:00.000Z",
+    stoppedAt: "2026-07-16T16:00:02.000Z"
+  };
+  const attestation = buildAttestedRuntimeEvent({
+    observation,
+    binding,
+    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.2.0" },
+    signing: { key_id: "n8n-runtime-key-v1", secret },
+    signedAt: "2026-07-16T16:00:03.000Z"
+  });
+  const verified = verifyRuntimeEventEnvelope(attestation.envelope, attestation.authentication, {
+    adapter_id: "alphonse.n8n.runtime",
+    adapter_version: "0.2.0",
+    key_id: "n8n-runtime-key-v1",
+    secret
+  }, { now: new Date("2026-07-16T16:00:03.000Z") });
+  assert.equal(verified.envelope.lifecycle_claim, "succeeded");
+  assert.equal(verified.envelope.workflow_id, binding.workflow_id);
+  assert.equal(verified.envelope.revision_id, binding.revision_id);
+  assert.equal(attestation.attestation_basis.source, "n8n_api_execution_observation");
+  assert.throws(() => assertExecutionBinding(observation, {
+    ...binding,
+    provider_workflow_id: "AttackerSelectedWorkflow"
+  }), /does not match/);
+  assert.throws(() => normalizeAttestationRequest({
+    external_execution_id: "42",
+    lifecycle_claim: "succeeded",
+    revision_id: binding.revision_id
+  }), /only external_execution_id/);
+  assert.throws(() => assertAttestationCandidate(
+    { external_execution_id: "41" }, observation, binding
+  ), /requested execution identity/);
+  assert.throws(() => buildAttestedRuntimeEvent({
+    observation: { ...observation, status: "running", stoppedAt: null },
+    binding,
+    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.2.0" },
+    signing: { key_id: "n8n-runtime-key-v1", secret },
+    signedAt: "2026-07-16T16:00:03.000Z"
+  }), /terminal n8n executions/);
 });
 
 test("n8n adapter fault controls are disabled unless explicitly enabled", async () => {
