@@ -107,7 +107,7 @@ function bindDiagnosisToEvidence(response, answerKey, caseDefinition) {
       assignment_id: assignmentId,
       evidence_artifact_digest: evidenceDigest
     },
-    evidenceContext: { evidence, manifest, assignment, provenance }
+    evidenceContext: { evidence, artifact: structuredClone(evidence), manifest, assignment, provenance }
   };
 }
 
@@ -295,6 +295,28 @@ test("diagnosis scoring rejects evidence changed after its manifest digest", asy
     response,
     evidenceContext
   }), /do not match the manifest artifact digest/);
+});
+
+test("diagnosis scoring rejects a missing or changed content-addressed artifact", async () => {
+  const { definition } = await caseAndFixture("case-004");
+  const answerKey = await readJson(definition.controller.answer_key_file);
+  const rawResponse = await readJson(
+    "agency-lab/cases/lead-ingestion/case-004/worker-runs/openclaw-001.json"
+  );
+  const bound = bindDiagnosisToEvidence(rawResponse, answerKey, definition);
+  assert.throws(() => scoreDiagnosisResponse({
+    caseDefinition: definition,
+    answerKey,
+    response: bound.response,
+    evidenceContext: { ...bound.evidenceContext, artifact: undefined }
+  }), /content-addressed evidence artifact is required/);
+  bound.evidenceContext.artifact.tampered = true;
+  assert.throws(() => scoreDiagnosisResponse({
+    caseDefinition: definition,
+    answerKey,
+    response: bound.response,
+    evidenceContext: bound.evidenceContext
+  }), /content-addressed artifact does not match/);
 });
 
 test("diagnosis scoring rejects mismatched assignment and evidence identities as unscorable", async () => {

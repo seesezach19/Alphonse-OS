@@ -30,13 +30,16 @@ function invalid(message) {
 }
 
 export function validateEvidenceContext({
-  failureId, manifest, evidence, assignment, provenance, answerKey, caseDefinition
+  failureId, manifest, evidence, artifact, assignment, provenance, answerKey, caseDefinition
 }) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     invalid("evidence manifest is required");
   }
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
     invalid("evidence document is required");
+  }
+  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
+    invalid("content-addressed evidence artifact is required");
   }
   if (!assignment || typeof assignment !== "object" || Array.isArray(assignment)) {
     invalid("worker assignment is required");
@@ -45,6 +48,7 @@ export function validateEvidenceContext({
     invalid("run provenance is required");
   }
   const computedDigest = sha256Digest(evidence);
+  const artifactDigest = sha256Digest(artifact);
   if (manifest.failure_id !== failureId || evidence.failure_id !== failureId) {
     invalid("evidence context does not match the scored failure");
   }
@@ -53,6 +57,9 @@ export function validateEvidenceContext({
   }
   if (manifest.evidence_artifact_digest !== computedDigest) {
     invalid("evidence bytes do not match the manifest artifact digest");
+  }
+  if (artifactDigest !== computedDigest) {
+    invalid("content-addressed artifact does not match the assigned evidence bytes");
   }
   if (assignment.failure_id !== failureId || assignment.assignment_id !== manifest.assignment_id
       || assignment.run_id !== manifest.run_id) {
@@ -75,7 +82,7 @@ export function validateEvidenceContext({
   if (!caseDefinition || provenance.case_definition_digest !== sha256Digest(caseDefinition)) {
     invalid("run provenance does not bind the scoring case definition");
   }
-  return { manifest, evidence, assignment, provenance, artifact_digest: computedDigest };
+  return { manifest, evidence, artifact, assignment, provenance, artifact_digest: computedDigest };
 }
 
 export function resolveEvidenceReference(reference, context) {
@@ -91,7 +98,7 @@ export function resolveEvidenceReference(reference, context) {
     const hex = context.artifact_digest.slice("sha256:".length);
     const expected = `artifacts/objects/${hex.slice(0, 2)}/${hex}.json`;
     if (source !== expected) return { reference, exists: false, source };
-    document = context.evidence;
+    document = context.artifact;
   }
   try {
     const resolved = resolvePointer(document, pointer);

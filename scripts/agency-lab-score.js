@@ -32,9 +32,17 @@ const answerKey = await readRepositoryJson(definition.controller.answer_key_file
 const response = await readInputJson(diagnosisFile);
 const runRoot = path.resolve(runWorkspace);
 const workerRoot = path.join(runRoot, "worker");
+const manifest = await readInputJson(path.join(workerRoot, "manifest.json"));
+if (!/^sha256:[0-9a-f]{64}$/.test(manifest.evidence_artifact_digest ?? "")) {
+  throw new Error("Invalid Agency Lab provenance: manifest evidence artifact digest is invalid");
+}
+const artifactHex = manifest.evidence_artifact_digest.slice("sha256:".length);
 const evidenceContext = {
-  manifest: await readInputJson(path.join(workerRoot, "manifest.json")),
+  manifest,
   evidence: await readInputJson(path.join(workerRoot, "evidence.json")),
+  artifact: await readInputJson(path.join(
+    workerRoot, "artifacts", "objects", artifactHex.slice(0, 2), `${artifactHex}.json`
+  )),
   assignment: await readInputJson(path.join(workerRoot, "assignment.json")),
   provenance: await readInputJson(path.join(runRoot, "run-provenance.json"))
 };

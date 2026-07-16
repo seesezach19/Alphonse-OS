@@ -116,6 +116,7 @@ export function scoreDiagnosisResponse({ caseDefinition, answerKey, response, ev
     failureId: caseDefinition.failure_id,
     manifest: evidenceContext?.manifest,
     evidence: evidenceContext?.evidence,
+    artifact: evidenceContext?.artifact,
     assignment: evidenceContext?.assignment,
     provenance: evidenceContext?.provenance,
     answerKey,
