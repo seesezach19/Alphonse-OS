@@ -173,18 +173,18 @@ function Header({ page, openMenu, openSearch }: { page: PageId; openMenu: () => 
         <span>Search cases, workflows, evidence</span>
         <kbd>Ctrl K</kbd>
       </button>
-      <div className="governance-mode" title="Kernel admission and accountability boundaries are active">
+      <div className="governance-mode" title="Fixture governance policy is configured; no live enforcement is being observed">
         <ShieldCheck size={14} />
-        <span>Governance</span>
-        <strong>Enforced</strong>
+        <span>Governance policy</span>
+        <strong>Fixture</strong>
       </div>
       <div className="demo-mode" title="This console is rendering fixture data, not independently observed system state">
         <Box size={14} />
-        <span>Demo data</span>
+        <span>Demo dataset</span>
       </div>
       <div className="topbar-health">
-        <span>Kernel <em>Fixture</em></span>
-        <span>Diagnostic <em>Fixture</em></span>
+        <span>Health <em>Not verified</em></span>
+        <span>Services <em>Simulated</em></span>
         <span>n8n <em>Not connected</em></span>
       </div>
       <IconButton label="Console settings"><Settings2 size={17} /></IconButton>
@@ -289,7 +289,7 @@ function Overview({ openCase, setPage, moduleOrder, hiddenModules, customize }: 
       </ModuleFrame>
     ),
     health: (
-      <ModuleFrame id="health" title="System health" subtitle="Independent service signals" open={() => setPage("system")}>
+      <ModuleFrame id="health" title="System health" subtitle="Simulated service signals" open={() => setPage("system")}>
         <div className="health-grid">{services.slice(0, 4).map((service) => <button key={service.name} onClick={() => setPage("system")}><i className={`health-dot ${service.tone}`} /><span><strong>{service.name}</strong><small>{service.latency}</small></span></button>)}</div>
       </ModuleFrame>
     ),
@@ -423,10 +423,10 @@ function EvidencePage() {
 function SystemPage() {
   return (
     <main className="page">
-      <PageHeading eyebrow="Environment / local-node" title="System" description="Protocol compatibility, custody boundaries, and independent service health." actions={<button className="button button-secondary"><RefreshCw size={15} />Refresh checks</button>} />
-      <section className="system-banner"><div><div className="system-mark"><Check size={20} /></div><span><strong>Customer node is operational</strong><small>All required V0.2 services are available and protocol-compatible.</small></span></div><Mono>checked 8 sec ago</Mono></section>
+      <PageHeading eyebrow="Environment / demo-node" title="System" description="Fixture configuration, custody model, and simulated service signals." actions={<button className="button button-secondary"><RefreshCw size={15} />Refresh demo</button>} />
+      <section className="system-banner"><div><div className="system-mark"><Info size={20} /></div><span><strong>Simulated service dataset</strong><small>No live health verification is connected.</small></span></div><Mono>fixture snapshot</Mono></section>
       <div className="service-grid">{services.map((service) => <section className="service-row" key={service.name}><div className="service-icon">{service.name === "PostgreSQL" ? <Database size={18} /> : service.name.includes("store") ? <HardDrive size={18} /> : service.name.includes("adapter") ? <Network size={18} /> : <Server size={18} />}</div><div className="service-main"><strong>{service.name}</strong><span>{service.detail}</span></div><Mono>{service.version}</Mono><span>{service.latency}</span><Status tone={service.tone}>{service.status}</Status><IconButton label={`Inspect ${service.name}`}><ChevronRight size={16} /></IconButton></section>)}</div>
-      <div className="two-panels"><section className="panel info-panel"><div className="panel-title"><ShieldCheck size={17} /><div><h2>Custody boundary</h2><p>What stays inside this customer-controlled node.</p></div></div><dl className="definition-list"><div><dt>PostgreSQL</dt><dd>Local container</dd></div><div><dt>Artifact bytes</dt><dd>Local volume</dd></div><div><dt>Owner credentials</dt><dd>Console server only</dd></div><div><dt>Telemetry export</dt><dd>Disabled</dd></div></dl></section><section className="panel info-panel"><div className="panel-title"><Blocks size={17} /><div><h2>Release</h2><p>Qualified package and migration state.</p></div></div><dl className="definition-list"><div><dt>Release</dt><dd><Mono>v0.2.0</Mono></dd></div><div><dt>Manifest</dt><dd><Mono>sha256:722a...f009</Mono></dd></div><div><dt>Migrations</dt><dd>Current</dd></div><div><dt>Qualification</dt><dd><Status tone="good">Passed</Status></dd></div></dl></section></div>
+      <div className="two-panels"><section className="panel info-panel"><div className="panel-title"><ShieldCheck size={17} /><div><h2>Fixture custody model</h2><p>Intended customer-controlled deployment boundary.</p></div></div><dl className="definition-list"><div><dt>PostgreSQL</dt><dd>Configured: local container</dd></div><div><dt>Artifact bytes</dt><dd>Configured: local volume</dd></div><div><dt>Owner credentials</dt><dd>Configured: console server only</dd></div><div><dt>Telemetry export</dt><dd>Configured: disabled</dd></div></dl></section><section className="panel info-panel"><div className="panel-title"><Blocks size={17} /><div><h2>Fixture release metadata</h2><p>Demonstration package and migration state.</p></div></div><dl className="definition-list"><div><dt>Release</dt><dd><Mono>v0.2.0</Mono></dd></div><div><dt>Manifest</dt><dd><Mono>sha256:722a...f009</Mono></dd></div><div><dt>Migrations</dt><dd>Demo: current</dd></div><div><dt>Qualification</dt><dd><Status tone="neutral">Fixture passed</Status></dd></div></dl></section></div>
     </main>
   );
 }

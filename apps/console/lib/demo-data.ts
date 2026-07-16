@@ -256,10 +256,10 @@ export const artifacts = [
 ];
 
 export const services = [
-  { name: "Kernel", version: "0.1.0", status: "Healthy", detail: "Authority and accountability operations", latency: "8 ms", tone: "good" as Tone },
-  { name: "Diagnostic Plane", version: "0.2.0", status: "Healthy", detail: "Debug loop and immutable evidence", latency: "11 ms", tone: "good" as Tone },
-  { name: "n8n runtime adapter", version: "0.2.0", status: "Reporting", detail: "Last authenticated event 4 min ago", latency: "24 ms", tone: "mint" as Tone },
-  { name: "Repair delivery adapter", version: "0.2.0", status: "Healthy", detail: "Customer-controlled n8n delivery", latency: "19 ms", tone: "good" as Tone },
-  { name: "PostgreSQL", version: "16.4", status: "Healthy", detail: "Customer node / local custody", latency: "3 ms", tone: "good" as Tone },
-  { name: "Artifact store", version: "content-v1", status: "Healthy", detail: "Local content-addressed storage", latency: "2 ms", tone: "good" as Tone },
+  { name: "Kernel", version: "0.1.0", status: "Simulated", detail: "Fixture: authority and accountability operations", latency: "Demo", tone: "neutral" as Tone },
+  { name: "Diagnostic Plane", version: "0.2.0", status: "Simulated", detail: "Fixture: debug loop and immutable evidence", latency: "Demo", tone: "neutral" as Tone },
+  { name: "n8n runtime adapter", version: "0.2.0", status: "Simulated", detail: "Fixture: runtime reporting", latency: "Demo", tone: "neutral" as Tone },
+  { name: "Repair delivery adapter", version: "0.2.0", status: "Simulated", detail: "Fixture: customer-controlled n8n delivery", latency: "Demo", tone: "neutral" as Tone },
+  { name: "PostgreSQL", version: "16.4", status: "Simulated", detail: "Fixture: customer node and local custody", latency: "Demo", tone: "neutral" as Tone },
+  { name: "Artifact store", version: "content-v1", status: "Simulated", detail: "Fixture: local content-addressed storage", latency: "Demo", tone: "neutral" as Tone },
 ];
