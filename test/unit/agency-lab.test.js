@@ -17,6 +17,7 @@ import {
   resolveContainedPath,
   validateRunId
 } from "../../packages/agency-lab/src/run-workspace.js";
+import { sha256Digest } from "../../src/canonical-json.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const readJson = async (relativePath) => JSON.parse(await readFile(path.join(root, relativePath), "utf8"));
@@ -27,6 +28,47 @@ async function caseAndFixture(caseName) {
   ));
   const fixture = await readJson(definition.scenario.input_fixture);
   return { definition, fixture };
+}
+
+function decodePointerToken(token) {
+  return token.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function ensurePointer(document, pointer) {
+  const tokens = pointer.slice(1).split("/").map(decodePointerToken);
+  let current = document;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const final = index === tokens.length - 1;
+    if (Array.isArray(current)) {
+      const position = Number(token);
+      if (final) current[position] = current[position] ?? "preserved evidence";
+      else current[position] ??= /^(0|[1-9][0-9]*)$/.test(tokens[index + 1]) ? [] : {};
+      current = current[position];
+    } else {
+      if (final) current[token] ??= "preserved evidence";
+      else current[token] ??= /^(0|[1-9][0-9]*)$/.test(tokens[index + 1]) ? [] : {};
+      current = current[token];
+    }
+  }
+}
+
+function exactEvidenceContext(response) {
+  const evidence = { schema_version: "0.1.0", failure_id: response.failure_id };
+  for (const reference of response.evidence_references) {
+    const [source, pointer] = reference.split("#");
+    if (source === "evidence.json" && pointer?.startsWith("/")) ensurePointer(evidence, pointer);
+  }
+  return {
+    evidence,
+    manifest: {
+      schema_version: "0.1.0",
+      failure_id: response.failure_id,
+      evidence_file: "evidence.json",
+      answer_key_included: false,
+      evidence_artifact_digest: sha256Digest(evidence)
+    }
+  };
 }
 
 test("Agency Lab cases use exact bounded contracts", async () => {
@@ -86,7 +128,12 @@ test("structured blind diagnoses receive deterministic case-owned scores", async
     const response = await readJson(
       `agency-lab/cases/lead-ingestion/${caseName}/worker-runs/openclaw-001.json`
     );
-    const score = scoreDiagnosisResponse({ caseDefinition: definition, answerKey, response });
+    const score = scoreDiagnosisResponse({
+      caseDefinition: definition,
+      answerKey,
+      response,
+      evidenceContext: exactEvidenceContext(response)
+    });
     assert.equal(score.passed, true);
     assert.equal(score.score, expectedScore);
     assert.equal(score.maximum_score, 15);
@@ -105,6 +152,49 @@ test("diagnosis scoring fails closed on unstructured or cross-case output", asyn
   assert.throws(() => scoreDiagnosisResponse({
     caseDefinition: definition,
     answerKey,
-    response: { ...response, failure_id: "LEAD-999" }
+    response: { ...response, failure_id: "LEAD-999" },
+    evidenceContext: exactEvidenceContext(response)
   }), /failure_id does not match/);
+});
+
+test("citation validity gives nonexistent pointers zero credit", async () => {
+  const { definition } = await caseAndFixture("case-004");
+  const answerKey = await readJson(definition.controller.answer_key_file);
+  const response = await readJson(
+    "agency-lab/cases/lead-ingestion/case-004/worker-runs/openclaw-001.json"
+  );
+  const score = scoreDiagnosisResponse({
+    caseDefinition: definition,
+    answerKey,
+    response: {
+      ...response,
+      evidence_references: [
+        "evidence.json#/invented/0",
+        "evidence.json#/invented/1",
+        "evidence.json#/invented/2",
+        "evidence.json#/invented/3"
+      ]
+    },
+    evidenceContext: exactEvidenceContext(response)
+  });
+  const citation = score.criteria.find((criterion) => criterion.criterion_id === "citation-validity");
+  assert.equal(citation.passed, false);
+  assert.equal(citation.score, 0);
+  assert.match(citation.detail, /^0\/4 references resolve/);
+});
+
+test("diagnosis scoring rejects evidence changed after its manifest digest", async () => {
+  const { definition } = await caseAndFixture("case-004");
+  const answerKey = await readJson(definition.controller.answer_key_file);
+  const response = await readJson(
+    "agency-lab/cases/lead-ingestion/case-004/worker-runs/openclaw-001.json"
+  );
+  const evidenceContext = exactEvidenceContext(response);
+  evidenceContext.evidence.tampered = true;
+  assert.throws(() => scoreDiagnosisResponse({
+    caseDefinition: definition,
+    answerKey,
+    response,
+    evidenceContext
+  }), /do not match the manifest artifact digest/);
 });

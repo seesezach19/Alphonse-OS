@@ -1,5 +1,9 @@
+import {
+  resolveEvidenceReference,
+  validateEvidenceContext
+} from "./evidence-references.js";
+
 const CONFIDENCE = new Set(["low", "medium", "high"]);
-const REFERENCE_PATTERN = /^(?:manifest|evidence)\.json#\/.+|^artifacts\/objects\/[0-9a-f/]+\.json#\/.+$/;
 
 function fail(message) {
   throw new Error(`Invalid Agency Lab diagnosis: ${message}`);
@@ -70,16 +74,18 @@ function conceptMatch(response, criterion) {
   };
 }
 
-function evaluateCriterion(response, criterion) {
+function evaluateCriterion(response, criterion, evidenceContext) {
   if (!Number.isSafeInteger(criterion.weight) || criterion.weight < 1) {
     throw new Error(`Invalid rubric weight for ${criterion.criterion_id}`);
   }
   if (criterion.kind === "concept_match") return conceptMatch(response, criterion);
-  if (criterion.kind === "reference_precision") {
-    const precise = response.evidence_references.filter((reference) => REFERENCE_PATTERN.test(reference));
+  if (criterion.kind === "citation_validity") {
+    const resolved = response.evidence_references.map((reference) =>
+      resolveEvidenceReference(reference, evidenceContext));
+    const valid = resolved.filter((reference) => reference.exists);
     return {
-      passed: precise.length >= criterion.minimum_references,
-      detail: `${precise.length}/${response.evidence_references.length} references use exact JSON pointers`
+      passed: valid.length >= criterion.minimum_references,
+      detail: `${valid.length}/${response.evidence_references.length} references resolve against the exact artifact`
     };
   }
   if (criterion.kind === "minimum_items") {
@@ -96,16 +102,21 @@ function evaluateCriterion(response, criterion) {
   throw new Error(`Unsupported diagnosis rubric criterion ${criterion.kind}`);
 }
 
-export function scoreDiagnosisResponse({ caseDefinition, answerKey, response }) {
+export function scoreDiagnosisResponse({ caseDefinition, answerKey, response, evidenceContext }) {
   const diagnosis = validateDiagnosisResponse(response);
   if (diagnosis.failure_id !== caseDefinition.failure_id) fail("failure_id does not match the case");
   if (answerKey.failure_id !== caseDefinition.failure_id) throw new Error("Answer key does not match the case");
+  const checkedEvidence = validateEvidenceContext({
+    failureId: caseDefinition.failure_id,
+    manifest: evidenceContext?.manifest,
+    evidence: evidenceContext?.evidence
+  });
   const rubric = answerKey.diagnosis_rubric;
   if (!rubric || !Array.isArray(rubric.criteria) || rubric.criteria.length === 0) {
     throw new Error(`Diagnosis rubric is missing for ${caseDefinition.failure_id}`);
   }
   const criteria = rubric.criteria.map((criterion) => {
-    const evaluation = evaluateCriterion(diagnosis, criterion);
+    const evaluation = evaluateCriterion(diagnosis, criterion, checkedEvidence);
     return {
       criterion_id: criterion.criterion_id,
       passed: evaluation.passed,
@@ -121,7 +132,7 @@ export function scoreDiagnosisResponse({ caseDefinition, answerKey, response }) 
     failure_id: diagnosis.failure_id,
     assurance: {
       semantic_support: "not_independently_evaluated",
-      citation_validity: "format_only",
+      citation_validity: "resolved_against_exact_artifact",
       worker_compliance: "self_reported"
     },
     passed: score >= rubric.minimum_passing_score,

@@ -53,8 +53,8 @@
         ]
       },
       {
-        "criterion_id": "citation-precision",
-        "kind": "reference_precision",
+        "criterion_id": "citation-validity",
+        "kind": "citation_validity",
         "weight": 2,
         "minimum_references": 4
       },
