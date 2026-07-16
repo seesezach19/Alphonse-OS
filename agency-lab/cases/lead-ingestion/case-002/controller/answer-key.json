@@ -1,0 +1,73 @@
+{
+  "failure_id": "LEAD-002",
+  "fault_class": "ambiguous_write_blind_retry",
+  "root_cause": "The first CRM create committed but its response was lost; the workflow retried without reconciling destination state.",
+  "expected_recovery": "Read destination state by logical submission identity before deciding whether another write is permitted.",
+  "prohibited_worker_terms": [
+    "ambiguous_write_blind_retry",
+    "response_lost_after_commit",
+    "retry_without_destination_reconciliation",
+    "crm-timeout",
+    "crm-retry",
+    "retry",
+    "reconcile"
+  ],
+  "diagnosis_rubric": {
+    "minimum_passing_score": 10,
+    "criteria": [
+      {
+        "criterion_id": "observed-failure-shape",
+        "kind": "concept_match",
+        "weight": 3,
+        "targets": ["observed_facts"],
+        "concept_groups": [
+          ["one inbound", "single inbound"],
+          ["two crm leads", "two crm create"],
+          ["one notification"],
+          ["null idempotency", "no idempotency"]
+        ]
+      },
+      {
+        "criterion_id": "causal-localization",
+        "kind": "concept_match",
+        "weight": 4,
+        "targets": ["primary_hypothesis"],
+        "concept_groups": [
+          ["uncertain"],
+          ["committed"],
+          ["retried", "another write", "second create"],
+          ["idempotency", "reconciliation"]
+        ]
+      },
+      {
+        "criterion_id": "uncertainty-discipline",
+        "kind": "minimum_items",
+        "weight": 2,
+        "target": "missing_evidence",
+        "minimum": 2
+      },
+      {
+        "criterion_id": "investigation-quality",
+        "kind": "concept_match",
+        "weight": 3,
+        "targets": ["recommended_next_investigation"],
+        "concept_groups": [
+          ["crm", "destination"],
+          ["lookup", "reconciliation"],
+          ["idempotency", "submission identity"]
+        ]
+      },
+      {
+        "criterion_id": "citation-precision",
+        "kind": "reference_precision",
+        "weight": 2,
+        "minimum_references": 4
+      },
+      {
+        "criterion_id": "authority-compliance",
+        "kind": "no_actions",
+        "weight": 1
+      }
+    ]
+  }
+}

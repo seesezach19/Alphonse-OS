@@ -7,10 +7,16 @@ import { fileURLToPath } from "node:url";
 import {
   adapterHealthProjection,
   buildN8nRevisionMaterial,
+  evaluateDefectiveAmbiguousLeadFixture,
   evaluateDefectiveInventoryFixture,
   evaluateDefectiveLeadFixture,
+  evaluateDefectiveSchemaChangeFixture,
+  evaluateDefectiveStaleRoutingFixture,
+  evaluateRepairedAmbiguousLeadFixture,
   evaluateRepairedInventoryFixture,
   evaluateRepairedLeadFixture,
+  evaluateRepairedSchemaChangeFixture,
+  evaluateRepairedStaleRoutingFixture,
   validateN8nOperationalPackage
 } from "../../packages/n8n-operational-package/src/index.js";
 import { assertRepairDeliveryAdapterManifest } from "../../src/repair-delivery-adapter-contract.js";
@@ -131,6 +137,78 @@ test("lead ingestion n8n reference workflow is a local-only defective lab target
   assert.ok(types.has("n8n-nodes-base.executeWorkflow"));
   assert.match(JSON.stringify(workflow), /duplicate_webhook -> create_without_idempotency/);
   assert.doesNotMatch(JSON.stringify(workflow), /api_key|access_token|credential_value/i);
+});
+
+test("ambiguous CRM write fixture demonstrates unsafe retry after a committed uncertain effect", async () => {
+  const fixture = await json("fixtures/lead-ambiguous-crm-timeout.json");
+  const result = evaluateDefectiveAmbiguousLeadFixture(fixture);
+  assert.equal(result.processed_event_count, 1);
+  assert.equal(result.crm_leads.length, fixture.expected.defective.crm_lead_count);
+  assert.equal(result.notifications.length, fixture.expected.defective.notification_count);
+  assert.equal(result.external_effects.filter((effect) => effect.operation === "create_lead").length, 2);
+  assert.equal(result.uncertain_effects.length, 1);
+  assert.equal(result.uncertain_effects[0].destination_committed, true);
+  assert.equal(result.lead_state, fixture.expected.defective.lead_state);
+});
+
+test("ambiguous CRM write repair reconciles destination state before another write", async () => {
+  const fixture = await json("fixtures/lead-ambiguous-crm-timeout.json");
+  const result = evaluateRepairedAmbiguousLeadFixture(fixture);
+  assert.equal(result.crm_leads.length, fixture.expected.repaired.crm_lead_count);
+  assert.equal(result.notifications.length, fixture.expected.repaired.notification_count);
+  assert.equal(result.external_effects.filter((effect) => effect.operation === "create_lead").length, 1);
+  assert.equal(result.reconciliations.length, fixture.expected.repaired.reconciliation_count);
+  assert.equal(result.reconciliations[0].result_id, result.crm_leads[0].crm_lead_id);
+  assert.equal(result.external_effects.every((effect) => effect.idempotency_key === "FORM-LEAD-2001"), true);
+  assert.equal(result.lead_state, fixture.expected.repaired.lead_state);
+});
+
+test("outdated routing context assigns and notifies an inactive owner", async () => {
+  const fixture = await json("fixtures/lead-stale-routing-context.json");
+  const result = evaluateDefectiveStaleRoutingFixture(fixture);
+  assert.equal(result.crm_leads.length, 1);
+  assert.equal(result.crm_leads[0].assigned_owner_id, "owner-017");
+  assert.equal(result.notifications.length, 1);
+  assert.equal(result.notifications[0].to, "owner-017");
+  assert.equal(result.authoritative_owner_state.owners[0].status, "inactive");
+  assert.equal(result.lead_state, fixture.expected.defective.lead_state);
+});
+
+test("routing repair preserves the lead but holds assignment and notification for escalation", async () => {
+  const fixture = await json("fixtures/lead-stale-routing-context.json");
+  const result = evaluateRepairedStaleRoutingFixture(fixture);
+  assert.equal(result.crm_leads.length, 1);
+  assert.equal(result.crm_leads[0].assigned_owner_id, null);
+  assert.equal(result.notifications.length, 0);
+  assert.equal(result.routing_decisions.length, 0);
+  assert.equal(result.escalations.length, 1);
+  assert.equal(result.lead_state, fixture.expected.repaired.lead_state);
+});
+
+test("source schema field change silently defaults a required qualification value", async () => {
+  const fixture = await json("fixtures/lead-schema-field-change.json");
+  const result = evaluateDefectiveSchemaChangeFixture(fixture);
+  const mapping = result.mapping_observations[0];
+  assert.equal(result.crm_leads.length, 1);
+  assert.equal(result.crm_leads[0].qualification.status, "needs_review");
+  assert.equal(result.notifications.length, 0);
+  assert.deepEqual(mapping.unresolved_source_paths, ["lead.monthly_budget"]);
+  assert.deepEqual(mapping.defaults_applied, [{ target_field: "monthly_budget", value: 0 }]);
+  assert.equal(mapping.source_value_observations[0].value, 6100);
+  assert.equal(result.lead_state, fixture.expected.defective.lead_state);
+});
+
+test("version-aware mapping preserves the renamed qualification value", async () => {
+  const fixture = await json("fixtures/lead-schema-field-change.json");
+  const result = evaluateRepairedSchemaChangeFixture(fixture);
+  const mapping = result.mapping_observations[0];
+  assert.equal(result.crm_leads.length, 1);
+  assert.equal(result.crm_leads[0].qualification.status, "qualified");
+  assert.equal(result.notifications.length, 1);
+  assert.deepEqual(mapping.unresolved_source_paths, []);
+  assert.equal(mapping.aliases_applied[0].source_path, "lead.estimated_monthly_budget");
+  assert.equal(mapping.mapped_values.monthly_budget, 6100);
+  assert.equal(result.lead_state, fixture.expected.repaired.lead_state);
 });
 
 test("adapter mapping binds exact workflow, runtime, nodes, model, configuration, and fingerprint rules", async () => {

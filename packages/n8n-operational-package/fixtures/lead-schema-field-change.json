@@ -1,0 +1,67 @@
+{
+  "lead_form_events": [
+    {
+      "event_id": "lead-event-4001-a",
+      "submission_id": "FORM-LEAD-4001",
+      "received_at": "2026-07-16T17:00:00.000Z",
+      "schema_id": "agency-lead-form",
+      "schema_version": "2",
+      "lead": {
+        "first_name": "Taylor",
+        "last_name": "Morgan",
+        "email": "taylor.morgan@chesapeake-building.example",
+        "phone": "+1-410-555-0184",
+        "company": "Chesapeake Building Services",
+        "service_need": "commercial maintenance agreement for multiple office properties",
+        "estimated_monthly_budget": 6100,
+        "timeline_days": 21,
+        "source": "landing-page",
+        "utm_campaign": "building-services-q3"
+      }
+    }
+  ],
+  "source_schema": {
+    "schema_id": "agency-lead-form",
+    "schema_version": "2",
+    "declared_fields": [
+      "lead.first_name",
+      "lead.last_name",
+      "lead.email",
+      "lead.phone",
+      "lead.company",
+      "lead.service_need",
+      "lead.estimated_monthly_budget",
+      "lead.timeline_days",
+      "lead.source",
+      "lead.utm_campaign"
+    ]
+  },
+  "mapping_contract": {
+    "contract_id": "lead-qualification-input",
+    "accepted_schema_versions": ["1"],
+    "required_source_paths": [
+      "lead.service_need",
+      "lead.monthly_budget",
+      "lead.timeline_days"
+    ],
+    "defaults": {
+      "monthly_budget": 0
+    }
+  },
+  "crm_initial": [],
+  "notifications_initial": [],
+  "expected": {
+    "defective": {
+      "crm_lead_count": 1,
+      "notification_count": 0,
+      "qualification_status": "needs_review",
+      "lead_state": "qualified_from_silent_default"
+    },
+    "repaired": {
+      "crm_lead_count": 1,
+      "notification_count": 1,
+      "qualification_status": "qualified",
+      "lead_state": "schema_version_mapped"
+    }
+  }
+}

@@ -206,6 +206,282 @@ export function evaluateRepairedLeadFixture(fixture) {
   };
 }
 
+function leadRecord(event, qualification, suffix) {
+  return {
+    crm_lead_id: `crm-${suffix}`,
+    form_submission_id: event.submission_id,
+    email: event.lead.email,
+    company: event.lead.company,
+    qualification,
+    created_from_event_id: event.event_id
+  };
+}
+
+function leadNotification(event, qualification, suffix) {
+  return {
+    notification_id: `notify-${suffix}`,
+    form_submission_id: event.submission_id,
+    to: qualification.route,
+    subject: `Qualified lead: ${event.lead.company}`,
+    created_from_event_id: event.event_id
+  };
+}
+
+export function evaluateDefectiveAmbiguousLeadFixture(fixture) {
+  const [event] = fixture.lead_form_events;
+  const qualification = qualifyLead(event.lead);
+  const crmLeads = structuredClone(fixture.crm_initial ?? []);
+  const notifications = structuredClone(fixture.notifications_initial ?? []);
+  const firstLead = leadRecord(event, qualification, "001");
+  const retryLead = leadRecord(event, qualification, "002");
+  crmLeads.push(firstLead, retryLead);
+  const externalEffects = [
+    {
+      system: "mock_crm", operation: "create_lead", attempt: 1,
+      event_id: event.event_id, submission_id: event.submission_id,
+      idempotency_key: null, outcome: "uncertain", destination_committed: true,
+      result_id: firstLead.crm_lead_id
+    },
+    {
+      system: "mock_crm", operation: "create_lead", attempt: 2,
+      event_id: event.event_id, submission_id: event.submission_id,
+      idempotency_key: null, outcome: "confirmed", destination_committed: true,
+      result_id: retryLead.crm_lead_id
+    }
+  ];
+  if (qualification.status === "qualified") {
+    const notification = leadNotification(event, qualification, "001");
+    notifications.push(notification);
+    externalEffects.push({
+      system: "mailpit", operation: "send_notification", attempt: 1,
+      event_id: event.event_id, submission_id: event.submission_id,
+      idempotency_key: null, outcome: "confirmed", destination_committed: true,
+      result_id: notification.notification_id
+    });
+  }
+  return {
+    processed_event_count: fixture.lead_form_events.length,
+    crm_leads: crmLeads,
+    notifications,
+    external_effects: externalEffects,
+    uncertain_effects: externalEffects.filter((effect) => effect.outcome === "uncertain"),
+    lead_state: "duplicate_created_after_uncertain_write",
+    defect_path: "committed_create -> lost_response -> blind_retry -> duplicate_crm_lead"
+  };
+}
+
+export function evaluateRepairedAmbiguousLeadFixture(fixture) {
+  const [event] = fixture.lead_form_events;
+  const qualification = qualifyLead(event.lead);
+  const crmLeads = structuredClone(fixture.crm_initial ?? []);
+  const notifications = structuredClone(fixture.notifications_initial ?? []);
+  const committedLead = leadRecord(event, qualification, "001");
+  crmLeads.push(committedLead);
+  const externalEffects = [
+    {
+      system: "mock_crm", operation: "create_lead", attempt: 1,
+      event_id: event.event_id, submission_id: event.submission_id,
+      idempotency_key: event.submission_id, outcome: "uncertain", destination_committed: true,
+      result_id: committedLead.crm_lead_id
+    },
+    {
+      system: "mock_crm", operation: "lookup_lead", attempt: 1,
+      event_id: event.event_id, submission_id: event.submission_id,
+      idempotency_key: event.submission_id, outcome: "confirmed", destination_committed: false,
+      result_id: committedLead.crm_lead_id
+    }
+  ];
+  if (qualification.status === "qualified") {
+    const notification = leadNotification(event, qualification, "001");
+    notifications.push(notification);
+    externalEffects.push({
+      system: "mailpit", operation: "send_notification", attempt: 1,
+      event_id: event.event_id, submission_id: event.submission_id,
+      idempotency_key: event.submission_id, outcome: "confirmed", destination_committed: true,
+      result_id: notification.notification_id
+    });
+  }
+  return {
+    processed_event_count: fixture.lead_form_events.length,
+    crm_leads: crmLeads,
+    notifications,
+    external_effects: externalEffects,
+    uncertain_effects: externalEffects.filter((effect) => effect.outcome === "uncertain"),
+    reconciliations: externalEffects.filter((effect) => effect.operation === "lookup_lead"),
+    lead_state: "uncertain_write_reconciled",
+    defect_path: "committed_create -> uncertain_outcome -> destination_lookup -> existing_lead_preserved"
+  };
+}
+
+function routingContextRead(fixture) {
+  return {
+    source_id: fixture.routing_context.source_id,
+    snapshot_id: fixture.routing_context.snapshot_id,
+    captured_at: fixture.routing_context.captured_at,
+    maximum_age_seconds: fixture.routing_context.maximum_age_seconds,
+    decision_at: fixture.lead_form_events[0].received_at,
+    candidate_owner_id: fixture.routing_context.candidate_owner.owner_id,
+    candidate_status_at_capture: fixture.routing_context.candidate_owner.status
+  };
+}
+
+export function evaluateDefectiveStaleRoutingFixture(fixture) {
+  const [event] = fixture.lead_form_events;
+  const qualification = qualifyLead(event.lead);
+  const ownerId = fixture.routing_context.candidate_owner.owner_id;
+  const crmLead = {
+    ...leadRecord(event, qualification, "001"),
+    assigned_owner_id: ownerId
+  };
+  const notification = {
+    ...leadNotification(event, qualification, "001"),
+    to: ownerId
+  };
+  return {
+    processed_event_count: 1,
+    crm_leads: [crmLead],
+    notifications: [notification],
+    external_effects: [
+      {
+        system: "mock_crm", operation: "create_lead", event_id: event.event_id,
+        submission_id: event.submission_id, idempotency_key: event.submission_id,
+        outcome: "confirmed", destination_committed: true, result_id: crmLead.crm_lead_id
+      },
+      {
+        system: "mailpit", operation: "send_notification", event_id: event.event_id,
+        submission_id: event.submission_id, idempotency_key: event.submission_id,
+        outcome: "confirmed", destination_committed: true, result_id: notification.notification_id
+      }
+    ],
+    context_reads: [routingContextRead(fixture)],
+    routing_decisions: [{
+      submission_id: event.submission_id,
+      owner_id: ownerId,
+      decision_at: event.received_at,
+      snapshot_id: fixture.routing_context.snapshot_id,
+      disposition: "assigned"
+    }],
+    authoritative_owner_state: structuredClone(fixture.authoritative_owner_state),
+    escalations: [],
+    lead_state: "routed_using_expired_context"
+  };
+}
+
+export function evaluateRepairedStaleRoutingFixture(fixture) {
+  const [event] = fixture.lead_form_events;
+  const qualification = qualifyLead(event.lead);
+  const crmLead = {
+    ...leadRecord(event, qualification, "001"),
+    assigned_owner_id: null
+  };
+  return {
+    processed_event_count: 1,
+    crm_leads: [crmLead],
+    notifications: [],
+    external_effects: [{
+      system: "mock_crm", operation: "create_lead", event_id: event.event_id,
+      submission_id: event.submission_id, idempotency_key: event.submission_id,
+      outcome: "confirmed", destination_committed: true, result_id: crmLead.crm_lead_id
+    }],
+    context_reads: [routingContextRead(fixture)],
+    routing_decisions: [],
+    authoritative_owner_state: structuredClone(fixture.authoritative_owner_state),
+    escalations: [{
+      submission_id: event.submission_id,
+      reason: "routing_context_requires_refresh",
+      disposition: "owner_assignment_held"
+    }],
+    lead_state: "routing_context_stale_escalated"
+  };
+}
+
+function observedLeadPaths(event) {
+  return Object.keys(event.lead).sort().map((field) => `lead.${field}`);
+}
+
+function schemaMappingObservation(fixture, event, overrides = {}) {
+  const observedPaths = observedLeadPaths(event);
+  const unresolvedPaths = fixture.mapping_contract.required_source_paths.filter((requiredPath) =>
+    !observedPaths.includes(requiredPath));
+  return {
+    contract_id: fixture.mapping_contract.contract_id,
+    event_schema_id: event.schema_id,
+    event_schema_version: event.schema_version,
+    accepted_schema_versions: fixture.mapping_contract.accepted_schema_versions,
+    required_source_paths: fixture.mapping_contract.required_source_paths,
+    observed_source_paths: observedPaths,
+    source_value_observations: event.lead.estimated_monthly_budget === undefined ? [] : [{
+      path: "lead.estimated_monthly_budget",
+      value: event.lead.estimated_monthly_budget
+    }],
+    unresolved_source_paths: unresolvedPaths,
+    defaults_applied: [],
+    aliases_applied: [],
+    ...overrides
+  };
+}
+
+export function evaluateDefectiveSchemaChangeFixture(fixture) {
+  const [event] = fixture.lead_form_events;
+  const defaultBudget = fixture.mapping_contract.defaults.monthly_budget;
+  const qualification = qualifyLead({ ...event.lead, monthly_budget: defaultBudget });
+  const crmLead = leadRecord(event, qualification, "001");
+  return {
+    processed_event_count: 1,
+    crm_leads: [crmLead],
+    notifications: [],
+    external_effects: [{
+      system: "mock_crm", operation: "create_lead", event_id: event.event_id,
+      submission_id: event.submission_id, idempotency_key: event.submission_id,
+      outcome: "confirmed", destination_committed: true, result_id: crmLead.crm_lead_id
+    }],
+    source_schema_state: structuredClone(fixture.source_schema),
+    mapping_observations: [schemaMappingObservation(fixture, event, {
+      defaults_applied: [{ target_field: "monthly_budget", value: defaultBudget }],
+      mapped_values: { monthly_budget: defaultBudget }
+    })],
+    lead_state: "qualified_from_silent_default"
+  };
+}
+
+export function evaluateRepairedSchemaChangeFixture(fixture) {
+  const [event] = fixture.lead_form_events;
+  const qualification = qualifyLead({
+    ...event.lead,
+    monthly_budget: event.lead.estimated_monthly_budget
+  });
+  const crmLead = leadRecord(event, qualification, "001");
+  const notification = leadNotification(event, qualification, "001");
+  return {
+    processed_event_count: 1,
+    crm_leads: [crmLead],
+    notifications: [notification],
+    external_effects: [
+      {
+        system: "mock_crm", operation: "create_lead", event_id: event.event_id,
+        submission_id: event.submission_id, idempotency_key: event.submission_id,
+        outcome: "confirmed", destination_committed: true, result_id: crmLead.crm_lead_id
+      },
+      {
+        system: "mailpit", operation: "send_notification", event_id: event.event_id,
+        submission_id: event.submission_id, idempotency_key: event.submission_id,
+        outcome: "confirmed", destination_committed: true, result_id: notification.notification_id
+      }
+    ],
+    source_schema_state: structuredClone(fixture.source_schema),
+    mapping_observations: [schemaMappingObservation(fixture, event, {
+      accepted_schema_versions: ["1", "2"],
+      unresolved_source_paths: [],
+      aliases_applied: [{
+        source_path: "lead.estimated_monthly_budget",
+        target_field: "monthly_budget"
+      }],
+      mapped_values: { monthly_budget: event.lead.estimated_monthly_budget }
+    })],
+    lead_state: "schema_version_mapped"
+  };
+}
+
 export function buildN8nRevisionMaterial({ packageManifest, workflow, reporter }) {
   const nodes = [...workflow.nodes, ...reporter.nodes].map((node) => ({
     node_type: node.type,

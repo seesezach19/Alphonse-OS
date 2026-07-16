@@ -1,0 +1,41 @@
+{
+  "schema_version": "0.1.0",
+  "failure_id": "LEAD-004",
+  "observed_facts": [
+    "The inbound event declared source schema version 2.",
+    "The qualification input contract accepted only source schema version 1.",
+    "Schema version 2 declared lead.estimated_monthly_budget, with an observed value of 6100.",
+    "The qualification contract required lead.monthly_budget, which was unresolved.",
+    "The unresolved monthly budget was defaulted to 0 with no alias applied.",
+    "The resulting CRM lead was assigned score 60, status needs_review, and route sales:intake_review despite the unresolved required source path.",
+    "The runtime lifecycle claim was succeeded."
+  ],
+  "primary_hypothesis": "A source-schema evolution from lead.monthly_budget to lead.estimated_monthly_budget was not reflected in the versioned qualification mapping. The unresolved required value was silently defaulted to 0 instead of remaining unknown, allowing qualification to proceed with materially incorrect input. Confidence is high, although the evidence does not expose the qualification algorithm or prove the intended field migration.",
+  "confidence": "high",
+  "alternative_hypotheses": [
+    "The version-2 source schema may be invalid because it omitted a still-required lead.monthly_budget field rather than intentionally renaming it.",
+    "The qualification engine may independently mishandle unknown required values, even if the mapping contract is corrected.",
+    "The persisted qualification may have been computed from another unrecorded input, because no field-level qualification trace is present."
+  ],
+  "evidence_references": [
+    "evidence.json#/runtime_events/0/lifecycle_claim",
+    "evidence.json#/reproduction_bundle/failure_specification/expected_behavior",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/source_schema_state/schema_version",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/source_schema_state/declared_fields/6",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/mapping_observations/0/accepted_schema_versions/0",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/mapping_observations/0/required_source_paths/1",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/mapping_observations/0/source_value_observations/0",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/mapping_observations/0/unresolved_source_paths/0",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/mapping_observations/0/defaults_applied/0",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/crm_leads/0/qualification"
+  ],
+  "missing_evidence": [
+    "The complete version-1 and version-2 source schema definitions and migration history.",
+    "The qualification input mapping implementation or declarative mapping for each accepted schema version.",
+    "A field-level qualification trace showing how monthly_budget affected the score, status, and route.",
+    "The policy defining whether schema-version mismatches must reject processing or preserve unresolved values as unknown.",
+    "The unredacted payload needed to confirm that no additional budget field was supplied."
+  ],
+  "recommended_next_investigation": "Perform a read-only comparison of source schema versions 1 and 2 against the lead-qualification-input contract, then inspect the field-level mapping and qualification trace for FORM-LEAD-4001 to determine whether lead.estimated_monthly_budget should alias to monthly_budget and whether unresolved required values are prevented from entering qualification.",
+  "actions_taken": []
+}

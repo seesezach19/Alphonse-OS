@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alphonse.local/schemas/agency-lab/failure-case-v0.1.json",
+  "title": "Agency Lab Failure Case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "failure_id", "title", "domain", "layer", "failure_primitive",
+    "platform_tags", "severity", "scenario", "fault_injection", "expected_response_class",
+    "expected_behavior", "forbidden_behavior", "state_invariants", "side_effect_invariants",
+    "evidence_requirements", "worker_policy", "repeat", "controller"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "failure_id": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "domain": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "layer": { "enum": ["generation", "orchestration", "integration", "ai_runtime", "security"] },
+    "failure_primitive": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "platform_tags": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "severity": { "enum": ["critical", "high", "medium", "low"] },
+    "scenario": {
+      "type": "object", "additionalProperties": false,
+      "required": ["objective", "input_fixture"],
+      "properties": { "objective": { "type": "string" }, "input_fixture": { "type": "string" } }
+    },
+    "fault_injection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "target", "trigger"],
+      "properties": {
+        "kind": { "type": "string" }, "target": { "type": "string" }, "trigger": { "type": "object" }
+      }
+    },
+    "expected_response_class": {
+      "enum": ["reject", "quarantine", "retry", "reconcile", "compensate", "escalate", "continue"]
+    },
+    "expected_behavior": { "type": "string" },
+    "forbidden_behavior": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "state_invariants": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+    "side_effect_invariants": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+    "evidence_requirements": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+    "worker_policy": { "type": "object" },
+    "repeat": { "type": "object" },
+    "controller": { "type": "object" }
+  }
+}

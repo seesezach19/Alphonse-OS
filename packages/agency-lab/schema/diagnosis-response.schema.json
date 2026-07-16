@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alphonse.local/schemas/agency-lab/diagnosis-response-v0.1.json",
+  "title": "Agency Lab Blind Diagnosis Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "failure_id", "observed_facts", "primary_hypothesis", "confidence",
+    "alternative_hypotheses", "evidence_references", "missing_evidence",
+    "recommended_next_investigation", "actions_taken"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "failure_id": { "type": "string", "minLength": 1 },
+    "observed_facts": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "primary_hypothesis": { "type": "string", "minLength": 1 },
+    "confidence": { "enum": ["low", "medium", "high"] },
+    "alternative_hypotheses": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "evidence_references": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "missing_evidence": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "recommended_next_investigation": { "type": "string", "minLength": 1 },
+    "actions_taken": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": "0.1.0",
+  "failure_id": "LEAD-003",
+  "observed_facts": [
+    "Observation: The evidence records one inbound lead_form_received event for submission_id FORM-LEAD-3001 at 2026-07-16T16:00:00.000Z.",
+    "Observation: The runtime event for correlation_id FORM-LEAD-3001 has lifecycle_claim succeeded.",
+    "Observation: The failure specification states the expected behavior is that each lead is assigned only to an eligible owner at decision time, and when eligibility cannot be established the lead remains unassigned and no owner is notified.",
+    "Observation: The external effects contain one confirmed mock_crm create_lead effect and one confirmed mailpit send_notification effect for FORM-LEAD-3001.",
+    "Observation: The CRM state snapshot contains crm-001 assigned_owner_id owner-017 for FORM-LEAD-3001.",
+    "Observation: The notification snapshot contains notify-001 addressed to owner-017 for FORM-LEAD-3001.",
+    "Observation: The routing decision assigned FORM-LEAD-3001 to owner-017 at 2026-07-16T16:00:00.000Z using snapshot_id owner-snapshot-0714.",
+    "Observation: The context read for owner-snapshot-0714 was captured at 2026-07-14T12:00:00.000Z, had maximum_age_seconds 3600, and was used for a decision_at timestamp of 2026-07-16T16:00:00.000Z.",
+    "Observation: The authoritative owner state observed at 2026-07-16T15:59:30.000Z lists owner-017 as inactive effective 2026-07-15T13:00:00.000Z and owner-024 as active effective 2026-07-15T13:00:00.000Z."
+  ],
+  "primary_hypothesis": "Inference: The workflow likely made the assignment decision from a stale owner-directory snapshot and did not enforce the recorded freshness/eligibility requirement at decision time, causing owner-017 to receive both the CRM assignment and notification even though the worker-visible authoritative state marks owner-017 inactive before the decision. Uncertainty remains because the workflow source, controller details, and answer key were not inspected.",
+  "confidence": "high",
+  "alternative_hypotheses": [
+    "Inference: The workflow may have a freshness check, but it may compare the wrong timestamp or ignore maximum_age_seconds.",
+    "Inference: The workflow may treat candidate_status_at_capture as sufficient eligibility and may not query or validate authoritative_owner_state at decision time.",
+    "Inference: The notification step may trust the routing decision without independently checking owner eligibility, so a single bad assignment decision propagates to notification.",
+    "Inference: There may be an unresolved source-of-truth mismatch between owner-directory context reads and authoritative_owner_state; worker-visible evidence does not show which source the workflow is intended to trust."
+  ],
+  "evidence_references": [
+    "evidence.json#/runtime_events/0/lifecycle_claim",
+    "evidence.json#/reproduction_bundle/failure_specification/expected_behavior",
+    "evidence.json#/reproduction_bundle/failure_specification/targeted_verification/prohibited_behavior",
+    "evidence.json#/reproduction_bundle/redacted_inputs/inbound_events/0",
+    "evidence.json#/reproduction_bundle/fixtures/external_effects/0",
+    "evidence.json#/reproduction_bundle/fixtures/external_effects/1",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/crm_leads/0/assigned_owner_id",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/notifications/0/to",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/context_reads/0",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/routing_decisions/0",
+    "evidence.json#/reproduction_bundle/fixtures/external_state_snapshot/authoritative_owner_state/owners/0",
+    "evidence.json#/reproduction_bundle/reproduction"
+  ],
+  "missing_evidence": [
+    "Workflow implementation and routing logic.",
+    "Controller and fault-injection details.",
+    "Answer key.",
+    "Raw lead payload.",
+    "Definition of the authoritative owner source and whether the workflow is required to query it at decision time.",
+    "Logs showing whether a freshness check was attempted, skipped, or failed.",
+    "Configuration for owner-directory cache TTL or maximum_age_seconds enforcement."
+  ],
+  "recommended_next_investigation": "Inspect the lead routing decision path to determine whether it validates owner eligibility using a fresh source at decision time, whether maximum_age_seconds is enforced against context_reads, and whether notification sending is gated on established owner eligibility.",
+  "actions_taken": []
+}

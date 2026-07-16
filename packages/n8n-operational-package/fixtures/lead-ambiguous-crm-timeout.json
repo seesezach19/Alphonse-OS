@@ -1,0 +1,43 @@
+{
+  "lead_form_events": [
+    {
+      "event_id": "lead-event-2001-a",
+      "submission_id": "FORM-LEAD-2001",
+      "received_at": "2026-07-16T15:00:00.000Z",
+      "lead": {
+        "first_name": "Jordan",
+        "last_name": "Lee",
+        "email": "jordan.lee@harbor-electric.example",
+        "phone": "+1-410-555-0142",
+        "company": "Harbor Electric",
+        "service_need": "commercial maintenance agreement for multi-site electrical systems",
+        "monthly_budget": 4200,
+        "timeline_days": 21,
+        "source": "landing-page",
+        "utm_campaign": "commercial-maintenance-q3"
+      }
+    }
+  ],
+  "crm_initial": [],
+  "notifications_initial": [],
+  "fault": {
+    "kind": "response_lost_after_commit",
+    "attempt": 1,
+    "destination_committed": true
+  },
+  "expected": {
+    "defective": {
+      "crm_lead_count": 2,
+      "notification_count": 1,
+      "crm_create_attempt_count": 2,
+      "lead_state": "duplicate_created_after_uncertain_write"
+    },
+    "repaired": {
+      "crm_lead_count": 1,
+      "notification_count": 1,
+      "crm_create_attempt_count": 1,
+      "reconciliation_count": 1,
+      "lead_state": "uncertain_write_reconciled"
+    }
+  }
+}

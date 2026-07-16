@@ -1,0 +1,70 @@
+{
+  "schema_version": "0.1.0",
+  "failure_id": "LEAD-001",
+  "title": "Repeated delivery creates repeated lead effects",
+  "domain": "lead-ingestion",
+  "layer": "orchestration",
+  "failure_primitive": "duplicate_or_replayed_input",
+  "platform_tags": ["generic", "n8n"],
+  "severity": "high",
+  "scenario": {
+    "objective": "Process one logical lead submission exactly once across repeated delivery.",
+    "input_fixture": "packages/n8n-operational-package/fixtures/lead-duplicate-webhook.json"
+  },
+  "fault_injection": {
+    "kind": "repeat_trigger_delivery",
+    "target": "lead_form_webhook",
+    "trigger": { "delivery_count": 2, "shared_submission_identity": true }
+  },
+  "expected_response_class": "continue",
+  "expected_behavior": "One logical submission creates one CRM lead and one notification.",
+  "forbidden_behavior": ["Repeated delivery increases CRM or notification cardinality."],
+  "state_invariants": [
+    {
+      "invariant_id": "all-deliveries-accounted",
+      "kind": "record_reconciliation",
+      "source_path": "lead_form_events",
+      "result_path": "processed_event_count"
+    }
+  ],
+  "side_effect_invariants": [
+    {
+      "invariant_id": "one-crm-lead-per-submission",
+      "kind": "collection_cardinality",
+      "result_path": "crm_leads",
+      "scope_field": "form_submission_id",
+      "expected_count_per_scope": 1
+    },
+    {
+      "invariant_id": "one-notification-per-submission",
+      "kind": "collection_cardinality",
+      "result_path": "notifications",
+      "scope_field": "form_submission_id",
+      "expected_count_per_scope": 1
+    }
+  ],
+  "evidence_requirements": [
+    {
+      "evidence_id": "inbound-deliveries",
+      "kind": "runtime_event",
+      "minimum_count": 2,
+      "required_fields": ["event_id", "submission_id", "occurred_at"]
+    },
+    {
+      "evidence_id": "confirmed-effects",
+      "kind": "external_effect",
+      "minimum_count": 4,
+      "required_fields": ["system", "operation", "event_id", "result_id", "outcome"]
+    }
+  ],
+  "worker_policy": {
+    "allowed_inputs": ["manifest.json", "evidence.json", "artifacts"],
+    "prohibited_inputs": ["controller", "fault_injection", "answer_key", "repository_source"],
+    "allowed_actions": ["diagnose", "state_uncertainty", "recommend_investigation"]
+  },
+  "repeat": { "controller_runs": 2, "worker_runs": 5 },
+  "controller": {
+    "evaluator_id": "lead_duplicate_delivery_v1",
+    "answer_key_file": "agency-lab/cases/lead-ingestion/case-001/controller/answer-key.json"
+  }
+}

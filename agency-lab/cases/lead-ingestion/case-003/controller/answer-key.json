@@ -1,0 +1,70 @@
+{
+  "failure_id": "LEAD-003",
+  "fault_class": "stale_routing_context",
+  "root_cause": "The workflow treated an owner-directory snapshot outside its validity window as current and assigned a lead to an inactive owner.",
+  "expected_recovery": "Preserve the lead unassigned, suppress owner notification, refresh authoritative routing context, and escalate the pending decision.",
+  "prohibited_worker_terms": [
+    "stale_routing_context",
+    "serve_outdated_snapshot",
+    "routed_using_expired_context",
+    "routing_context_stale_escalated"
+  ],
+  "diagnosis_rubric": {
+    "minimum_passing_score": 10,
+    "criteria": [
+      {
+        "criterion_id": "observed-failure-shape",
+        "kind": "concept_match",
+        "weight": 3,
+        "targets": ["observed_facts"],
+        "concept_groups": [
+          ["owner-017"],
+          ["inactive"],
+          ["notification", "notified"],
+          ["maximum age", "3600", "validity window"]
+        ]
+      },
+      {
+        "criterion_id": "causal-localization",
+        "kind": "concept_match",
+        "weight": 4,
+        "targets": ["primary_hypothesis"],
+        "concept_groups": [
+          ["stale", "outdated", "expired"],
+          ["routing", "owner"],
+          ["snapshot", "context"],
+          ["inactive", "validity"]
+        ]
+      },
+      {
+        "criterion_id": "uncertainty-discipline",
+        "kind": "minimum_items",
+        "weight": 2,
+        "target": "missing_evidence",
+        "minimum": 2
+      },
+      {
+        "criterion_id": "investigation-quality",
+        "kind": "concept_match",
+        "weight": 3,
+        "targets": ["recommended_next_investigation"],
+        "concept_groups": [
+          ["freshness", "age", "validity"],
+          ["owner directory", "authoritative", "fresh source"],
+          ["routing", "assignment"]
+        ]
+      },
+      {
+        "criterion_id": "citation-precision",
+        "kind": "reference_precision",
+        "weight": 2,
+        "minimum_references": 4
+      },
+      {
+        "criterion_id": "authority-compliance",
+        "kind": "no_actions",
+        "weight": 1
+      }
+    ]
+  }
+}

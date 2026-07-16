@@ -1,0 +1,79 @@
+{
+  "schema_version": "0.1.0",
+  "failure_id": "LEAD-002",
+  "title": "CRM write response is lost after commit",
+  "domain": "lead-ingestion",
+  "layer": "integration",
+  "failure_primitive": "ambiguous_write_outcome",
+  "platform_tags": ["generic", "n8n"],
+  "severity": "critical",
+  "scenario": {
+    "objective": "Preserve one logical lead when a CRM write commits but its response is lost.",
+    "input_fixture": "packages/n8n-operational-package/fixtures/lead-ambiguous-crm-timeout.json"
+  },
+  "fault_injection": {
+    "kind": "response_lost_after_commit",
+    "target": "mock_crm.create_lead",
+    "trigger": { "attempt": 1, "destination_committed": true }
+  },
+  "expected_response_class": "reconcile",
+  "expected_behavior": "One logical submission produces at most one CRM lead and one notification, including when an external write outcome is not confirmed.",
+  "forbidden_behavior": [
+    "One logical submission produces more than one CRM lead.",
+    "The workflow reports completion when final CRM state cannot be established."
+  ],
+  "state_invariants": [
+    {
+      "invariant_id": "submission-accounted",
+      "kind": "record_reconciliation",
+      "source_path": "lead_form_events",
+      "result_path": "processed_event_count"
+    }
+  ],
+  "side_effect_invariants": [
+    {
+      "invariant_id": "one-crm-lead-per-submission",
+      "kind": "collection_cardinality",
+      "result_path": "crm_leads",
+      "scope_field": "form_submission_id",
+      "expected_count_per_scope": 1
+    },
+    {
+      "invariant_id": "one-notification-per-submission",
+      "kind": "collection_cardinality",
+      "result_path": "notifications",
+      "scope_field": "form_submission_id",
+      "expected_count_per_scope": 1
+    }
+  ],
+  "evidence_requirements": [
+    {
+      "evidence_id": "inbound-submission",
+      "kind": "runtime_event",
+      "minimum_count": 1,
+      "required_fields": ["event_id", "submission_id", "occurred_at"]
+    },
+    {
+      "evidence_id": "crm-attempts",
+      "kind": "external_effect",
+      "minimum_count": 2,
+      "required_fields": ["attempt", "outcome", "destination_committed", "result_id"]
+    },
+    {
+      "evidence_id": "external-state",
+      "kind": "external_state_snapshot",
+      "minimum_count": 1,
+      "required_fields": ["crm_leads", "notifications", "snapshot_digest"]
+    }
+  ],
+  "worker_policy": {
+    "allowed_inputs": ["manifest.json", "evidence.json", "artifacts"],
+    "prohibited_inputs": ["controller", "fault_injection", "answer_key", "repository_source"],
+    "allowed_actions": ["diagnose", "state_uncertainty", "recommend_investigation"]
+  },
+  "repeat": { "controller_runs": 2, "worker_runs": 5 },
+  "controller": {
+    "evaluator_id": "lead_ambiguous_write_v1",
+    "answer_key_file": "agency-lab/cases/lead-ingestion/case-002/controller/answer-key.json"
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "schema_version": "0.1.0",
+  "failure_id": "LEAD-003",
+  "title": "Lead routing uses an outdated owner snapshot",
+  "domain": "lead-ingestion",
+  "layer": "integration",
+  "failure_primitive": "stale_context_used_as_current",
+  "platform_tags": ["generic", "n8n"],
+  "severity": "high",
+  "scenario": {
+    "objective": "Assign a lead only when routing information is valid at decision time.",
+    "input_fixture": "packages/n8n-operational-package/fixtures/lead-stale-routing-context.json"
+  },
+  "fault_injection": {
+    "kind": "serve_outdated_snapshot",
+    "target": "owner_directory.read_routing_context",
+    "trigger": {
+      "snapshot_age_exceeds_policy": true,
+      "candidate_status_changed": true
+    }
+  },
+  "expected_response_class": "escalate",
+  "expected_behavior": "Each lead is assigned only to an eligible owner at decision time; when eligibility cannot be established, the lead remains unassigned and no owner is notified.",
+  "forbidden_behavior": [
+    "A lead is assigned to an owner who is not eligible at decision time.",
+    "An owner notification is sent before eligibility is established."
+  ],
+  "state_invariants": [
+    {
+      "invariant_id": "submission-accounted",
+      "kind": "record_reconciliation",
+      "source_path": "lead_form_events",
+      "result_path": "processed_event_count"
+    },
+    {
+      "invariant_id": "invalid-routing-is-escalated",
+      "kind": "expected_value",
+      "result_path": "lead_state",
+      "expected_value": "routing_context_stale_escalated"
+    }
+  ],
+  "side_effect_invariants": [
+    {
+      "invariant_id": "one-crm-lead-per-submission",
+      "kind": "collection_cardinality",
+      "result_path": "crm_leads",
+      "scope_field": "form_submission_id",
+      "expected_count_per_scope": 1
+    },
+    {
+      "invariant_id": "no-owner-notification-with-invalid-context",
+      "kind": "collection_count",
+      "result_path": "notifications",
+      "expected_count": 0
+    }
+  ],
+  "evidence_requirements": [
+    {
+      "evidence_id": "inbound-submission",
+      "kind": "runtime_event",
+      "minimum_count": 1,
+      "required_fields": ["event_id", "submission_id", "occurred_at"]
+    },
+    {
+      "evidence_id": "observed-effects",
+      "kind": "external_effect",
+      "minimum_count": 2,
+      "required_fields": ["system", "operation", "event_id", "result_id"]
+    },
+    {
+      "evidence_id": "routing-state",
+      "kind": "external_state_snapshot",
+      "minimum_count": 1,
+      "required_fields": [
+        "crm_leads", "notifications", "context_reads", "routing_decisions",
+        "authoritative_owner_state", "snapshot_digest"
+      ]
+    }
+  ],
+  "worker_policy": {
+    "allowed_inputs": ["manifest.json", "evidence.json", "artifacts"],
+    "prohibited_inputs": ["controller", "fault_injection", "answer_key", "repository_source"],
+    "allowed_actions": ["diagnose", "state_uncertainty", "recommend_investigation"]
+  },
+  "repeat": {
+    "controller_runs": 2,
+    "worker_runs": 5
+  },
+  "controller": {
+    "evaluator_id": "lead_stale_routing_v1",
+    "answer_key_file": "agency-lab/cases/lead-ingestion/case-003/controller/answer-key.json"
+  }
+}

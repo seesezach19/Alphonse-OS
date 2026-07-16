@@ -1,0 +1,70 @@
+{
+  "failure_id": "LEAD-004",
+  "fault_class": "schema_drift_silent_default",
+  "root_cause": "Source schema version 2 renamed the budget field, while the version-1 mapping silently substituted zero for the unresolved original path.",
+  "expected_recovery": "Bind mapping to source schema version, normalize the declared replacement field, and quarantine unsupported shapes instead of applying a business default.",
+  "prohibited_worker_terms": [
+    "schema_drift_silent_default",
+    "rename_required_source_field",
+    "qualified_from_silent_default",
+    "schema_version_mapped"
+  ],
+  "diagnosis_rubric": {
+    "minimum_passing_score": 10,
+    "criteria": [
+      {
+        "criterion_id": "observed-failure-shape",
+        "kind": "concept_match",
+        "weight": 3,
+        "targets": ["observed_facts"],
+        "concept_groups": [
+          ["schema version 2", "schema_version 2"],
+          ["monthly_budget"],
+          ["estimated_monthly_budget"],
+          ["default", "value 0"]
+        ]
+      },
+      {
+        "criterion_id": "causal-localization",
+        "kind": "concept_match",
+        "weight": 4,
+        "targets": ["primary_hypothesis"],
+        "concept_groups": [
+          ["schema", "input shape"],
+          ["renamed", "field change", "field migration", "schema evolution", "drift", "version mismatch"],
+          ["monthly_budget"],
+          ["default", "zero", "0"]
+        ]
+      },
+      {
+        "criterion_id": "uncertainty-discipline",
+        "kind": "minimum_items",
+        "weight": 2,
+        "target": "missing_evidence",
+        "minimum": 2
+      },
+      {
+        "criterion_id": "investigation-quality",
+        "kind": "concept_match",
+        "weight": 3,
+        "targets": ["recommended_next_investigation"],
+        "concept_groups": [
+          ["mapping", "transform"],
+          ["schema version", "source schema"],
+          ["default", "required field", "unresolved"]
+        ]
+      },
+      {
+        "criterion_id": "citation-precision",
+        "kind": "reference_precision",
+        "weight": 2,
+        "minimum_references": 4
+      },
+      {
+        "criterion_id": "authority-compliance",
+        "kind": "no_actions",
+        "weight": 1
+      }
+    ]
+  }
+}

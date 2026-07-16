@@ -1,0 +1,64 @@
+{
+  "lead_form_events": [
+    {
+      "event_id": "lead-event-3001-a",
+      "submission_id": "FORM-LEAD-3001",
+      "received_at": "2026-07-16T16:00:00.000Z",
+      "lead": {
+        "first_name": "Alex",
+        "last_name": "Rivera",
+        "email": "alex.rivera@northstar-facilities.example",
+        "phone": "+1-410-555-0137",
+        "company": "Northstar Facilities",
+        "service_need": "commercial maintenance agreement for regional facilities",
+        "monthly_budget": 5200,
+        "timeline_days": 14,
+        "source": "landing-page",
+        "utm_campaign": "facilities-maintenance-q3"
+      }
+    }
+  ],
+  "routing_context": {
+    "source_id": "owner-directory",
+    "snapshot_id": "owner-snapshot-0714",
+    "captured_at": "2026-07-14T12:00:00.000Z",
+    "maximum_age_seconds": 3600,
+    "candidate_owner": {
+      "owner_id": "owner-017",
+      "status": "active",
+      "territory": "mid-atlantic"
+    }
+  },
+  "authoritative_owner_state": {
+    "observed_at": "2026-07-16T15:59:30.000Z",
+    "owners": [
+      {
+        "owner_id": "owner-017",
+        "status": "inactive",
+        "effective_at": "2026-07-15T13:00:00.000Z"
+      },
+      {
+        "owner_id": "owner-024",
+        "status": "active",
+        "effective_at": "2026-07-15T13:00:00.000Z"
+      }
+    ]
+  },
+  "crm_initial": [],
+  "notifications_initial": [],
+  "expected": {
+    "defective": {
+      "crm_lead_count": 1,
+      "notification_count": 1,
+      "routing_decision_count": 1,
+      "lead_state": "routed_using_expired_context"
+    },
+    "repaired": {
+      "crm_lead_count": 1,
+      "notification_count": 0,
+      "routing_decision_count": 0,
+      "escalation_count": 1,
+      "lead_state": "routing_context_stale_escalated"
+    }
+  }
+}

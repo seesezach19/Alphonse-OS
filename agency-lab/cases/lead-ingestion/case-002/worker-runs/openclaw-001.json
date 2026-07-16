@@ -1,0 +1,30 @@
+{
+  "schema_version": "0.1.0",
+  "failure_id": "LEAD-002",
+  "observed_facts": [
+    "One inbound lead form event was processed for submission FORM-LEAD-2001.",
+    "One runtime execution reported success for the same correlation identity.",
+    "The first CRM create outcome was uncertain but destination_committed was true.",
+    "The second CRM create was confirmed and also committed.",
+    "Both CRM creates had a null idempotency key.",
+    "Final external state contained two CRM leads and one notification for the submission."
+  ],
+  "primary_hypothesis": "The workflow retried CRM creation after an uncertain but committed write without business-level idempotency or destination reconciliation, creating a duplicate lead.",
+  "confidence": "high",
+  "alternative_hypotheses": [
+    "The CRM integration may not enforce uniqueness unless the caller supplies an idempotency key.",
+    "The workflow may deduplicate inbound events but not outbound CRM writes.",
+    "The workflow may classify an uncertain outcome as a failed write and immediately attempt another create."
+  ],
+  "evidence_references": [
+    "manifest.json",
+    "evidence.json"
+  ],
+  "missing_evidence": [
+    "Workflow source and node-level execution logs are unavailable.",
+    "Raw CRM request and response records are unavailable.",
+    "The CRM idempotency and uniqueness semantics are unknown."
+  ],
+  "recommended_next_investigation": "Inspect the CRM create path to verify whether uncertain outcomes trigger a destination lookup before another write and whether a stable idempotency key is derived from submission identity.",
+  "actions_taken": []
+}

@@ -1,0 +1,93 @@
+{
+  "schema_version": "0.1.0",
+  "failure_id": "LEAD-004",
+  "title": "Lead field change silently alters qualification",
+  "domain": "lead-ingestion",
+  "layer": "integration",
+  "failure_primitive": "schema_drift_with_silent_default",
+  "platform_tags": ["generic", "n8n"],
+  "severity": "high",
+  "scenario": {
+    "objective": "Preserve qualification meaning when the declared lead input shape changes.",
+    "input_fixture": "packages/n8n-operational-package/fixtures/lead-schema-field-change.json"
+  },
+  "fault_injection": {
+    "kind": "rename_required_source_field",
+    "target": "lead_qualification_input",
+    "trigger": {
+      "source_schema_version": "2",
+      "mapping_contract_version_support": ["1"]
+    }
+  },
+  "expected_response_class": "quarantine",
+  "expected_behavior": "Qualification reflects source-declared business values. A required value that cannot be resolved is represented as unknown instead of silently becoming a valid business value.",
+  "forbidden_behavior": [
+    "An unresolved required source value is silently converted into a business value.",
+    "A successful runtime claim hides a material qualification-input mismatch."
+  ],
+  "state_invariants": [
+    {
+      "invariant_id": "submission-accounted",
+      "kind": "record_reconciliation",
+      "source_path": "lead_form_events",
+      "result_path": "processed_event_count"
+    },
+    {
+      "invariant_id": "declared-schema-is-mapped",
+      "kind": "expected_value",
+      "result_path": "lead_state",
+      "expected_value": "schema_version_mapped"
+    }
+  ],
+  "side_effect_invariants": [
+    {
+      "invariant_id": "one-crm-lead-per-submission",
+      "kind": "collection_cardinality",
+      "result_path": "crm_leads",
+      "scope_field": "form_submission_id",
+      "expected_count_per_scope": 1
+    },
+    {
+      "invariant_id": "qualified-lead-notification-preserved",
+      "kind": "collection_count",
+      "result_path": "notifications",
+      "expected_count": 1
+    }
+  ],
+  "evidence_requirements": [
+    {
+      "evidence_id": "inbound-submission",
+      "kind": "runtime_event",
+      "minimum_count": 1,
+      "required_fields": ["event_id", "submission_id", "occurred_at"]
+    },
+    {
+      "evidence_id": "observed-crm-effect",
+      "kind": "external_effect",
+      "minimum_count": 1,
+      "required_fields": ["system", "operation", "event_id", "result_id"]
+    },
+    {
+      "evidence_id": "mapping-state",
+      "kind": "external_state_snapshot",
+      "minimum_count": 1,
+      "required_fields": [
+        "crm_leads", "notifications", "source_schema_state",
+        "mapping_observations", "snapshot_digest"
+      ]
+    }
+  ],
+  "worker_policy": {
+    "allowed_inputs": ["manifest.json", "evidence.json", "artifacts"],
+    "prohibited_inputs": ["controller", "fault_injection", "answer_key", "repository_source"],
+    "allowed_actions": ["diagnose", "state_uncertainty", "recommend_investigation"]
+  },
+  "repeat": {
+    "controller_runs": 2,
+    "worker_runs": 5
+  },
+  "controller": {
+    "evaluator_id": "lead_schema_change_v1",
+    "answer_key_file": "agency-lab/cases/lead-ingestion/case-004/controller/answer-key.json"
+  }
+}
