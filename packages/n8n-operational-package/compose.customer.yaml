@@ -4,12 +4,15 @@ services:
       DIAGNOSTIC_RUNTIME_DETAIL_URL: http://n8n-runtime-adapter:5680
       DIAGNOSTIC_RUNTIME_DETAIL_TOKEN: ${N8N_DETAIL_ADAPTER_TOKEN:-local-n8n-detail-adapter-token-v1}
       DIAGNOSTIC_RUNTIME_DETAIL_POLICY: '{"policy_id":"alphonse.runtime.n8n.detail.v1","extract_paths":["input.order","input.customer_email","fixtures","output"],"redact_paths":["input.customer_email"],"omit_paths":["credentials","runtime.logs","input.internal_notes"],"replacement":"[REDACTED]"}'
-      N8N_REPAIR_DELIVERY_URL: ${N8N_REPAIR_DELIVERY_URL:-http://n8n:5678/api/v1}
+      N8N_REPAIR_DELIVERY_URL: ${N8N_REPAIR_DELIVERY_URL:-http://n8n-runtime-adapter:5680/api/v1}
       N8N_REPAIR_DELIVERY_API_KEY: ${N8N_REPAIR_DELIVERY_API_KEY:-local-customer-owned-n8n-api-key-v1}
       N8N_REPAIR_DELIVERY_CREDENTIAL_BINDING_REF: ${N8N_REPAIR_DELIVERY_CREDENTIAL_BINDING_REF:-customer-secret-store:n8n-repair-v1}
       N8N_REPAIR_DELIVERY_TIMEOUT_MS: ${N8N_REPAIR_DELIVERY_TIMEOUT_MS:-5000}
     volumes:
       - ./packages/n8n-operational-package:/app/packages/n8n-operational-package:ro
+    depends_on:
+      n8n-runtime-adapter:
+        condition: service_healthy
 
   n8n-runtime-adapter:
     image: node@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
@@ -19,8 +22,10 @@ services:
       N8N_DETAIL_ADAPTER_TOKEN: ${N8N_DETAIL_ADAPTER_TOKEN:-local-n8n-detail-adapter-token-v1}
       N8N_REPAIR_API_KEY: ${N8N_REPAIR_DELIVERY_API_KEY:-local-customer-owned-n8n-api-key-v1}
       N8N_ADAPTER_TEST_CONTROLS_ENABLED: "true"
+      N8N_ADAPTER_STATE_FILE: /var/lib/alphonse-n8n-adapter/state.json
     volumes:
       - ./packages/n8n-operational-package:/package:ro
+      - n8n-adapter-state:/var/lib/alphonse-n8n-adapter
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5680/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
       interval: 2s
@@ -60,3 +65,4 @@ services:
 
 volumes:
   n8n-customer-data:
+  n8n-adapter-state:

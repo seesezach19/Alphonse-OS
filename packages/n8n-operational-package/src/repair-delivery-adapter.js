@@ -151,10 +151,29 @@ function executableBehavior(value) {
 }
 
 export function createN8nRepairDeliveryAdapter({
-  baseUrl, apiKey, fetchImpl = fetch, requestTimeoutMs = 5000
+  baseUrl, apiKey, healthUrl, fetchImpl = fetch, requestTimeoutMs = 5000
 }) {
   const root = required(baseUrl, "baseUrl").replace(/\/$/, "");
+  const healthRoot = (healthUrl ?? root.replace(/\/api\/v1$/, "")).replace(/\/$/, "");
   const credential = required(apiKey, "apiKey");
+
+  async function checkHealth() {
+    let response;
+    try {
+      response = await fetchImpl(`${healthRoot}/healthz`, {
+        signal: AbortSignal.timeout(requestTimeoutMs),
+        headers: { accept: "application/json" }
+      });
+    } catch (error) {
+      throw new KernelError(503, "N8N_REPAIR_DELIVERY_UNAVAILABLE",
+        "Configured n8n repair delivery endpoint is unreachable.", { cause: error?.name ?? "network_error" });
+    }
+    if (!response.ok) {
+      throw new KernelError(503, "N8N_REPAIR_DELIVERY_UNAVAILABLE",
+        "Configured n8n repair delivery endpoint failed its health check.", { status: response.status });
+    }
+    return { status: "healthy", endpoint: healthRoot };
+  }
 
   async function request(path, init = {}) {
     const response = await fetchImpl(`${root}${path}`, {
@@ -426,6 +445,7 @@ export function createN8nRepairDeliveryAdapter({
 
   return {
     manifest: structuredClone(N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST),
+    checkHealth,
     inspect,
     snapshot,
     createCandidate,

@@ -61,25 +61,29 @@ export function createDiagnosticDatabase(connectionString) {
         request_digest: requestDigest,
         accepted_at: acceptedAt,
         operation_id: command.operation_id,
+        actor: { type: command.actor.type, id: command.actor.id },
+        authorization: command.actor.authorization ?? { mode: "service_or_scoped_agent" },
         ...applied.result,
         transition
       };
 
       await client.query(
         `INSERT INTO diagnostic_commands
-          (installation_id,command_id,request_digest,operation_id,actor_type,actor_id,result,accepted_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          (installation_id,command_id,request_digest,operation_id,actor_type,actor_id,
+           authorization_context,result,accepted_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [installationId, command.command_id, requestDigest, command.operation_id,
-          command.actor.type, command.actor.id, result, acceptedAt]
+          command.actor.type, command.actor.id, command.actor.authorization ?? {}, result, acceptedAt]
       );
       await client.query(
         `INSERT INTO diagnostic_transitions
           (transition_id,installation_id,diagnostic_sequence,aggregate_type,aggregate_id,transition_type,
-           from_revision,to_revision,command_id,actor_type,actor_id,payload,occurred_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+           from_revision,to_revision,command_id,actor_type,actor_id,authorization_context,payload,occurred_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [transitionId, installationId, sequence, applied.aggregateType, applied.aggregateId,
           applied.transitionType, transition.from_revision, transition.to_revision, command.command_id,
-          command.actor.type, command.actor.id, applied.transitionPayload ?? {}, acceptedAt]
+          command.actor.type, command.actor.id, command.actor.authorization ?? {},
+          applied.transitionPayload ?? {}, acceptedAt]
       );
       await client.query(
         `INSERT INTO diagnostic_outbox

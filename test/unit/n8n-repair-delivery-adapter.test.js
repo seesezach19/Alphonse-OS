@@ -42,6 +42,30 @@ function jsonResponse(value, status = 200) {
   });
 }
 
+test("n8n repair endpoint must pass a startup health check", async () => {
+  const calls = [];
+  const adapter = createN8nRepairDeliveryAdapter({
+    baseUrl: "http://n8n.test/api/v1",
+    apiKey: "customer-owned-key",
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return jsonResponse({ status: "healthy" });
+    }
+  });
+  assert.deepEqual(await adapter.checkHealth(), { status: "healthy", endpoint: "http://n8n.test" });
+  assert.deepEqual(calls, ["http://n8n.test/healthz"]);
+});
+
+test("n8n repair endpoint health failure is explicit", async () => {
+  const adapter = createN8nRepairDeliveryAdapter({
+    baseUrl: "http://n8n.test/api/v1",
+    apiKey: "customer-owned-key",
+    fetchImpl: async () => { throw new TypeError("unreachable"); }
+  });
+  await assert.rejects(adapter.checkHealth(),
+    (error) => error.code === "N8N_REPAIR_DELIVERY_UNAVAILABLE");
+});
+
 test("n8n repair preserves inventory_unknown and removes the false delay draft", () => {
   const candidate = materializeInventoryRepair(baseWorkflow, patch, "candidate-601");
   assert.equal(candidate.active, false);

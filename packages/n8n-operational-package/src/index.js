@@ -66,6 +66,146 @@ export function evaluateRepairedInventoryFixture(fixture) {
   };
 }
 
+function qualifyLead(lead) {
+  const budgetScore = lead.monthly_budget >= 2500 ? 40 : lead.monthly_budget >= 1000 ? 20 : 0;
+  const timelineScore = lead.timeline_days <= 30 ? 35 : lead.timeline_days <= 90 ? 15 : 0;
+  const need = `${lead.service_need ?? ""}`.toLowerCase();
+  const fitScore = need.includes("commercial") || need.includes("maintenance") ? 25 : 0;
+  const score = budgetScore + timelineScore + fitScore;
+  return {
+    score,
+    status: score >= 70 ? "qualified" : "needs_review",
+    route: score >= 70 ? "sales:commercial" : "sales:intake_review"
+  };
+}
+
+function duplicateSubmissionIds(events) {
+  const counts = new Map();
+  for (const event of events) {
+    counts.set(event.submission_id, (counts.get(event.submission_id) ?? 0) + 1);
+  }
+  return [...counts.entries()].filter(([, count]) => count > 1).map(([submissionId]) => submissionId);
+}
+
+export function evaluateDefectiveLeadFixture(fixture) {
+  const crmLeads = structuredClone(fixture.crm_initial ?? []);
+  const notifications = structuredClone(fixture.notifications_initial ?? []);
+  const externalEffects = [];
+  for (const [index, event] of fixture.lead_form_events.entries()) {
+    const qualification = qualifyLead(event.lead);
+    const crmLead = {
+      crm_lead_id: `crm-${String(index + 1).padStart(3, "0")}`,
+      form_submission_id: event.submission_id,
+      email: event.lead.email,
+      company: event.lead.company,
+      qualification,
+      created_from_event_id: event.event_id
+    };
+    crmLeads.push(crmLead);
+    externalEffects.push({
+      system: "mock_crm",
+      operation: "create_lead",
+      idempotency_key: null,
+      event_id: event.event_id,
+      result_id: crmLead.crm_lead_id
+    });
+    if (qualification.status === "qualified") {
+      const notification = {
+        notification_id: `notify-${String(index + 1).padStart(3, "0")}`,
+        form_submission_id: event.submission_id,
+        to: qualification.route,
+        subject: `Qualified lead: ${event.lead.company}`,
+        created_from_event_id: event.event_id
+      };
+      notifications.push(notification);
+      externalEffects.push({
+        system: "mailpit",
+        operation: "send_notification",
+        idempotency_key: null,
+        event_id: event.event_id,
+        result_id: notification.notification_id
+      });
+    }
+  }
+  const duplicates = duplicateSubmissionIds(fixture.lead_form_events);
+  return {
+    processed_event_count: fixture.lead_form_events.length,
+    crm_leads: crmLeads,
+    notifications,
+    duplicate_submission_ids: duplicates,
+    external_effects: externalEffects,
+    lead_state: duplicates.length > 0 ? "duplicate_created" : "created",
+    defect_path: duplicates.length > 0
+      ? "duplicate_webhook -> create_without_idempotency -> duplicate_crm_and_notification"
+      : "single_delivery"
+  };
+}
+
+export function evaluateRepairedLeadFixture(fixture) {
+  const crmLeads = structuredClone(fixture.crm_initial ?? []);
+  const notifications = structuredClone(fixture.notifications_initial ?? []);
+  const suppressed_duplicates = [];
+  const externalEffects = [];
+  for (const event of fixture.lead_form_events) {
+    const existing = crmLeads.find((lead) => lead.form_submission_id === event.submission_id);
+    if (existing) {
+      suppressed_duplicates.push({
+        event_id: event.event_id,
+        form_submission_id: event.submission_id,
+        reason: "duplicate_delivery"
+      });
+      continue;
+    }
+    const qualification = qualifyLead(event.lead);
+    const stableSuffix = event.submission_id.toLowerCase();
+    const crmLead = {
+      crm_lead_id: `crm-${stableSuffix}`,
+      form_submission_id: event.submission_id,
+      email: event.lead.email,
+      company: event.lead.company,
+      qualification,
+      created_from_event_id: event.event_id
+    };
+    crmLeads.push(crmLead);
+    externalEffects.push({
+      system: "mock_crm",
+      operation: "upsert_lead",
+      idempotency_key: event.submission_id,
+      event_id: event.event_id,
+      result_id: crmLead.crm_lead_id
+    });
+    if (qualification.status === "qualified") {
+      const notification = {
+        notification_id: `notify-${stableSuffix}`,
+        form_submission_id: event.submission_id,
+        to: qualification.route,
+        subject: `Qualified lead: ${event.lead.company}`,
+        created_from_event_id: event.event_id
+      };
+      notifications.push(notification);
+      externalEffects.push({
+        system: "mailpit",
+        operation: "send_notification",
+        idempotency_key: event.submission_id,
+        event_id: event.event_id,
+        result_id: notification.notification_id
+      });
+    }
+  }
+  return {
+    processed_event_count: fixture.lead_form_events.length,
+    crm_leads: crmLeads,
+    notifications,
+    duplicate_submission_ids: duplicateSubmissionIds(fixture.lead_form_events),
+    suppressed_duplicates,
+    external_effects: externalEffects,
+    lead_state: suppressed_duplicates.length > 0 ? "idempotent_duplicate_suppressed" : "created",
+    defect_path: suppressed_duplicates.length > 0
+      ? "duplicate_webhook -> idempotency_gate -> existing_lead_preserved"
+      : "single_delivery"
+  };
+}
+
 export function buildN8nRevisionMaterial({ packageManifest, workflow, reporter }) {
   const nodes = [...workflow.nodes, ...reporter.nodes].map((node) => ({
     node_type: node.type,

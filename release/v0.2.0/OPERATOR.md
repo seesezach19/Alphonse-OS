@@ -50,11 +50,11 @@ effect. Register a real workflow revision and configure its exact reporting iden
 
 ## Inspection
 
-Read `KERNEL_BOOTSTRAP_TOKEN` from `.env.release`, then set:
+Read `KERNEL_OWNER_TOKEN` from `.env.release`, then set:
 
 ```powershell
 $env:ALPHONSE_URL="http://127.0.0.1:3000"
-$env:ALPHONSE_TOKEN="<bootstrap-owner-token>"
+$env:ALPHONSE_TOKEN="<owner-token>"
 npm run diagnostic:cli -- get-case <case-id>
 npm run diagnostic:cli -- get-promotion <promotion-id>
 ```

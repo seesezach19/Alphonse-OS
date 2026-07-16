@@ -9,19 +9,21 @@ import { signRuntimeEventEnvelope } from "../src/runtime-event-envelope.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = path.join(root, "packages", "n8n-operational-package");
-const baseUrl = "http://127.0.0.1:43204";
-const project = `alphonse-v02-ticket04-${process.pid}`;
+const baseUrl = process.env.ALPHONSE_ACCEPTANCE_URL ?? "http://127.0.0.1:43204";
+const project = process.env.ALPHONSE_ACCEPTANCE_PROJECT ?? `alphonse-v02-ticket04-${process.pid}`;
 const adapterKeyId = "n8n-runtime-key-v1";
 const adapterSecret = "local-n8n-runtime-event-secret-with-sufficient-length-v1";
+const ownerToken = process.env.ALPHONSE_OWNER_TOKEN ?? "local-development-bootstrap-token";
 const composeFiles = ["-f", "compose.yaml", "-f", "packages/n8n-operational-package/compose.customer.yaml"];
 const environment = {
   ...process.env,
   COMPOSE_PROJECT_NAME: project,
-  KERNEL_PORT: "43204",
-  POSTGRES_PORT: "45504",
-  N8N_PORT: "45674",
+  KERNEL_PORT: process.env.ALPHONSE_ACCEPTANCE_KERNEL_PORT ?? "43204",
+  POSTGRES_PORT: process.env.ALPHONSE_ACCEPTANCE_POSTGRES_PORT ?? "45504",
+  N8N_PORT: process.env.ALPHONSE_ACCEPTANCE_N8N_PORT ?? "45674",
   ALPHONSE_URL: baseUrl,
   ALPHONSE_TOKEN: "local-development-bootstrap-token",
+  KERNEL_OWNER_TOKEN: ownerToken,
   DIAGNOSTIC_RUNTIME_ADAPTER_ID: "alphonse.n8n.runtime",
   DIAGNOSTIC_RUNTIME_ADAPTER_VERSION: "0.2.0",
   DIAGNOSTIC_RUNTIME_ADAPTER_KEY_ID: adapterKeyId,
@@ -30,7 +32,7 @@ const environment = {
   ALPHONSE_RUNTIME_ADAPTER_SECRET: adapterSecret
 };
 const headers = {
-  authorization: "Bearer local-development-bootstrap-token",
+  authorization: `Owner ${ownerToken}`,
   "content-type": "application/json"
 };
 let passed = false;
@@ -287,6 +289,9 @@ try {
   passed = true;
   console.log(JSON.stringify({
     ticket: "v0.2-04",
+    case_id: caseId,
+    revision_id: revisionId,
+    reproduction_bundle_id: firstBundle.bundle_id,
     case_state: caseView.projection.state,
     human_confirmed_specification: true,
     incomplete_attempts_preserved: 1,
@@ -303,5 +308,7 @@ try {
   if (!passed) {
     try { console.error(compose("logs", "--no-color", "postgres", "diagnostic-bootstrap", "kernel", "n8n-runtime-adapter").stdout); } catch {}
   }
-  try { compose("down", "--volumes", "--remove-orphans"); } catch {}
+  if (process.env.ALPHONSE_TICKET04_KEEP_STACK !== "1") {
+    try { compose("down", "--volumes", "--remove-orphans"); } catch {}
+  }
 }

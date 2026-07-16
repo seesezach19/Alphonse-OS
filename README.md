@@ -26,6 +26,24 @@ Butler uses local HTTP Basic authentication. Any username works; the development
 
 PostgreSQL migrations and the local Environment bootstrap run automatically. The named Docker volume preserves state across shutdown and restart.
 
+### Console Prototype
+
+The local Console currently uses V0.2-shaped demonstration data while its public-operation BFF is developed. It binds to loopback only and performs no Kernel or Diagnostic writes.
+
+```powershell
+npm install --prefix apps/console
+npm run console:dev
+```
+
+Open http://127.0.0.1:3200.
+
+Production and type checks:
+
+```powershell
+npm run console:typecheck
+npm run console:build
+```
+
 Ticket 01 uses a loopback-only bootstrap credential for its single profile write. Kernel derives the accountable Principal from that credential; callers cannot supply actor identity. Ticket 02 replaces this narrow bootstrap mechanism with durable Principals, Agent Passports, and confirmed Work Intent.
 
 ```powershell
@@ -244,5 +262,38 @@ See [docs/release-v0.2.md](docs/release-v0.2.md) and the packaged `OPERATOR.md` 
 `GET /kernel/v0/bootstrap` is the canonical discovery entry point. Its Operation Descriptors define available transports, schemas, authority/effect classes, preconditions, outcomes, idempotency, emitted events, and next operations. HTTP is an adapter over this contract; direct database access is not a platform interface.
 
 `GET /diagnostic/v0/bootstrap` is the separate Diagnostic Protocol discovery entry point when the Diagnostic Plane is configured. HTTP and `diagnostic:cli` are adapters over the same public operations; direct Diagnostic database access is not a platform interface.
+
+## OpenClaw diagnostic workspace
+
+Provision an existing host OpenClaw workspace as a diagnosis-only worker:
+
+```powershell
+$env:OPENCLAW_WORKSPACE_DIR="C:\path\to\openclaw-workspace"
+$env:OPENCLAW_RUNTIME_KIND="host"
+npm run openclaw:provision
+```
+
+For a Docker-managed OpenClaw client:
+
+```powershell
+$env:OPENCLAW_CLIENT_DIR="C:\path\to\openclaw-client"
+$env:OPENCLAW_RUNTIME_KIND="docker"
+npm run openclaw:provision
+docker compose -f "$env:OPENCLAW_CLIENT_DIR\docker-compose.yml" -f "$env:OPENCLAW_CLIENT_DIR\docker-compose.alphonse.yml" up -d
+```
+
+The provisioner keeps model credentials in OpenClaw, installs the workspace-local `alphonse-diagnostic` skill, injects a short-lived Alphonse Agent token through `.env.alphonse`, and leaves one exact diagnosis request ready. The Passport permits only `diagnostic_analysis`; failure truth, evidence mutation, repair, verification, promotion, target changes, and external effects remain ungranted.
+
+The installed helper also reads `.alphonse/diagnostic.env` inside the workspace and verifies the exact request before
+provisioning succeeds. A missing assignment fails closed; the worker never substitutes Owner or bootstrap authority.
+
+## Runtime trust modes
+
+- **Governed worker:** exact Agent Passport, isolated runtime, no host administration or Owner credentials.
+- **Trusted operator:** agent executes selected Diagnostic Owner operations through an expiring passport. Requests bind
+  the sponsoring human, executing agent, channel, instruction digest, and authorization time.
+
+Set `KERNEL_OWNER_TOKEN` separately from `KERNEL_BOOTSTRAP_TOKEN` outside compatibility-only local development. Normal
+operator activity uses the Owner credential or an `Operator` passport; worker work uses only `Agent` credentials.
 
 Butler reads Kernel state through the canonical `GET /kernel/v0/accountable-work/overview` operation. Its shell has no database access or privileged write path.

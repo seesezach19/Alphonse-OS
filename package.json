@@ -9,6 +9,11 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "console:dev": "npm --prefix apps/console run dev",
+    "console:build": "npm --prefix apps/console run build",
+    "console:typecheck": "npm --prefix apps/console run typecheck",
+    "openclaw:provision": "node scripts/provision-openclaw-diagnostic.js",
+    "test:openclaw-client": "node --test test/unit/openclaw-diagnostic-client.test.js",
     "diagnostic:cli": "node src/diagnostic-cli.js",
     "local:up": "docker compose up --build --wait",
     "local:down": "docker compose down",

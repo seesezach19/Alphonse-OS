@@ -11,6 +11,7 @@ import {
 } from "./diagnostic-repair-worker-contracts.js";
 import { KernelError } from "./errors.js";
 import { requireRepairDeliveryOperation } from "./repair-delivery-adapter-contract.js";
+import { isAuthorizedOwner } from "./trusted-operator.js";
 
 function parseCommand(value, operationId) {
   const envelope = requireExact(value, "command", ["command_id", "operation_id", "input"]);
@@ -25,7 +26,7 @@ function parseCommand(value, operationId) {
 }
 
 function requireOwner(actor) {
-  if (actor?.type !== "human" || !actor.id) {
+  if (!isAuthorizedOwner(actor) || !actor.id) {
     throw new KernelError(403, "OWNER_AUTHORITY_REQUIRED",
       "Promotion requires an authenticated customer Owner.");
   }

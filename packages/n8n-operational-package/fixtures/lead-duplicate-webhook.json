@@ -1,0 +1,55 @@
+{
+  "lead_form_events": [
+    {
+      "event_id": "lead-event-1001-a",
+      "submission_id": "FORM-LEAD-1001",
+      "received_at": "2026-07-16T14:00:00.000Z",
+      "lead": {
+        "first_name": "Maya",
+        "last_name": "Patel",
+        "email": "maya.patel@ridgeview-hvac.example",
+        "phone": "+1-410-555-0199",
+        "company": "Ridgeview HVAC",
+        "service_need": "commercial maintenance plan for multi-site HVAC service",
+        "monthly_budget": 3500,
+        "timeline_days": 14,
+        "source": "landing-page",
+        "utm_campaign": "hvac-maintenance-q3"
+      }
+    },
+    {
+      "event_id": "lead-event-1001-b",
+      "submission_id": "FORM-LEAD-1001",
+      "received_at": "2026-07-16T14:00:04.000Z",
+      "lead": {
+        "first_name": "Maya",
+        "last_name": "Patel",
+        "email": "maya.patel@ridgeview-hvac.example",
+        "phone": "+1-410-555-0199",
+        "company": "Ridgeview HVAC",
+        "service_need": "commercial maintenance plan for multi-site HVAC service",
+        "monthly_budget": 3500,
+        "timeline_days": 14,
+        "source": "landing-page",
+        "utm_campaign": "hvac-maintenance-q3"
+      }
+    }
+  ],
+  "crm_initial": [],
+  "notifications_initial": [],
+  "expected": {
+    "defective": {
+      "crm_lead_count": 2,
+      "notification_count": 2,
+      "lead_state": "duplicate_created",
+      "defect_path": "duplicate_webhook -> create_without_idempotency -> duplicate_crm_and_notification"
+    },
+    "repaired": {
+      "crm_lead_count": 1,
+      "notification_count": 1,
+      "suppressed_duplicate_count": 1,
+      "lead_state": "idempotent_duplicate_suppressed",
+      "required_idempotency_key": "FORM-LEAD-1001"
+    }
+  }
+}

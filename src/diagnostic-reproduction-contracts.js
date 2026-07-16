@@ -1,5 +1,6 @@
 import { sha256Digest } from "./canonical-json.js";
 import { KernelError } from "./errors.js";
+import { isAuthorizedOwner } from "./trusted-operator.js";
 
 function fail(code, message, details = {}) {
   throw new KernelError(400, code, message, details);
@@ -35,7 +36,7 @@ function strings(value, field, maximumItems = 20) {
 }
 
 export function validateFailureSpecification(value, actor) {
-  if (actor?.type !== "human") {
+  if (!isAuthorizedOwner(actor)) {
     fail("HUMAN_CONFIRMATION_REQUIRED", "Failure Specifications require explicit human confirmation.");
   }
   string(actor.id, "confirming actor id", 200);

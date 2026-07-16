@@ -1,0 +1,75 @@
+{
+  "id": "LeadIngestionDefect1",
+  "name": "Lead Ingestion - Defective Duplicate Webhook Handling",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "id": "lead-manual-trigger",
+      "name": "Start Fixture",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {}
+    },
+    {
+      "id": "lead-load-fixture",
+      "name": "Load Duplicate Lead Webhook Fixture",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0],
+      "parameters": {
+        "jsCode": "const lead = { first_name: 'Maya', last_name: 'Patel', email: 'maya.patel@ridgeview-hvac.example', phone: '+1-410-555-0199', company: 'Ridgeview HVAC', service_need: 'commercial maintenance plan for multi-site HVAC service', monthly_budget: 3500, timeline_days: 14, source: 'landing-page', utm_campaign: 'hvac-maintenance-q3' };\nreturn [{ json: { lead_form_events: [{ event_id: 'lead-event-1001-a', submission_id: 'FORM-LEAD-1001', received_at: '2026-07-16T14:00:00.000Z', lead }, { event_id: 'lead-event-1001-b', submission_id: 'FORM-LEAD-1001', received_at: '2026-07-16T14:00:04.000Z', lead }], crm_initial: [], notifications_initial: [] } }];"
+      }
+    },
+    {
+      "id": "lead-defective-create",
+      "name": "Defective Create CRM Lead Per Delivery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0],
+      "parameters": {
+        "jsCode": "function qualify(lead) {\n  const budgetScore = lead.monthly_budget >= 2500 ? 40 : lead.monthly_budget >= 1000 ? 20 : 0;\n  const timelineScore = lead.timeline_days <= 30 ? 35 : lead.timeline_days <= 90 ? 15 : 0;\n  const need = `${lead.service_need ?? ''}`.toLowerCase();\n  const fitScore = need.includes('commercial') || need.includes('maintenance') ? 25 : 0;\n  const score = budgetScore + timelineScore + fitScore;\n  return { score, status: score >= 70 ? 'qualified' : 'needs_review', route: score >= 70 ? 'sales:commercial' : 'sales:intake_review' };\n}\nconst crm_leads = [...$json.crm_initial];\nconst notifications = [...$json.notifications_initial];\nconst external_effects = [];\n$json.lead_form_events.forEach((event, index) => {\n  const qualification = qualify(event.lead);\n  const crmLead = { crm_lead_id: `crm-${String(index + 1).padStart(3, '0')}`, form_submission_id: event.submission_id, email: event.lead.email, company: event.lead.company, qualification, created_from_event_id: event.event_id };\n  crm_leads.push(crmLead);\n  external_effects.push({ system: 'mock_crm', operation: 'create_lead', idempotency_key: null, event_id: event.event_id, result_id: crmLead.crm_lead_id });\n  if (qualification.status === 'qualified') {\n    const notification = { notification_id: `notify-${String(index + 1).padStart(3, '0')}`, form_submission_id: event.submission_id, to: qualification.route, subject: `Qualified lead: ${event.lead.company}`, created_from_event_id: event.event_id };\n    notifications.push(notification);\n    external_effects.push({ system: 'mailpit', operation: 'send_notification', idempotency_key: null, event_id: event.event_id, result_id: notification.notification_id });\n  }\n});\nreturn [{ json: { processed_event_count: $json.lead_form_events.length, crm_leads, notifications, duplicate_submission_ids: ['FORM-LEAD-1001'], external_effects, lead_state: 'duplicate_created', defect_path: 'duplicate_webhook -> create_without_idempotency -> duplicate_crm_and_notification' } }];"
+      }
+    },
+    {
+      "id": "lead-build-event",
+      "name": "Build Minimal Runtime Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 0],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst result = $json;\nconst executionId = String($execution.id);\nconst payloadDigest = `sha256:${crypto.createHash('sha256').update(JSON.stringify(result)).digest('hex')}`;\nreturn [{ json: { result, runtime_event: { schema_version: '0.2.0', adapter: { adapter_id: 'alphonse.n8n.runtime', adapter_version: '0.2.0' }, workflow_id: $env.ALPHONSE_WORKFLOW_ID, revision_id: $env.ALPHONSE_REVISION_ID, external_execution_id: `n8n-${executionId}`, event_id: `n8n-${executionId}-succeeded`, event_sequence: 1, lifecycle_claim: 'succeeded', correlation_id: 'lead-FORM-LEAD-1001', idempotency_key: `n8n-${executionId}:1`, occurred_at: new Date().toISOString(), payload: { digest: payloadDigest, reference: null } } } }];"
+      }
+    },
+    {
+      "id": "lead-report-event",
+      "name": "Report Successful Execution",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1080, 0],
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "AlphonseReport01", "mode": "id" },
+        "workflowInputs": { "mappingMode": "passThrough", "value": {}, "matchingColumns": [], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": true },
+        "options": { "waitForSubWorkflow": true }
+      }
+    },
+    {
+      "id": "lead-complete",
+      "name": "Complete Locally",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 0],
+      "parameters": {
+        "jsCode": "return [{ json: { n8n_status: 'succeeded', alphonse_receipt: $json, delivery: { channel: 'mock_crm_and_mailpit', sent: true } } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Start Fixture": { "main": [[{ "node": "Load Duplicate Lead Webhook Fixture", "type": "main", "index": 0 }]] },
+    "Load Duplicate Lead Webhook Fixture": { "main": [[{ "node": "Defective Create CRM Lead Per Delivery", "type": "main", "index": 0 }]] },
+    "Defective Create CRM Lead Per Delivery": { "main": [[{ "node": "Build Minimal Runtime Event", "type": "main", "index": 0 }]] },
+    "Build Minimal Runtime Event": { "main": [[{ "node": "Report Successful Execution", "type": "main", "index": 0 }]] },
+    "Report Successful Execution": { "main": [[{ "node": "Complete Locally", "type": "main", "index": 0 }]] }
+  }
+}

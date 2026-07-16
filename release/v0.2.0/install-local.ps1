@@ -25,6 +25,7 @@ if (-not (Test-Path $envFile)) {
     KERNEL_ENVIRONMENT_ID = [guid]::NewGuid().ToString()
     KERNEL_ENVIRONMENT_NAME = "Local_Development"
     KERNEL_BOOTSTRAP_TOKEN = New-LocalSecret
+    KERNEL_OWNER_TOKEN = New-LocalSecret
     KERNEL_PACKAGE_SIGNING_SECRET = New-LocalSecret
     KERNEL_WORKLOAD_GRANT_SIGNING_SECRET = New-LocalSecret
     SUBSTRATE_SERVICE_TOKEN = New-LocalSecret

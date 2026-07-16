@@ -1,11 +1,13 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import http from "node:http";
+import path from "node:path";
 
 const port = Number(process.env.PORT ?? 5680);
 const token = process.env.N8N_DETAIL_ADAPTER_TOKEN;
 const repairApiKey = process.env.N8N_REPAIR_API_KEY ?? "local-customer-owned-n8n-api-key-v1";
 const testControlsEnabled = process.env.N8N_ADAPTER_TEST_CONTROLS_ENABLED === "true";
+const stateFile = process.env.N8N_ADAPTER_STATE_FILE;
 if (!token) throw new Error("N8N_DETAIL_ADAPTER_TOKEN is required.");
 const baseWorkflow = {
   ...JSON.parse(await readFile(new URL("../workflows/inventory-follow-up-defective.json", import.meta.url), "utf8")),
@@ -14,10 +16,41 @@ const baseWorkflow = {
   updatedAt: "2026-01-01T00:00:00.000Z",
   versionId: "fixture-base-v1"
 };
-const workflows = new Map([[baseWorkflow.id, baseWorkflow]]);
-let candidateSequence = 0;
-let promotionSequence = 0;
+async function loadState() {
+  if (!stateFile) return null;
+  try {
+    const parsed = JSON.parse(await readFile(stateFile, "utf8"));
+    if (!Array.isArray(parsed.workflows) || !Number.isInteger(parsed.candidate_sequence) ||
+        !Number.isInteger(parsed.promotion_sequence)) throw new Error("invalid state shape");
+    return parsed;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new Error(`Unable to load n8n adapter state: ${error.message}`);
+  }
+}
+
+const persisted = await loadState();
+const workflows = new Map((persisted?.workflows ?? [baseWorkflow]).map((workflow) => [workflow.id, workflow]));
+let candidateSequence = persisted?.candidate_sequence ?? 0;
+let promotionSequence = persisted?.promotion_sequence ?? 0;
 let nextPromotionMode = "normal";
+let persistenceQueue = Promise.resolve();
+
+async function persistState() {
+  if (!stateFile) return;
+  persistenceQueue = persistenceQueue.then(async () => {
+    await mkdir(path.dirname(stateFile), { recursive: true });
+    const temporary = `${stateFile}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify({
+      schema_version: "0.2.0",
+      candidate_sequence: candidateSequence,
+      promotion_sequence: promotionSequence,
+      workflows: [...workflows.values()]
+    }, null, 2)}\n`, "utf8");
+    await rename(temporary, stateFile);
+  });
+  await persistenceQueue;
+}
 
 const policy = Object.freeze({
   policy_id: "alphonse.runtime.n8n.detail.v1",
@@ -102,7 +135,11 @@ function canonicalize(value) {
 const server = http.createServer(async (request, response) => {
   try {
     if (request.method === "GET" && request.url === "/healthz") {
-      return send(response, 200, { status: "healthy", api: "alphonse.n8n.runtime.detail/0.2.0" });
+      return send(response, 200, {
+        status: "healthy",
+        api: "alphonse.n8n.runtime.detail/0.2.0",
+        state_persistence: stateFile ? "configured" : "ephemeral"
+      });
     }
     if (testControlsEnabled && request.method === "POST" && request.url === "/test/v0/promotion-mode") {
       if (!authenticated(request)) return send(response, 403, { error: { code: "AUTHENTICATION_FAILED" } });
@@ -115,8 +152,12 @@ const server = http.createServer(async (request, response) => {
     }
     if (testControlsEnabled && request.method === "POST" && request.url === "/test/v0/reset-workflow") {
       if (!authenticated(request)) return send(response, 403, { error: { code: "AUTHENTICATION_FAILED" } });
+      workflows.clear();
       workflows.set(baseWorkflow.id, structuredClone(baseWorkflow));
+      candidateSequence = 0;
+      promotionSequence = 0;
       nextPromotionMode = "normal";
+      await persistState();
       return send(response, 200, { reset: true, workflow_id: baseWorkflow.id });
     }
     if (request.url?.startsWith("/api/v1/workflows")) {
@@ -145,6 +186,7 @@ const server = http.createServer(async (request, response) => {
           versionId: `fixture-candidate-v${candidateSequence}`
         };
         workflows.set(id, created);
+        await persistState();
         return send(response, 200, created);
       }
       if (request.method === "PUT" && /^\/api\/v1\/workflows\/[^/?]+$/.test(request.url)) {
@@ -175,6 +217,7 @@ const server = http.createServer(async (request, response) => {
           updated.settings = { ...updated.settings, injectedTargetMismatch: true };
         }
         workflows.set(workflowId, updated);
+        await persistState();
         if (mode !== "normal") await new Promise((resolve) => setTimeout(resolve, 1_500));
         return send(response, 200, updated);
       }

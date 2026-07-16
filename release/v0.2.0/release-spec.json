@@ -58,7 +58,8 @@
     "005_repair_delivery.sql",
     "006_verification.sql",
     "007_promotions.sql",
-    "008_diagnostic_workers.sql"
+    "008_diagnostic_workers.sql",
+    "009_command_authorization.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

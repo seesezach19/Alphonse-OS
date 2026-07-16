@@ -8,7 +8,9 @@ import {
   adapterHealthProjection,
   buildN8nRevisionMaterial,
   evaluateDefectiveInventoryFixture,
+  evaluateDefectiveLeadFixture,
   evaluateRepairedInventoryFixture,
+  evaluateRepairedLeadFixture,
   validateN8nOperationalPackage
 } from "../../packages/n8n-operational-package/src/index.js";
 import { assertRepairDeliveryAdapterManifest } from "../../src/repair-delivery-adapter-contract.js";
@@ -91,6 +93,44 @@ test("repaired evaluator preserves unknown inventory and routes human review", a
   assert.equal(result.draft, null);
   assert.equal(result.review_reason, "missing_inventory_data");
   assert.equal(result.delivery.sent, false);
+});
+
+test("lead ingestion fixture demonstrates duplicate webhook external effects", async () => {
+  const fixture = await json("fixtures/lead-duplicate-webhook.json");
+  const result = evaluateDefectiveLeadFixture(fixture);
+  assert.equal(result.processed_event_count, 2);
+  assert.equal(result.crm_leads.length, fixture.expected.defective.crm_lead_count);
+  assert.equal(result.notifications.length, fixture.expected.defective.notification_count);
+  assert.deepEqual(result.duplicate_submission_ids, ["FORM-LEAD-1001"]);
+  assert.equal(result.lead_state, "duplicate_created");
+  assert.equal(result.defect_path,
+    "duplicate_webhook -> create_without_idempotency -> duplicate_crm_and_notification");
+  assert.equal(result.external_effects.filter((effect) => effect.operation === "create_lead").length, 2);
+  assert.equal(result.external_effects.some((effect) => effect.idempotency_key), false);
+});
+
+test("lead ingestion repaired evaluator suppresses duplicate delivery idempotently", async () => {
+  const fixture = await json("fixtures/lead-duplicate-webhook.json");
+  const result = evaluateRepairedLeadFixture(fixture);
+  assert.equal(result.processed_event_count, 2);
+  assert.equal(result.crm_leads.length, fixture.expected.repaired.crm_lead_count);
+  assert.equal(result.notifications.length, fixture.expected.repaired.notification_count);
+  assert.equal(result.suppressed_duplicates.length, fixture.expected.repaired.suppressed_duplicate_count);
+  assert.equal(result.lead_state, "idempotent_duplicate_suppressed");
+  assert.equal(result.external_effects.length, 2);
+  assert.equal(result.external_effects.every((effect) =>
+    effect.idempotency_key === fixture.expected.repaired.required_idempotency_key), true);
+});
+
+test("lead ingestion n8n reference workflow is a local-only defective lab target", async () => {
+  const workflow = await json("workflows/lead-ingestion-defective.json");
+  const types = new Set(workflow.nodes.map((node) => node.type));
+  assert.equal(workflow.id, "LeadIngestionDefect1");
+  assert.equal(workflow.active, false);
+  assert.ok(types.has("n8n-nodes-base.code"));
+  assert.ok(types.has("n8n-nodes-base.executeWorkflow"));
+  assert.match(JSON.stringify(workflow), /duplicate_webhook -> create_without_idempotency/);
+  assert.doesNotMatch(JSON.stringify(workflow), /api_key|access_token|credential_value/i);
 });
 
 test("adapter mapping binds exact workflow, runtime, nodes, model, configuration, and fingerprint rules", async () => {

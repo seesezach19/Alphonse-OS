@@ -66,7 +66,7 @@ try {
 
   const credentials = parseEnvironment(firstEnvironmentText);
   for (const name of [
-    "POSTGRES_PASSWORD", "DIAGNOSTIC_DATABASE_PASSWORD", "KERNEL_BOOTSTRAP_TOKEN",
+    "POSTGRES_PASSWORD", "DIAGNOSTIC_DATABASE_PASSWORD", "KERNEL_BOOTSTRAP_TOKEN", "KERNEL_OWNER_TOKEN",
     "DIAGNOSTIC_RUNTIME_ADAPTER_SECRET", "N8N_DETAIL_ADAPTER_TOKEN",
     "N8N_REPAIR_DELIVERY_API_KEY", "VERIFICATION_RUNNER_SIGNING_SECRET", "N8N_ENCRYPTION_KEY"
   ]) assert.ok(credentials[name]?.length >= 32, `${name} was not generated safely.`);

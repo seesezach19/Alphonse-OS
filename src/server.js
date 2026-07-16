@@ -40,6 +40,7 @@ import { getWorkflowRuntimeAdapterContract } from "./workflow-runtime-adapter-co
 import { getRepairDeliveryAdapterContract } from "./repair-delivery-adapter-contract.js";
 import { getVerificationRunnerContract } from "./diagnostic-verification-contracts.js";
 import { createVerificationRunnerClient } from "./verification-runner-client.js";
+import { authorizeTrustedOperator, directOwnerActor } from "./trusted-operator.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const databaseUrl = process.env.DATABASE_URL;
@@ -78,6 +79,7 @@ const environmentId = process.env.KERNEL_ENVIRONMENT_ID ?? "00000000-0000-4000-8
 const environmentName = process.env.KERNEL_ENVIRONMENT_NAME ?? "Local Development";
 const environmentClass = process.env.KERNEL_ENVIRONMENT_CLASS ?? "development";
 const bootstrapToken = process.env.KERNEL_BOOTSTRAP_TOKEN;
+const ownerToken = process.env.KERNEL_OWNER_TOKEN ?? bootstrapToken;
 const bootstrapPrincipalId = process.env.KERNEL_BOOTSTRAP_PRINCIPAL_ID ?? "local-bootstrap-operator";
 const dataPlaneServiceToken = process.env.DATA_PLANE_SERVICE_TOKEN;
 const dataPlaneReceiptSecret = process.env.DATA_PLANE_RECEIPT_SECRET;
@@ -176,6 +178,7 @@ if (diagnosticDatabase) {
       baseUrl: n8nRepairDeliveryUrl, apiKey: n8nRepairDeliveryApiKey,
       requestTimeoutMs: n8nRepairDeliveryTimeoutMs
     });
+    await repairDeliveryAdapter.checkHealth();
     diagnosticRepairDeliveryService = createDiagnosticRepairDeliveryService({
       database: diagnosticDatabase,
       artifactStore: diagnosticArtifactStore,
@@ -283,6 +286,9 @@ function authenticateBootstrapOperator(request) {
       "Agent Passports cannot invoke customer Owner operations.");
   }
   let credential = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
+  if (authorization?.startsWith("Owner ")) {
+    credential = authorization.slice("Owner ".length);
+  }
   if (authorization?.startsWith("Basic ")) {
     credential = Buffer.from(authorization.slice("Basic ".length), "base64").toString("utf8").split(":").slice(1).join(":");
   }
@@ -291,12 +297,21 @@ function authenticateBootstrapOperator(request) {
   }
 
   const supplied = Buffer.from(credential, "utf8");
-  const expected = Buffer.from(bootstrapToken, "utf8");
+  const expected = Buffer.from(ownerToken, "utf8");
   if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
     throw new KernelError(403, "INVALID_BOOTSTRAP_CREDENTIAL", "Bootstrap operator credential is invalid.");
   }
 
   return { type: "human", id: bootstrapPrincipalId };
+}
+
+async function authenticateDiagnosticOwner(request, operationId) {
+  const authorization = request.headers.authorization;
+  if (authorization?.startsWith("Operator ")) {
+    const passport = await identityIntent.authenticateAgent(authorization.slice("Operator ".length));
+    return authorizeTrustedOperator(passport, operationId, request.headers).actor;
+  }
+  return directOwnerActor(authenticateBootstrapOperator(request));
 }
 
 function sendCommandResult(response, accepted) {
@@ -416,7 +431,8 @@ async function route(request, response) {
       status: "healthy",
       protocol_version: PROTOCOL_VERSION,
       diagnostic_plane: diagnosticDatabase ? "healthy" : "not_configured",
-      diagnostic_runtime: diagnosticRuntimeService ? "healthy" : "not_configured"
+      diagnostic_runtime: diagnosticRuntimeService ? "healthy" : "not_configured",
+      diagnostic_repair_delivery: diagnosticRepairDeliveryService ? "healthy" : "not_configured"
     });
   }
 
@@ -480,7 +496,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/agent-workflows") {
     const service = requireDiagnosticPlane();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.agent_workflow.register");
     return sendCommandResult(response, await service.registerWorkflow(await readJson(request, 512 * 1024), actor));
   }
 
@@ -494,7 +510,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/agent-revisions") {
     const service = requireDiagnosticPlane();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.agent_revision.register");
     return sendCommandResult(response, await service.registerRevision(await readJson(request, 512 * 1024), actor));
   }
 
@@ -548,20 +564,20 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/cases") {
     const service = requireDiagnosticReproduction();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.case.report_failure");
     return sendCommandResult(response, await service.reportFailure(await readJson(request, 64 * 1024), actor));
   }
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/failure-specifications") {
     const service = requireDiagnosticReproduction();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.failure_specification.confirm");
     return sendCommandResult(response,
       await service.confirmFailureSpecification(await readJson(request, 64 * 1024), actor));
   }
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/reproductions") {
     const service = requireDiagnosticReproduction();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.reproduction.create");
     return sendCommandResult(response, await service.createReproduction(await readJson(request, 64 * 1024), actor));
   }
 
@@ -579,7 +595,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/diagnosis-requests") {
     const service = requireDiagnosticDiagnosis();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.diagnosis_request.create");
     return sendCommandResult(response, await service.createRequest(await readJson(request, 64 * 1024), actor));
   }
 
@@ -609,7 +625,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && /^\/diagnostic\/v0\/diagnosis-proposals\/[^/]+\/reviews$/.test(url.pathname)) {
     const service = requireDiagnosticDiagnosis();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.diagnosis_proposal.review");
     const body = await readJson(request, 64 * 1024);
     if (body?.input?.proposal_id !== decodeURIComponent(url.pathname.split("/").at(-2))) {
       throw new KernelError(409, "DIAGNOSIS_PROPOSAL_ROUTE_MISMATCH", "Route proposal ID must match command input.");
@@ -635,7 +651,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/repair-tasks") {
     const service = requireDiagnosticRepairWorker();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.repair_task.create");
     return sendCommandResult(response, await service.createTask(await readJson(request, 64 * 1024), actor));
   }
 
@@ -675,7 +691,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && /^\/diagnostic\/v0\/repair-tasks\/[^/]+\/cancel$/.test(url.pathname)) {
     const service = requireDiagnosticRepairWorker();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.repair_task.cancel");
     const body = requireRouteTaskMatch(url.pathname, await readJson(request, 64 * 1024));
     return sendCommandResult(response, await service.cancelTask(body, actor));
   }
@@ -714,7 +730,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/repair-delivery-bindings") {
     const service = requireDiagnosticRepairDelivery();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.repair_delivery_binding.register");
     return sendCommandResult(response, await service.registerBinding(await readJson(request, 64 * 1024), actor));
   }
 
@@ -737,7 +753,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/repair-deliveries") {
     const service = requireDiagnosticRepairDelivery();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.repair_delivery.materialize");
     return sendCommandResult(response,
       await service.materializeCandidate(await readJson(request, 64 * 1024), actor));
   }
@@ -752,7 +768,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/repair-verifications") {
     const service = requireDiagnosticVerification();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.repair_verification.create");
     return sendCommandResult(response,
       await service.createVerification(await readJson(request, 64 * 1024), actor));
   }
@@ -769,14 +785,14 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/promotions") {
     const service = requireDiagnosticPromotion();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.promotion.authorize");
     return sendCommandResult(response,
       await service.authorizePromotion(await readJson(request, 64 * 1024), actor));
   }
 
   if (request.method === "POST" && /^\/diagnostic\/v0\/promotions\/[^/]+\/apply$/.test(url.pathname)) {
     const service = requireDiagnosticPromotion();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.promotion.apply");
     const body = await readJson(request, 64 * 1024);
     const promotionId = decodeURIComponent(url.pathname.split("/").at(-2));
     if (body?.input?.promotion_id !== promotionId) {
@@ -789,7 +805,9 @@ async function route(request, response) {
   if (request.method === "POST" &&
       /^\/diagnostic\/v0\/promotions\/[^/]+\/(reconcile|rollback)$/.test(url.pathname)) {
     const service = requireDiagnosticPromotion();
-    const actor = authenticateBootstrapOperator(request);
+    const operationId = url.pathname.endsWith("/reconcile")
+      ? "diagnostic.promotion.reconcile" : "diagnostic.promotion.rollback";
+    const actor = await authenticateDiagnosticOwner(request, operationId);
     const body = await readJson(request, 64 * 1024);
     const segments = url.pathname.split("/");
     const promotionId = decodeURIComponent(segments.at(-2));
@@ -820,7 +838,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/artifact-retirements") {
     const service = requireDiagnosticReproduction();
-    const actor = authenticateBootstrapOperator(request);
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.artifact.retire");
     return sendCommandResult(response, await service.retireArtifact(await readJson(request, 64 * 1024), actor));
   }
 
