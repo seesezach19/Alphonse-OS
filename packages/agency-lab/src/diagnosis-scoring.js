@@ -40,7 +40,7 @@ export function validateDiagnosisResponse(value) {
     "alternative_hypotheses", "evidence_references", "missing_evidence",
     "recommended_next_investigation", "actions_taken"
   ]);
-  if (input.schema_version !== "0.1.0") fail("schema_version must be 0.1.0");
+  if (input.schema_version !== "0.2.0") fail("schema_version must be 0.2.0");
   if (!RUN_ID.test(input.assignment_id ?? "")) fail("assignment_id must be a lowercase UUID v4");
   if (!DIGEST.test(input.evidence_artifact_digest ?? "")) fail("evidence_artifact_digest is invalid");
   if (!CONFIDENCE.has(input.confidence)) fail("confidence is unsupported");

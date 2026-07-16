@@ -9,6 +9,8 @@ Each Agency Lab worker assignment receives a generated UUID run directory. The w
 
 A diagnosis returns its assignment ID and evidence artifact digest. Scoring reads the original run workspace and verifies the complete assignment, manifest, evidence, content-addressed artifact, and controller provenance chain. Scoring never regenerates an evidence package or substitutes the convenience evidence copy for the assigned store object. Provenance mismatch is unscorable rather than a lower diagnosis-quality score.
 
+Assignment-bound diagnosis responses use schema version 0.2.0. Historical 0.1.0 diagnosis content has no assignment provenance and cannot be submitted as a current scored response.
+
 Run records describe one packaging event. Later lifecycle changes append distinct records; they do not rewrite the packaged assignment or provenance record.
 
 ## Consequences

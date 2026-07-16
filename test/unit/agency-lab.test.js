@@ -104,6 +104,7 @@ function bindDiagnosisToEvidence(response, answerKey, caseDefinition) {
   return {
     response: {
       ...response,
+      schema_version: "0.2.0",
       assignment_id: assignmentId,
       evidence_artifact_digest: evidenceDigest
     },
@@ -246,6 +247,8 @@ test("diagnosis scoring fails closed on unstructured or cross-case output", asyn
   );
   const { response, evidenceContext } = bindDiagnosisToEvidence(rawResponse, answerKey, definition);
   assert.throws(() => validateDiagnosisResponse({ ...response, extra: true }), /fields must be exact/);
+  assert.throws(() => validateDiagnosisResponse({ ...response, schema_version: "0.1.0" }),
+    /schema_version must be 0.2.0/);
   assert.throws(() => scoreDiagnosisResponse({
     caseDefinition: definition,
     answerKey,

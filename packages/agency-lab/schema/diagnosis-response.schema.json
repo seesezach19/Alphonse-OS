@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://alphonse.local/schemas/agency-lab/diagnosis-response-v0.1.json",
-  "title": "Agency Lab Blind Diagnosis Response",
+  "$id": "https://alphonse.local/schemas/agency-lab/diagnosis-response-v0.2.json",
+  "title": "Agency Lab Assignment-Bound Diagnosis Response",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,7 +10,7 @@
     "recommended_next_investigation", "actions_taken"
   ],
   "properties": {
-    "schema_version": { "const": "0.1.0" },
+    "schema_version": { "const": "0.2.0" },
     "assignment_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
     "evidence_artifact_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "failure_id": { "type": "string", "minLength": 1 },
