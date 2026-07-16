@@ -34,6 +34,14 @@ function positiveInteger(value, field) {
   return value;
 }
 
+function identifier(value, field) {
+  const checked = string(value, field, 100);
+  if (!/^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*$/.test(checked)) {
+    fail(`${field} must be an uppercase metadata identifier`);
+  }
+  return checked;
+}
+
 function nonNegativeInteger(value, field) {
   if (!Number.isSafeInteger(value) || value < 0) fail(`${field} must be a non-negative integer`);
   return value;
@@ -127,7 +135,7 @@ export function validateAgencyLabCase(value) {
 
   return {
     schema_version: "0.1.0",
-    failure_id: string(input.failure_id, "failure_id", 100),
+    failure_id: identifier(input.failure_id, "failure_id"),
     title: string(input.title, "title", 200),
     domain: string(input.domain, "domain", 100),
     layer: input.layer,

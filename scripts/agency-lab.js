@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { validateAgencyLabCase } from "../packages/agency-lab/src/case-contract.js";
 import { runAgencyLabCase } from "../packages/agency-lab/src/controller.js";
+import { createRunWorkspace } from "../packages/agency-lab/src/run-workspace.js";
 import { sha256Digest } from "../src/canonical-json.js";
 import { createContentAddressedArtifactStore } from "../src/content-addressed-artifact-store.js";
 import { buildReproductionBundle } from "../src/diagnostic-reproduction-contracts.js";
@@ -131,9 +131,7 @@ async function readTree(directory) {
 
 async function packageEvidence(definition, fixture, result) {
   const neutralId = definition.failure_id.toLowerCase();
-  const outputRoot = path.join(os.tmpdir(), "alphonse-agency-lab", neutralId);
-  const workerRoot = path.join(outputRoot, "worker");
-  const controllerRoot = path.join(outputRoot, "controller");
+  const { runId, runRoot, workerRoot, controllerRoot } = await createRunWorkspace();
   const caseId = stableUuid(`${definition.failure_id}:case`);
   const revisionId = stableUuid(`${definition.failure_id}:revision`);
   const failureSpecificationId = stableUuid(`${definition.failure_id}:failure-specification`);
@@ -232,9 +230,6 @@ async function packageEvidence(definition, fixture, result) {
     assert.equal(workerText.includes(prohibited), false, `worker evidence leaked controller answer: ${prohibited}`);
   }
 
-  await rm(outputRoot, { recursive: true, force: true });
-  await mkdir(workerRoot, { recursive: true });
-  await mkdir(controllerRoot, { recursive: true });
   const store = createContentAddressedArtifactStore(path.join(workerRoot, "artifacts"));
   const artifact = await store.putJson(workerEvidence);
   const manifest = {
@@ -254,11 +249,13 @@ async function packageEvidence(definition, fixture, result) {
   }
   return {
     status: "case packaged, worker-visible evidence complete, answer key withheld.",
+    run_id: runId,
     failure_id: definition.failure_id,
     case_id: caseId,
     evidence_artifact_digest: artifact.artifact_digest,
     worker_workspace: workerRoot,
     controller_workspace: controllerRoot,
+    run_workspace: runRoot,
     answer_key_withheld: true
   };
 }

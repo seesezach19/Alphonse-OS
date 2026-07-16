@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,6 +12,11 @@ import {
   scoreDiagnosisResponse,
   validateDiagnosisResponse
 } from "../../packages/agency-lab/src/diagnosis-scoring.js";
+import {
+  createRunWorkspace,
+  resolveContainedPath,
+  validateRunId
+} from "../../packages/agency-lab/src/run-workspace.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const readJson = async (relativePath) => JSON.parse(await readFile(path.join(root, relativePath), "utf8"));
@@ -31,6 +38,32 @@ test("Agency Lab cases use exact bounded contracts", async () => {
     /fields must be exact/);
   assert.throws(() => validateAgencyLabCase({ ...definition, expected_response_class: "guess" }),
     /expected_response_class is unsupported/);
+});
+
+test("failure identifiers reject traversal, absolute paths, UNC paths, and separators", async () => {
+  const { definition } = await caseAndFixture("case-001");
+  for (const failureId of [
+    "../ESCAPE", "..\\ESCAPE", "C:\\Users\\Zach", "\\\\server\\share",
+    "/absolute", "LEAD/001", "LEAD\\001"
+  ]) {
+    assert.throws(() => validateAgencyLabCase({ ...definition, failure_id: failureId }),
+      /uppercase metadata identifier/);
+  }
+});
+
+test("run workspaces remain beneath a fixed root and never reuse caller-controlled paths", async () => {
+  const baseDirectory = await mkdtemp(path.join(os.tmpdir(), "alphonse-run-root-"));
+  try {
+    const workspace = await createRunWorkspace({ baseDirectory });
+    assert.match(workspace.runId, /^[0-9a-f-]{36}$/);
+    assert.equal(path.relative(baseDirectory, workspace.workerRoot).startsWith(".."), false);
+    assert.throws(() => resolveContainedPath(baseDirectory, "..", "escape"), /escaped its fixed root/);
+    for (const runId of ["../escape", "C:\\escape", "\\\\server\\share", "LEAD-001"]) {
+      assert.throws(() => validateRunId(runId), /lowercase UUID v4/);
+    }
+  } finally {
+    await rm(baseDirectory, { recursive: true, force: true });
+  }
 });
 
 test("one invariant engine demonstrates and repairs all lead cases", async () => {
