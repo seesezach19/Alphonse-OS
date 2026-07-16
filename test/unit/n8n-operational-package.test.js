@@ -24,7 +24,9 @@ import {
   assertExecutionBinding,
   buildAttestedRuntimeEvent,
   buildN8nExecutionWorkflowFingerprint,
-  normalizeAttestationRequest
+  N8N_FINGERPRINT_PROVIDER_DEFAULTS,
+  normalizeAttestationRequest,
+  unwrapN8nApiEntity
 } from "../../packages/n8n-operational-package/src/runtime-attestation.js";
 import { assertRepairDeliveryAdapterManifest } from "../../src/repair-delivery-adapter-contract.js";
 import { verifyRuntimeEventEnvelope } from "../../src/runtime-event-envelope.js";
@@ -54,6 +56,8 @@ test("first-party n8n Operational Package is pinned, complete, and conforming", 
   assert.ok(packageManifest.exports.reference_workflow);
   assert.ok(packageManifest.mappings.workflow_identity);
   assert.ok(packageManifest.fingerprint_rules.included_fields.length > 0);
+  assert.deepEqual(packageManifest.fingerprint_rules.provider_parameter_defaults,
+    N8N_FINGERPRINT_PROVIDER_DEFAULTS);
   assert.ok(packageManifest.health_checks.runtime_reachability);
   assert.deepEqual(packageManifest.detail_policy.redact_paths, ["input.customer_email"]);
   assert.equal(adapterManifest.capabilities.detail_retrieval.supported, true);
@@ -87,6 +91,47 @@ test("n8n cannot access the runtime attestation signing secret", async () => {
   assert.doesNotMatch(n8nService, /ALPHONSE_RUNTIME_ADAPTER_SECRET|ALPHONSE_RUNTIME_ADAPTER_KEY_ID/);
   const reporter = await json("workflows/alphonse-event-reporter.json");
   assert.doesNotMatch(JSON.stringify(reporter), /\$env|createHmac|hmac-sha256/);
+});
+
+test("runtime attestation is self-contained inside the mounted operational package", async () => {
+  const source = await readFile(path.join(packageRoot, "src", "runtime-attestation.js"), "utf8");
+  assert.doesNotMatch(source, /from\s+["']\.\.\/\.\.\/\.\.\//);
+});
+
+test("n8n API entity normalization accepts direct and data-wrapped provider responses", () => {
+  const entity = { id: "42", status: "success" };
+  assert.equal(unwrapN8nApiEntity(entity), entity);
+  assert.equal(unwrapN8nApiEntity({ data: entity }), entity);
+  assert.throws(() => unwrapN8nApiEntity({ data: null }), /response data must be an object/);
+});
+
+test("execution fingerprint expands pinned n8n defaults consistently", () => {
+  const base = {
+    id: "WorkflowDefaults1",
+    nodes: [{
+      id: "code-1",
+      name: "Code",
+      type: "n8n-nodes-base.code",
+      typeVersion: 2,
+      position: [0, 0],
+      parameters: { jsCode: "return items;" }
+    }],
+    connections: {},
+    settings: { executionOrder: "v1" }
+  };
+  const expanded = structuredClone(base);
+  expanded.nodes[0].parameters = {
+    language: "javaScript",
+    mode: "runOnceForAllItems",
+    notice: "",
+    jsCode: "return items;"
+  };
+  assert.equal(
+    buildN8nExecutionWorkflowFingerprint({ workflowId: base.id, workflowData: base })
+      .execution_workflow_material_digest,
+    buildN8nExecutionWorkflowFingerprint({ workflowId: expanded.id, workflowData: expanded })
+      .execution_workflow_material_digest
+  );
 });
 
 test("sidecar attestation derives identity and lifecycle from an independently observed execution", () => {

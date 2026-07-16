@@ -28,7 +28,16 @@
       "dependency.connections", "runtime.version", "runtime.image_digest", "node.typeVersion",
       "model", "configuration", "adapter.version"
     ],
-    "excluded_fields": ["credentials", "createdAt", "updatedAt", "execution_payload"]
+    "excluded_fields": ["credentials", "createdAt", "updatedAt", "execution_payload"],
+    "provider_parameter_defaults": {
+      "n8n-nodes-base.manualTrigger": { "notice": "" },
+      "n8n-nodes-base.code": {
+        "language": "javaScript", "mode": "runOnceForAllItems", "notice": ""
+      },
+      "n8n-nodes-base.executeWorkflow": {
+        "mode": "once", "operation": "call_workflow", "source": "database"
+      }
+    }
   },
   "health_checks": {
     "runtime_reachability": "GET /healthz",

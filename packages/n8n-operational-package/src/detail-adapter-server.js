@@ -4,12 +4,12 @@ import http from "node:http";
 import path from "node:path";
 
 import {
-  assertAttestationCandidate,
   assertExecutionBinding,
   buildAttestedRuntimeEvent,
   normalizeAttestationBinding,
   normalizeAttestationRequest,
-  normalizeN8nExecutionObservation
+  normalizeN8nExecutionObservation,
+  unwrapN8nApiEntity
 } from "./runtime-attestation.js";
 
 const port = Number(process.env.PORT ?? 5680);
@@ -170,11 +170,14 @@ async function fetchN8nExecution(executionId) {
     headers: { "x-n8n-api-key": n8nApiKey, accept: "application/json" }
   });
   if (!response.ok) throw new Error(`n8n execution lookup failed with HTTP ${response.status}`);
-  const observation = normalizeN8nExecutionObservation(await response.json());
-  if (observation.execution_id !== String(executionId)) {
+  const entity = unwrapN8nApiEntity(await response.json());
+  if (!/^[0-9]+$/.test(String(entity.id ?? ""))) {
+    throw new Error(`n8n execution response has invalid identity ${JSON.stringify(entity.id)}; keys=${Object.keys(entity).sort().join(",")}`);
+  }
+  if (String(entity.id) !== String(executionId)) {
     throw new Error("n8n API returned a different execution identity");
   }
-  return observation;
+  return entity;
 }
 
 async function submitAttestedEvent(attestation) {
@@ -193,36 +196,41 @@ async function submitAttestedEvent(attestation) {
   return body;
 }
 
-async function observeTerminalExecution(executionId, initialObservation) {
-  let observation = initialObservation;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const binding = attestationBindings.get(observation.provider_workflow_id);
-    assertExecutionBinding(observation, binding);
-    if (["success", "error", "crashed", "canceled"].includes(observation.status)) {
-      const attestation = buildAttestedRuntimeEvent({
-        observation,
-        binding,
-        adapter: runtimeAdapter,
-        signing: runtimeSigning,
-        signedAt: new Date().toISOString()
-      });
-      const receipt = await submitAttestedEvent(attestation);
-      attestationReceipts.set(executionId, {
-        envelope: attestation.envelope,
-        attestation_basis: attestation.attestation_basis,
-        kernel_receipt: receipt
-      });
-      return;
+async function observeTerminalExecution(executionId) {
+  let lastError;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try {
+      const rawObservation = await fetchN8nExecution(executionId);
+      const observedIdentity = normalizeN8nExecutionObservation(rawObservation);
+      const binding = attestationBindings.get(observedIdentity.provider_workflow_id);
+      const observation = assertExecutionBinding(rawObservation, binding);
+      if (["success", "error", "crashed", "canceled"].includes(observation.status)) {
+        const attestation = buildAttestedRuntimeEvent({
+          observation: rawObservation,
+          binding,
+          adapter: runtimeAdapter,
+          signing: runtimeSigning,
+          signedAt: new Date().toISOString()
+        });
+        const receipt = await submitAttestedEvent(attestation);
+        attestationReceipts.set(executionId, {
+          envelope: attestation.envelope,
+          attestation_basis: attestation.attestation_basis,
+          kernel_receipt: receipt
+        });
+        return;
+      }
+    } catch (error) {
+      lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
-    observation = await fetchN8nExecution(executionId);
   }
-  throw new Error("n8n execution did not reach a terminal state inside the attestation window");
+  throw new Error(`n8n execution could not be independently attested: ${lastError?.message ?? "timeout"}`);
 }
 
-function queueAttestation(executionId, observation) {
+function queueAttestation(executionId) {
   if (attestationJobs.has(executionId) || attestationReceipts.has(executionId)) return false;
-  const job = observeTerminalExecution(executionId, observation)
+  const job = observeTerminalExecution(executionId)
     .catch((error) => process.stderr.write(`n8n attestation ${executionId} failed: ${error.message}\n`))
     .finally(() => attestationJobs.delete(executionId));
   attestationJobs.set(executionId, job);
@@ -246,10 +254,7 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request);
       const candidate = normalizeAttestationRequest(body);
       const executionId = candidate.external_execution_id;
-      const observation = await fetchN8nExecution(executionId);
-      const binding = attestationBindings.get(observation.provider_workflow_id);
-      assertAttestationCandidate(candidate, observation, binding);
-      const queued = queueAttestation(executionId, observation);
+      const queued = queueAttestation(executionId);
       return send(response, 202, {
         external_execution_id: executionId,
         queued,

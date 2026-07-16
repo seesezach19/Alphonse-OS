@@ -23,6 +23,10 @@ Changing behavior-bearing workflow material under the same provider workflow ID 
 There is no fallback to revision attribution from workflow ID alone. Provider workflow version is preserved when
 the execution snapshot supplies it.
 
+Fingerprint rules expand pinned n8n parameter defaults before hashing. This makes imported material and its
+execution snapshot equivalent when n8n serializes omitted defaults explicitly, while changes to those values
+still change the fingerprint. These defaults are part of the Operational Package fingerprint rules.
+
 The resulting signature attests that the adapter observed a matching n8n execution record. It does not
 establish business success, effect truth, payload correctness, or Kernel authority.
 

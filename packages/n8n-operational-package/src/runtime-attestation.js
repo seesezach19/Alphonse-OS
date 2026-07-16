@@ -1,7 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
 
-import { sha256Digest } from "../../../src/canonical-json.js";
-
 const TERMINAL_STATUS = Object.freeze({
   success: "succeeded",
   error: "failed",
@@ -10,12 +8,29 @@ const TERMINAL_STATUS = Object.freeze({
 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
+export const N8N_FINGERPRINT_PROVIDER_DEFAULTS = Object.freeze({
+  "n8n-nodes-base.manualTrigger": Object.freeze({ notice: "" }),
+  "n8n-nodes-base.code": Object.freeze({
+    language: "javaScript",
+    mode: "runOnceForAllItems",
+    notice: ""
+  }),
+  "n8n-nodes-base.executeWorkflow": Object.freeze({
+    mode: "once",
+    operation: "call_workflow",
+    source: "database"
+  })
+});
 
 function canonicalize(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
   return `{${Object.keys(value).sort().filter((key) => value[key] !== undefined)
     .map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(",")}}`;
+}
+
+function sha256Digest(value) {
+  return `sha256:${createHash("sha256").update(canonicalize(value)).digest("hex")}`;
 }
 
 function required(value, field, maximum = 200) {
@@ -55,7 +70,13 @@ export function buildN8nExecutionWorkflowFingerprint(value) {
     provider_workflow_id: providerWorkflowId,
     nodes: snapshot.nodes.map((node) => {
       const { credentials: _credentials, ...behavior } = object(node, "n8n workflow node");
-      return behavior;
+      return {
+        ...behavior,
+        parameters: {
+          ...(N8N_FINGERPRINT_PROVIDER_DEFAULTS[behavior.type] ?? {}),
+          ...object(behavior.parameters ?? {}, "n8n workflow node parameters")
+        }
+      };
     }),
     connections: object(snapshot.connections ?? {}, "n8n workflow connections"),
     settings: object(snapshot.settings ?? {}, "n8n workflow settings")
@@ -93,6 +114,12 @@ export function normalizeN8nExecutionObservation(value) {
       ? null
       : timestamp(value.stoppedAt, "n8n stoppedAt")
   };
+}
+
+export function unwrapN8nApiEntity(value) {
+  const response = object(value, "n8n API response");
+  if (response.id !== undefined) return response;
+  return object(response.data, "n8n API response data");
 }
 
 export function normalizeAttestationBinding(providerWorkflowId, value) {
