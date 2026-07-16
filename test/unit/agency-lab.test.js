@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -17,6 +18,11 @@ import {
   resolveContainedPath,
   validateRunId
 } from "../../packages/agency-lab/src/run-workspace.js";
+import {
+  buildRunProvenance,
+  buildWorkerAssignment,
+  writeImmutableJson
+} from "../../packages/agency-lab/src/run-provenance.js";
 import { sha256Digest } from "../../src/canonical-json.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -103,6 +109,57 @@ test("run workspaces remain beneath a fixed root and never reuse caller-controll
     for (const runId of ["../escape", "C:\\escape", "\\\\server\\share", "LEAD-001"]) {
       assert.throws(() => validateRunId(runId), /lowercase UUID v4/);
     }
+  } finally {
+    await rm(baseDirectory, { recursive: true, force: true });
+  }
+});
+
+test("parallel worker assignments receive isolated write-once provenance", async () => {
+  const baseDirectory = await mkdtemp(path.join(os.tmpdir(), "alphonse-parallel-runs-"));
+  try {
+    const workspaces = await Promise.all(Array.from({ length: 16 }, () =>
+      createRunWorkspace({ baseDirectory })));
+    const records = await Promise.all(workspaces.map(async (workspace, index) => {
+      const createdAt = new Date(Date.UTC(2026, 6, 16, 16, 0, index)).toISOString();
+      const digest = sha256Digest({ index });
+      const assignment = buildWorkerAssignment({
+        runId: workspace.runId,
+        assignmentId: randomUUID(),
+        failureId: "LEAD-001",
+        caseId: `case-${index}`,
+        revisionId: `revision-${index}`,
+        manifestDigest: digest,
+        evidenceArtifactDigest: digest,
+        createdAt
+      });
+      const assignmentRecord = await writeImmutableJson(
+        workspace.workerRoot,
+        "assignment.json",
+        assignment
+      );
+      const provenance = buildRunProvenance({
+        assignment,
+        assignmentDigest: assignmentRecord.digest,
+        caseDefinitionDigest: digest,
+        fixtureDigest: digest,
+        answerKeyDigest: digest
+      });
+      await writeImmutableJson(workspace.runRoot, "run-provenance.json", provenance);
+      return { workspace, assignment, provenance };
+    }));
+
+    assert.equal(new Set(records.map(({ workspace }) => workspace.runRoot)).size, records.length);
+    assert.equal(new Set(records.map(({ assignment }) => assignment.assignment_id)).size, records.length);
+    for (const [index, record] of records.entries()) {
+      assert.equal(record.provenance.run_id, record.workspace.runId);
+      assert.equal(record.provenance.case_id, `case-${index}`);
+      assert.equal(record.provenance.worker_assignment_digest, sha256Digest(record.assignment));
+    }
+    await assert.rejects(() => writeImmutableJson(
+      records[0].workspace.runRoot,
+      "run-provenance.json",
+      records[0].provenance
+    ), (error) => error?.code === "EEXIST");
   } finally {
     await rm(baseDirectory, { recursive: true, force: true });
   }

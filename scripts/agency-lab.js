@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { validateAgencyLabCase } from "../packages/agency-lab/src/case-contract.js";
 import { runAgencyLabCase } from "../packages/agency-lab/src/controller.js";
 import { createRunWorkspace } from "../packages/agency-lab/src/run-workspace.js";
+import {
+  buildRunProvenance,
+  buildWorkerAssignment,
+  writeImmutableJson
+} from "../packages/agency-lab/src/run-provenance.js";
 import { sha256Digest } from "../src/canonical-json.js";
 import { createContentAddressedArtifactStore } from "../src/content-addressed-artifact-store.js";
 import { buildReproductionBundle } from "../src/diagnostic-reproduction-contracts.js";
@@ -132,6 +137,8 @@ async function readTree(directory) {
 async function packageEvidence(definition, fixture, result) {
   const neutralId = definition.failure_id.toLowerCase();
   const { runId, runRoot, workerRoot, controllerRoot } = await createRunWorkspace();
+  const assignmentId = randomUUID();
+  const createdAt = new Date().toISOString();
   const caseId = stableUuid(`${definition.failure_id}:case`);
   const revisionId = stableUuid(`${definition.failure_id}:revision`);
   const failureSpecificationId = stableUuid(`${definition.failure_id}:failure-specification`);
@@ -234,15 +241,37 @@ async function packageEvidence(definition, fixture, result) {
   const artifact = await store.putJson(workerEvidence);
   const manifest = {
     schema_version: "0.1.0",
+    run_id: runId,
+    assignment_id: assignmentId,
     failure_id: definition.failure_id,
     case_id: caseId,
     evidence_artifact_digest: artifact.artifact_digest,
     evidence_file: "evidence.json",
     answer_key_included: false
   };
-  await writeFile(path.join(workerRoot, "evidence.json"), `${JSON.stringify(workerEvidence, null, 2)}\n`, "utf8");
-  await writeFile(path.join(workerRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  await writeFile(path.join(controllerRoot, "answer-key.json"), `${JSON.stringify(answerKey, null, 2)}\n`, "utf8");
+  const evidenceRecord = await writeImmutableJson(workerRoot, "evidence.json", workerEvidence);
+  assert.equal(evidenceRecord.digest, artifact.artifact_digest, "evidence record digest changed while packaging");
+  const manifestRecord = await writeImmutableJson(workerRoot, "manifest.json", manifest);
+  const assignment = buildWorkerAssignment({
+    runId,
+    assignmentId,
+    failureId: definition.failure_id,
+    caseId,
+    revisionId,
+    manifestDigest: manifestRecord.digest,
+    evidenceArtifactDigest: artifact.artifact_digest,
+    createdAt
+  });
+  const assignmentRecord = await writeImmutableJson(workerRoot, "assignment.json", assignment);
+  await writeImmutableJson(controllerRoot, "answer-key.json", answerKey);
+  const provenance = buildRunProvenance({
+    assignment,
+    assignmentDigest: assignmentRecord.digest,
+    caseDefinitionDigest: sha256Digest(definition),
+    fixtureDigest: sha256Digest(fixture),
+    answerKeyDigest: sha256Digest(answerKey)
+  });
+  const provenanceRecord = await writeImmutableJson(runRoot, "run-provenance.json", provenance);
   const bytes = (await readTree(workerRoot)).join("\n");
   for (const prohibited of answerKey.prohibited_worker_terms) {
     assert.equal(bytes.includes(prohibited), false, `written worker evidence leaked controller answer: ${prohibited}`);
@@ -250,9 +279,11 @@ async function packageEvidence(definition, fixture, result) {
   return {
     status: "case packaged, worker-visible evidence complete, answer key withheld.",
     run_id: runId,
+    assignment_id: assignmentId,
     failure_id: definition.failure_id,
     case_id: caseId,
     evidence_artifact_digest: artifact.artifact_digest,
+    provenance_digest: provenanceRecord.digest,
     worker_workspace: workerRoot,
     controller_workspace: controllerRoot,
     run_workspace: runRoot,
