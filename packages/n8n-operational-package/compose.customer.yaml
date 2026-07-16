@@ -25,7 +25,7 @@ services:
       N8N_ADAPTER_STATE_FILE: /var/lib/alphonse-n8n-adapter/state.json
       N8N_API_URL: http://n8n:5678
       N8N_API_KEY: ${N8N_API_KEY:-}
-      N8N_ATTESTATION_BINDINGS: '{"InventoryFollowupDefect1":{"workflow_id":"workflow:inventory-follow-up","revision_id":"${ALPHONSE_REVISION_ID:-00000000-0000-4000-8000-000000000000}"}}'
+      N8N_ATTESTATION_BINDINGS: '{"InventoryDefect1":{"workflow_id":"workflow:inventory-follow-up","revision_id":"${ALPHONSE_REVISION_ID:-00000000-0000-4000-8000-000000000000}","execution_workflow_material_digest":"${N8N_EXECUTION_WORKFLOW_MATERIAL_DIGEST:-sha256:b9f2ae3cd979d2e03d5745783aa05ff77ca1b0a7462a49d5d9caa7089c2e69d6}","fingerprint_rules_digest":"${N8N_FINGERPRINT_RULES_DIGEST:-sha256:aa9a7297378b1f02424ae8465b07e5e090aef2fe6a2016cbc3cb427084da6f10}"}}'
       ALPHONSE_RUNTIME_EVENT_URL: http://kernel:3000/diagnostic/v0/runtime-events
       ALPHONSE_RUNTIME_ADAPTER_ID: alphonse.n8n.runtime
       ALPHONSE_RUNTIME_ADAPTER_VERSION: 0.2.0

@@ -13,10 +13,15 @@ An n8n workflow may nominate only its numeric execution ID. The customer-control
 
 1. retrieves that execution through the n8n API using an adapter-held credential;
 2. confirms the returned execution ID and provider workflow ID;
-3. resolves the provider workflow through an adapter-owned Alphonse workflow and revision binding;
-4. derives lifecycle and timestamps from the observed terminal execution record;
-5. constructs and signs the Runtime Event Envelope; and
-6. submits the signed envelope to Kernel.
+3. fingerprints the execution-time workflow snapshot under pinned fingerprint rules;
+4. requires that fingerprint to match the adapter-owned Alphonse revision binding;
+5. derives lifecycle and timestamps from the observed terminal execution record;
+6. constructs and signs the Runtime Event Envelope; and
+7. submits the signed envelope to Kernel.
+
+Changing behavior-bearing workflow material under the same provider workflow ID causes attestation rejection.
+There is no fallback to revision attribution from workflow ID alone. Provider workflow version is preserved when
+the execution snapshot supplies it.
 
 The resulting signature attests that the adapter observed a matching n8n execution record. It does not
 establish business success, effect truth, payload correctness, or Kernel authority.

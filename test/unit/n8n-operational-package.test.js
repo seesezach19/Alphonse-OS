@@ -23,6 +23,7 @@ import {
   assertAttestationCandidate,
   assertExecutionBinding,
   buildAttestedRuntimeEvent,
+  buildN8nExecutionWorkflowFingerprint,
   normalizeAttestationRequest
 } from "../../packages/n8n-operational-package/src/runtime-attestation.js";
 import { assertRepairDeliveryAdapterManifest } from "../../src/repair-delivery-adapter-contract.js";
@@ -90,17 +91,39 @@ test("n8n cannot access the runtime attestation signing secret", async () => {
 
 test("sidecar attestation derives identity and lifecycle from an independently observed execution", () => {
   const secret = "local-n8n-runtime-event-secret-with-sufficient-length-v1";
+  const workflowData = {
+    id: "InventoryFollowupDefect1",
+    versionId: "provider-version-a",
+    nodes: [{
+      id: "node-1",
+      name: "Deterministic step",
+      type: "n8n-nodes-base.code",
+      typeVersion: 2,
+      position: [0, 0],
+      parameters: { jsCode: "return items;" },
+      credentials: { api: { id: "secret-reference", name: "not-fingerprinted" } }
+    }],
+    connections: {},
+    settings: { executionOrder: "v1" }
+  };
+  const fingerprint = buildN8nExecutionWorkflowFingerprint({
+    workflowId: workflowData.id,
+    workflowData
+  });
   const binding = {
     provider_workflow_id: "InventoryFollowupDefect1",
     workflow_id: "workflow:inventory-follow-up",
-    revision_id: "00000000-0000-4000-8000-000000000201"
+    revision_id: "00000000-0000-4000-8000-000000000201",
+    execution_workflow_material_digest: fingerprint.execution_workflow_material_digest,
+    fingerprint_rules_digest: `sha256:${"f".repeat(64)}`
   };
   const observation = {
     id: "42",
     workflowId: binding.provider_workflow_id,
     status: "success",
     startedAt: "2026-07-16T16:00:00.000Z",
-    stoppedAt: "2026-07-16T16:00:02.000Z"
+    stoppedAt: "2026-07-16T16:00:02.000Z",
+    workflowData
   };
   const attestation = buildAttestedRuntimeEvent({
     observation,
@@ -119,10 +142,24 @@ test("sidecar attestation derives identity and lifecycle from an independently o
   assert.equal(verified.envelope.workflow_id, binding.workflow_id);
   assert.equal(verified.envelope.revision_id, binding.revision_id);
   assert.equal(attestation.attestation_basis.source, "n8n_api_execution_observation");
+  assert.equal(attestation.attestation_basis.provider_workflow_version_id, "provider-version-a");
+  assert.equal(attestation.attestation_basis.execution_workflow_material_digest,
+    binding.execution_workflow_material_digest);
   assert.throws(() => assertExecutionBinding(observation, {
     ...binding,
     provider_workflow_id: "AttackerSelectedWorkflow"
   }), /does not match/);
+  assert.throws(() => assertExecutionBinding({
+    ...observation,
+    workflowData: {
+      ...workflowData,
+      versionId: "provider-version-b",
+      nodes: workflowData.nodes.map((node) => ({
+        ...node,
+        parameters: { jsCode: "return [{ json: { changed: true } }];" }
+      }))
+    }
+  }, binding), /workflow material does not match/);
   assert.throws(() => normalizeAttestationRequest({
     external_execution_id: "42",
     lifecycle_claim: "succeeded",

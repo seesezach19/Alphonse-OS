@@ -7,6 +7,7 @@ import {
   assertAttestationCandidate,
   assertExecutionBinding,
   buildAttestedRuntimeEvent,
+  normalizeAttestationBinding,
   normalizeAttestationRequest,
   normalizeN8nExecutionObservation
 } from "./runtime-attestation.js";
@@ -29,11 +30,10 @@ const runtimeSigning = {
 };
 const attestationBindings = new Map(Object.entries(
   JSON.parse(process.env.N8N_ATTESTATION_BINDINGS ?? "{}")
-).map(([providerWorkflowId, binding]) => [providerWorkflowId, {
-  provider_workflow_id: providerWorkflowId,
-  workflow_id: binding.workflow_id,
-  revision_id: binding.revision_id
-}]));
+).map(([providerWorkflowId, binding]) => [
+  providerWorkflowId,
+  normalizeAttestationBinding(providerWorkflowId, binding)
+]));
 const attestationConfigured = Boolean(
   n8nApiUrl && n8nApiKey && kernelRuntimeEventUrl && runtimeAdapter.adapter_id
   && runtimeAdapter.adapter_version && runtimeSigning.key_id && runtimeSigning.secret
@@ -166,7 +166,7 @@ function canonicalize(value) {
 }
 
 async function fetchN8nExecution(executionId) {
-  const response = await fetch(`${n8nApiUrl}/api/v1/executions/${encodeURIComponent(executionId)}?includeData=false`, {
+  const response = await fetch(`${n8nApiUrl}/api/v1/executions/${encodeURIComponent(executionId)}?includeData=true`, {
     headers: { "x-n8n-api-key": n8nApiKey, accept: "application/json" }
   });
   if (!response.ok) throw new Error(`n8n execution lookup failed with HTTP ${response.status}`);

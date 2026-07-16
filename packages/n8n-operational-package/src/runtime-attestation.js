@@ -1,5 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 
+import { sha256Digest } from "../../../src/canonical-json.js";
+
 const TERMINAL_STATUS = Object.freeze({
   success: "succeeded",
   error: "failed",
@@ -7,6 +9,7 @@ const TERMINAL_STATUS = Object.freeze({
   canceled: "cancelled"
 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 function canonicalize(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -30,6 +33,43 @@ function timestamp(value, field) {
   return checked;
 }
 
+function object(value, field) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value;
+}
+
+function executionWorkflowSnapshot(value) {
+  return object(value.workflowData ?? value.data?.workflowData ?? value.workflowSnapshot,
+    "n8n execution workflow snapshot");
+}
+
+export function buildN8nExecutionWorkflowFingerprint(value) {
+  const snapshot = executionWorkflowSnapshot(value);
+  const providerWorkflowId = required(String(snapshot.id ?? value.workflowId ?? ""), "n8n workflow id", 160);
+  if (!Array.isArray(snapshot.nodes) || snapshot.nodes.length === 0) {
+    throw new Error("n8n execution workflow snapshot must contain nodes");
+  }
+  const material = {
+    provider_workflow_id: providerWorkflowId,
+    nodes: snapshot.nodes.map((node) => {
+      const { credentials: _credentials, ...behavior } = object(node, "n8n workflow node");
+      return behavior;
+    }),
+    connections: object(snapshot.connections ?? {}, "n8n workflow connections"),
+    settings: object(snapshot.settings ?? {}, "n8n workflow settings")
+  };
+  const versionId = snapshot.versionId ?? value.workflowVersionId ?? null;
+  return {
+    provider_workflow_id: providerWorkflowId,
+    provider_workflow_version_id: versionId === null
+      ? null
+      : required(String(versionId), "n8n workflow version id", 200),
+    execution_workflow_material_digest: sha256Digest(material)
+  };
+}
+
 export function normalizeN8nExecutionObservation(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("n8n execution observation must be an object");
@@ -40,9 +80,13 @@ export function normalizeN8nExecutionObservation(value) {
   if (![...Object.keys(TERMINAL_STATUS), "new", "running", "waiting"].includes(status)) {
     throw new Error("n8n execution status is unsupported");
   }
+  const fingerprint = buildN8nExecutionWorkflowFingerprint(value);
+  if (fingerprint.provider_workflow_id !== required(String(value.workflowId ?? ""), "n8n workflow id", 160)) {
+    throw new Error("n8n execution workflow snapshot identity does not match the execution");
+  }
   return {
     execution_id: executionId,
-    provider_workflow_id: required(String(value.workflowId ?? ""), "n8n workflow id", 160),
+    ...fingerprint,
     status,
     started_at: timestamp(value.startedAt, "n8n startedAt"),
     stopped_at: value.stoppedAt === null || value.stoppedAt === undefined
@@ -51,16 +95,38 @@ export function normalizeN8nExecutionObservation(value) {
   };
 }
 
+export function normalizeAttestationBinding(providerWorkflowId, value) {
+  const binding = object(value, "attestation binding");
+  const providerId = required(providerWorkflowId, "provider workflow id", 160);
+  const revisionId = required(binding.revision_id, "Alphonse revision id", 160);
+  if (!UUID.test(revisionId)) throw new Error("Alphonse revision id must be a UUID");
+  const executionDigest = required(binding.execution_workflow_material_digest,
+    "execution workflow material digest", 80);
+  const rulesDigest = required(binding.fingerprint_rules_digest, "fingerprint rules digest", 80);
+  if (!DIGEST.test(executionDigest)) {
+    throw new Error("Attestation binding requires an execution workflow material digest");
+  }
+  if (!DIGEST.test(rulesDigest)) {
+    throw new Error("Attestation binding requires a fingerprint rules digest");
+  }
+  return {
+    provider_workflow_id: providerId,
+    workflow_id: required(binding.workflow_id, "Alphonse workflow id", 160),
+    revision_id: revisionId,
+    execution_workflow_material_digest: executionDigest,
+    fingerprint_rules_digest: rulesDigest
+  };
+}
+
 export function assertExecutionBinding(observation, binding) {
   const checked = normalizeN8nExecutionObservation(observation);
-  if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
-    throw new Error("n8n execution binding is required");
-  }
-  if (checked.provider_workflow_id !== binding.provider_workflow_id) {
+  const configured = normalizeAttestationBinding(binding?.provider_workflow_id, binding);
+  if (checked.provider_workflow_id !== configured.provider_workflow_id) {
     throw new Error("Observed n8n workflow does not match the attestation binding");
   }
-  required(binding.workflow_id, "Alphonse workflow id", 160);
-  if (!UUID.test(binding.revision_id ?? "")) throw new Error("Alphonse revision id must be a UUID");
+  if (checked.execution_workflow_material_digest !== configured.execution_workflow_material_digest) {
+    throw new Error("Executed n8n workflow material does not match the attestation binding");
+  }
   return checked;
 }
 
@@ -99,6 +165,9 @@ export function buildAttestedRuntimeEvent({ observation, binding, adapter, signi
     source: "n8n_api_execution_observation",
     execution_id: checked.execution_id,
     provider_workflow_id: checked.provider_workflow_id,
+    provider_workflow_version_id: checked.provider_workflow_version_id,
+    execution_workflow_material_digest: checked.execution_workflow_material_digest,
+    fingerprint_rules_digest: binding.fingerprint_rules_digest,
     status: checked.status,
     started_at: checked.started_at,
     stopped_at: checked.stopped_at
