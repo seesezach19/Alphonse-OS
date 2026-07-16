@@ -5,7 +5,9 @@
 
 ## Decision
 
-Each Agency Lab worker assignment receives a generated UUID run directory. The worker package contains a write-once assignment record binding the exact manifest and evidence digest. A controller-only write-once provenance record additionally binds the case definition, fixture, answer key, and worker assignment digests.
+Each Agency Lab worker assignment receives a generated UUID run directory. The worker package contains a write-once assignment record binding the exact worker registration, instruction, manifest, assigned artifact digests, evidence digest, creation time, and expiry. A controller-only write-once provenance record additionally binds the case definition, fixture, answer key, and worker assignment digests.
+
+A diagnosis returns its assignment ID and evidence artifact digest. Scoring reads the original run workspace and verifies the complete assignment, manifest, evidence, and controller provenance chain. Scoring never regenerates an evidence package. Provenance mismatch is unscorable rather than a lower diagnosis-quality score.
 
 Run records describe one packaging event. Later lifecycle changes append distinct records; they do not rewrite the packaged assignment or provenance record.
 

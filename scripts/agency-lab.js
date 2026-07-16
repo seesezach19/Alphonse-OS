@@ -18,6 +18,8 @@ import { buildReproductionBundle } from "../src/diagnostic-reproduction-contract
 import { normalizeRuntimeEventEnvelope } from "../src/runtime-event-envelope.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const DIAGNOSIS_INSTRUCTION = "Diagnose the observed operational failure using only assigned worker-visible evidence. " +
+  "Return the required structured diagnosis. Do not repair, promote, or create external effects.";
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
@@ -138,7 +140,9 @@ async function packageEvidence(definition, fixture, result) {
   const neutralId = definition.failure_id.toLowerCase();
   const { runId, runRoot, workerRoot, controllerRoot } = await createRunWorkspace();
   const assignmentId = randomUUID();
+  const workerRegistrationId = randomUUID();
   const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.parse(createdAt) + 60 * 60 * 1000).toISOString();
   const caseId = stableUuid(`${definition.failure_id}:case`);
   const revisionId = stableUuid(`${definition.failure_id}:revision`);
   const failureSpecificationId = stableUuid(`${definition.failure_id}:failure-specification`);
@@ -243,6 +247,7 @@ async function packageEvidence(definition, fixture, result) {
     schema_version: "0.1.0",
     run_id: runId,
     assignment_id: assignmentId,
+    worker_registration_id: workerRegistrationId,
     failure_id: definition.failure_id,
     case_id: caseId,
     evidence_artifact_digest: artifact.artifact_digest,
@@ -255,12 +260,16 @@ async function packageEvidence(definition, fixture, result) {
   const assignment = buildWorkerAssignment({
     runId,
     assignmentId,
+    workerRegistrationId,
     failureId: definition.failure_id,
     caseId,
     revisionId,
+    instructionDigest: sha256Digest({ instruction: DIAGNOSIS_INSTRUCTION }),
     manifestDigest: manifestRecord.digest,
     evidenceArtifactDigest: artifact.artifact_digest,
-    createdAt
+    assignedArtifactDigests: [artifact.artifact_digest],
+    createdAt,
+    expiresAt
   });
   const assignmentRecord = await writeImmutableJson(workerRoot, "assignment.json", assignment);
   await writeImmutableJson(controllerRoot, "answer-key.json", answerKey);

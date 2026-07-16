@@ -5,12 +5,14 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version", "failure_id", "observed_facts", "primary_hypothesis", "confidence",
+    "schema_version", "assignment_id", "evidence_artifact_digest", "failure_id", "observed_facts", "primary_hypothesis", "confidence",
     "alternative_hypotheses", "evidence_references", "missing_evidence",
     "recommended_next_investigation", "actions_taken"
   ],
   "properties": {
     "schema_version": { "const": "0.1.0" },
+    "assignment_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "evidence_artifact_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "failure_id": { "type": "string", "minLength": 1 },
     "observed_facts": { "type": "array", "minItems": 1, "items": { "type": "string" } },
     "primary_hypothesis": { "type": "string", "minLength": 1 },

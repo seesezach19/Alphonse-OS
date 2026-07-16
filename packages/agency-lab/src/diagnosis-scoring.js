@@ -4,6 +4,8 @@ import {
 } from "./evidence-references.js";
 
 const CONFIDENCE = new Set(["low", "medium", "high"]);
+const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 function fail(message) {
   throw new Error(`Invalid Agency Lab diagnosis: ${message}`);
@@ -34,14 +36,18 @@ function textArray(value, field, minimum = 1) {
 
 export function validateDiagnosisResponse(value) {
   const input = exact(value, "diagnosis", [
-    "schema_version", "failure_id", "observed_facts", "primary_hypothesis", "confidence",
+    "schema_version", "assignment_id", "evidence_artifact_digest", "failure_id", "observed_facts", "primary_hypothesis", "confidence",
     "alternative_hypotheses", "evidence_references", "missing_evidence",
     "recommended_next_investigation", "actions_taken"
   ]);
   if (input.schema_version !== "0.1.0") fail("schema_version must be 0.1.0");
+  if (!RUN_ID.test(input.assignment_id ?? "")) fail("assignment_id must be a lowercase UUID v4");
+  if (!DIGEST.test(input.evidence_artifact_digest ?? "")) fail("evidence_artifact_digest is invalid");
   if (!CONFIDENCE.has(input.confidence)) fail("confidence is unsupported");
   return {
     schema_version: input.schema_version,
+    assignment_id: input.assignment_id,
+    evidence_artifact_digest: input.evidence_artifact_digest,
     failure_id: text(input.failure_id, "failure_id"),
     observed_facts: textArray(input.observed_facts, "observed_facts"),
     primary_hypothesis: text(input.primary_hypothesis, "primary_hypothesis"),
@@ -109,8 +115,18 @@ export function scoreDiagnosisResponse({ caseDefinition, answerKey, response, ev
   const checkedEvidence = validateEvidenceContext({
     failureId: caseDefinition.failure_id,
     manifest: evidenceContext?.manifest,
-    evidence: evidenceContext?.evidence
+    evidence: evidenceContext?.evidence,
+    assignment: evidenceContext?.assignment,
+    provenance: evidenceContext?.provenance,
+    answerKey,
+    caseDefinition
   });
+  if (diagnosis.assignment_id !== checkedEvidence.assignment.assignment_id) {
+    throw new Error("Invalid Agency Lab provenance: diagnosis assignment_id does not match the immutable assignment");
+  }
+  if (diagnosis.evidence_artifact_digest !== checkedEvidence.artifact_digest) {
+    throw new Error("Invalid Agency Lab provenance: diagnosis evidence digest does not match the assigned artifact");
+  }
   const rubric = answerKey.diagnosis_rubric;
   if (!rubric || !Array.isArray(rubric.criteria) || rubric.criteria.length === 0) {
     throw new Error(`Diagnosis rubric is missing for ${caseDefinition.failure_id}`);
@@ -133,6 +149,8 @@ export function scoreDiagnosisResponse({ caseDefinition, answerKey, response, ev
     assurance: {
       semantic_support: "not_independently_evaluated",
       citation_validity: "resolved_against_exact_artifact",
+      assignment_provenance: "verified_against_write_once_run",
+      worker_identity: "not_authenticated_by_offline_scorer",
       worker_compliance: "self_reported"
     },
     passed: score >= rubric.minimum_passing_score,

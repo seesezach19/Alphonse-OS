@@ -31,25 +31,46 @@ function requireTimestamp(value) {
 export function buildWorkerAssignment({
   runId,
   assignmentId,
+  workerRegistrationId,
   failureId,
   caseId,
   revisionId,
+  instructionDigest,
   manifestDigest,
   evidenceArtifactDigest,
-  createdAt
+  assignedArtifactDigests,
+  createdAt,
+  expiresAt
 }) {
   if (!FAILURE_ID.test(failureId)) throw new Error("Agency Lab failure_id is invalid");
+  if (!Array.isArray(assignedArtifactDigests) || assignedArtifactDigests.length === 0) {
+    throw new Error("Agency Lab assigned_artifact_digests must not be empty");
+  }
+  const assigned = assignedArtifactDigests.map((value) => requireDigest(value,
+    "assigned_artifact_digests entry"));
+  if (new Set(assigned).size !== assigned.length || !assigned.includes(evidenceArtifactDigest)) {
+    throw new Error("Agency Lab assigned artifacts must uniquely include the evidence artifact");
+  }
+  const created = requireTimestamp(createdAt);
+  const expires = requireTimestamp(expiresAt);
+  if (Date.parse(expires) <= Date.parse(created)) {
+    throw new Error("Agency Lab assignment expiry must follow creation");
+  }
   return {
     schema_version: "0.1.0",
     record_type: "agency_lab_worker_assignment",
     run_id: validateRunId(runId),
     assignment_id: validateRunId(assignmentId),
+    worker_registration_id: validateRunId(workerRegistrationId),
     failure_id: failureId,
     case_id: requireText(caseId, "case_id"),
     revision_id: requireText(revisionId, "revision_id"),
+    instruction_digest: requireDigest(instructionDigest, "instruction_digest"),
     manifest_digest: requireDigest(manifestDigest, "manifest_digest"),
     evidence_artifact_digest: requireDigest(evidenceArtifactDigest, "evidence_artifact_digest"),
-    created_at: requireTimestamp(createdAt),
+    assigned_artifact_digests: assigned,
+    created_at: created,
+    expires_at: expires,
     authority: {
       evidence_read: "granted",
       external_effects: "not_granted",

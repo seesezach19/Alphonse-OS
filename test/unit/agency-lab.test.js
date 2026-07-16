@@ -59,21 +59,55 @@ function ensurePointer(document, pointer) {
   }
 }
 
-function exactEvidenceContext(response) {
+function bindDiagnosisToEvidence(response, answerKey, caseDefinition) {
+  const runId = randomUUID();
+  const assignmentId = randomUUID();
+  const workerRegistrationId = randomUUID();
   const evidence = { schema_version: "0.1.0", failure_id: response.failure_id };
   for (const reference of response.evidence_references) {
     const [source, pointer] = reference.split("#");
     if (source === "evidence.json" && pointer?.startsWith("/")) ensurePointer(evidence, pointer);
   }
+  const evidenceDigest = sha256Digest(evidence);
+  const manifest = {
+    schema_version: "0.1.0",
+    run_id: runId,
+    assignment_id: assignmentId,
+    worker_registration_id: workerRegistrationId,
+    failure_id: response.failure_id,
+    case_id: `case-${response.failure_id.toLowerCase()}`,
+    evidence_file: "evidence.json",
+    answer_key_included: false,
+    evidence_artifact_digest: evidenceDigest
+  };
+  const assignment = buildWorkerAssignment({
+    runId,
+    assignmentId,
+    workerRegistrationId,
+    failureId: response.failure_id,
+    caseId: manifest.case_id,
+    revisionId: "revision-fixture",
+    instructionDigest: sha256Digest({ instruction: "fixture diagnosis" }),
+    manifestDigest: sha256Digest(manifest),
+    evidenceArtifactDigest: evidenceDigest,
+    assignedArtifactDigests: [evidenceDigest],
+    createdAt: "2026-07-16T16:00:00.000Z",
+    expiresAt: "2026-07-16T17:00:00.000Z"
+  });
+  const provenance = buildRunProvenance({
+    assignment,
+    assignmentDigest: sha256Digest(assignment),
+    caseDefinitionDigest: sha256Digest(caseDefinition),
+    fixtureDigest: sha256Digest({ fixture: response.failure_id }),
+    answerKeyDigest: sha256Digest(answerKey)
+  });
   return {
-    evidence,
-    manifest: {
-      schema_version: "0.1.0",
-      failure_id: response.failure_id,
-      evidence_file: "evidence.json",
-      answer_key_included: false,
-      evidence_artifact_digest: sha256Digest(evidence)
-    }
+    response: {
+      ...response,
+      assignment_id: assignmentId,
+      evidence_artifact_digest: evidenceDigest
+    },
+    evidenceContext: { evidence, manifest, assignment, provenance }
   };
 }
 
@@ -125,12 +159,16 @@ test("parallel worker assignments receive isolated write-once provenance", async
       const assignment = buildWorkerAssignment({
         runId: workspace.runId,
         assignmentId: randomUUID(),
+        workerRegistrationId: randomUUID(),
         failureId: "LEAD-001",
         caseId: `case-${index}`,
         revisionId: `revision-${index}`,
+        instructionDigest: digest,
         manifestDigest: digest,
         evidenceArtifactDigest: digest,
-        createdAt
+        assignedArtifactDigests: [digest],
+        createdAt,
+        expiresAt: new Date(Date.parse(createdAt) + 60 * 60 * 1000).toISOString()
       });
       const assignmentRecord = await writeImmutableJson(
         workspace.workerRoot,
@@ -182,14 +220,15 @@ test("structured blind diagnoses receive deterministic case-owned scores", async
   ]) {
     const { definition } = await caseAndFixture(caseName);
     const answerKey = await readJson(definition.controller.answer_key_file);
-    const response = await readJson(
+    const rawResponse = await readJson(
       `agency-lab/cases/lead-ingestion/${caseName}/worker-runs/openclaw-001.json`
     );
+    const { response, evidenceContext } = bindDiagnosisToEvidence(rawResponse, answerKey, definition);
     const score = scoreDiagnosisResponse({
       caseDefinition: definition,
       answerKey,
       response,
-      evidenceContext: exactEvidenceContext(response)
+      evidenceContext
     });
     assert.equal(score.passed, true);
     assert.equal(score.score, expectedScore);
@@ -202,24 +241,26 @@ test("structured blind diagnoses receive deterministic case-owned scores", async
 test("diagnosis scoring fails closed on unstructured or cross-case output", async () => {
   const { definition } = await caseAndFixture("case-002");
   const answerKey = await readJson(definition.controller.answer_key_file);
-  const response = await readJson(
+  const rawResponse = await readJson(
     "agency-lab/cases/lead-ingestion/case-002/worker-runs/openclaw-001.json"
   );
+  const { response, evidenceContext } = bindDiagnosisToEvidence(rawResponse, answerKey, definition);
   assert.throws(() => validateDiagnosisResponse({ ...response, extra: true }), /fields must be exact/);
   assert.throws(() => scoreDiagnosisResponse({
     caseDefinition: definition,
     answerKey,
     response: { ...response, failure_id: "LEAD-999" },
-    evidenceContext: exactEvidenceContext(response)
+    evidenceContext
   }), /failure_id does not match/);
 });
 
 test("citation validity gives nonexistent pointers zero credit", async () => {
   const { definition } = await caseAndFixture("case-004");
   const answerKey = await readJson(definition.controller.answer_key_file);
-  const response = await readJson(
+  const rawResponse = await readJson(
     "agency-lab/cases/lead-ingestion/case-004/worker-runs/openclaw-001.json"
   );
+  const { response, evidenceContext } = bindDiagnosisToEvidence(rawResponse, answerKey, definition);
   const score = scoreDiagnosisResponse({
     caseDefinition: definition,
     answerKey,
@@ -232,7 +273,7 @@ test("citation validity gives nonexistent pointers zero credit", async () => {
         "evidence.json#/invented/3"
       ]
     },
-    evidenceContext: exactEvidenceContext(response)
+    evidenceContext
   });
   const citation = score.criteria.find((criterion) => criterion.criterion_id === "citation-validity");
   assert.equal(citation.passed, false);
@@ -243,10 +284,10 @@ test("citation validity gives nonexistent pointers zero credit", async () => {
 test("diagnosis scoring rejects evidence changed after its manifest digest", async () => {
   const { definition } = await caseAndFixture("case-004");
   const answerKey = await readJson(definition.controller.answer_key_file);
-  const response = await readJson(
+  const rawResponse = await readJson(
     "agency-lab/cases/lead-ingestion/case-004/worker-runs/openclaw-001.json"
   );
-  const evidenceContext = exactEvidenceContext(response);
+  const { response, evidenceContext } = bindDiagnosisToEvidence(rawResponse, answerKey, definition);
   evidenceContext.evidence.tampered = true;
   assert.throws(() => scoreDiagnosisResponse({
     caseDefinition: definition,
@@ -254,4 +295,25 @@ test("diagnosis scoring rejects evidence changed after its manifest digest", asy
     response,
     evidenceContext
   }), /do not match the manifest artifact digest/);
+});
+
+test("diagnosis scoring rejects mismatched assignment and evidence identities as unscorable", async () => {
+  const { definition } = await caseAndFixture("case-004");
+  const answerKey = await readJson(definition.controller.answer_key_file);
+  const rawResponse = await readJson(
+    "agency-lab/cases/lead-ingestion/case-004/worker-runs/openclaw-001.json"
+  );
+  const { response, evidenceContext } = bindDiagnosisToEvidence(rawResponse, answerKey, definition);
+  assert.throws(() => scoreDiagnosisResponse({
+    caseDefinition: definition,
+    answerKey,
+    response: { ...response, assignment_id: randomUUID() },
+    evidenceContext
+  }), /diagnosis assignment_id does not match/);
+  assert.throws(() => scoreDiagnosisResponse({
+    caseDefinition: definition,
+    answerKey,
+    response: { ...response, evidence_artifact_digest: `sha256:${"0".repeat(64)}` },
+    evidenceContext
+  }), /diagnosis evidence digest does not match/);
 });

@@ -25,24 +25,57 @@ function resolvePointer(document, pointer) {
   return { exists: true, value: current };
 }
 
-export function validateEvidenceContext({ failureId, manifest, evidence }) {
+function invalid(message) {
+  throw new Error(`Invalid Agency Lab provenance: ${message}`);
+}
+
+export function validateEvidenceContext({
+  failureId, manifest, evidence, assignment, provenance, answerKey, caseDefinition
+}) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    throw new Error("Evidence manifest is required");
+    invalid("evidence manifest is required");
   }
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
-    throw new Error("Evidence document is required");
+    invalid("evidence document is required");
+  }
+  if (!assignment || typeof assignment !== "object" || Array.isArray(assignment)) {
+    invalid("worker assignment is required");
+  }
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+    invalid("run provenance is required");
   }
   const computedDigest = sha256Digest(evidence);
   if (manifest.failure_id !== failureId || evidence.failure_id !== failureId) {
-    throw new Error("Evidence context does not match the scored failure");
+    invalid("evidence context does not match the scored failure");
   }
   if (manifest.evidence_file !== "evidence.json" || manifest.answer_key_included !== false) {
-    throw new Error("Evidence manifest has an unsupported shape");
+    invalid("evidence manifest has an unsupported shape");
   }
   if (manifest.evidence_artifact_digest !== computedDigest) {
-    throw new Error("Evidence bytes do not match the manifest artifact digest");
+    invalid("evidence bytes do not match the manifest artifact digest");
   }
-  return { manifest, evidence, artifact_digest: computedDigest };
+  if (assignment.failure_id !== failureId || assignment.assignment_id !== manifest.assignment_id
+      || assignment.run_id !== manifest.run_id) {
+    invalid("assignment identity does not match the evidence manifest");
+  }
+  if (assignment.manifest_digest !== sha256Digest(manifest)
+      || assignment.evidence_artifact_digest !== computedDigest
+      || !assignment.assigned_artifact_digests?.includes(computedDigest)) {
+    invalid("assignment does not bind the exact manifest and evidence artifact");
+  }
+  if (provenance.run_id !== assignment.run_id || provenance.assignment_id !== assignment.assignment_id
+      || provenance.failure_id !== failureId || provenance.worker_assignment_digest !== sha256Digest(assignment)
+      || provenance.manifest_digest !== assignment.manifest_digest
+      || provenance.evidence_artifact_digest !== computedDigest) {
+    invalid("run provenance does not bind the immutable worker assignment");
+  }
+  if (!answerKey || provenance.answer_key_digest !== sha256Digest(answerKey)) {
+    invalid("run provenance does not bind the scoring answer key");
+  }
+  if (!caseDefinition || provenance.case_definition_digest !== sha256Digest(caseDefinition)) {
+    invalid("run provenance does not bind the scoring case definition");
+  }
+  return { manifest, evidence, assignment, provenance, artifact_digest: computedDigest };
 }
 
 export function resolveEvidenceReference(reference, context) {
