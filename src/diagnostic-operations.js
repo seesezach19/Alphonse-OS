@@ -579,6 +579,84 @@ const descriptors = [
     resultKey: "diagnostic_case",
     issues: ["DIAGNOSTIC_CASE_NOT_FOUND"]
   }),
+  {
+    operation_id: "diagnostic.evidence_policy_activation.activate",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Activate exact deployed evidence-selection and cumulative-retention policies.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner_requester",
+    effect_class: "immutable_diagnostic_policy_activation",
+    idempotency: "activation_identity_and_canonical_policy_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/evidence-policy-activations" },
+    input_schema: {
+      type: "object",
+      required: ["evidence_policy_activation_id", "interpretation_activation_id", "deployment_id",
+        "selection_policy_export_id", "retention_policy_export_id"],
+      additionalProperties: false,
+      properties: {
+        evidence_policy_activation_id: { type: "string", format: "uuid" },
+        interpretation_activation_id: { type: "string", format: "uuid" },
+        deployment_id: { type: "string", format: "uuid" },
+        selection_policy_export_id: { type: "string", minLength: 1, maxLength: 200 },
+        retention_policy_export_id: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    output_schema: { type: "object", required: ["evidence_policy_activation"] },
+    supported_modes: ["live"],
+    preconditions: ["interpretation_activation_exists", "exact_deployment_exports_exist"],
+    outcomes: ["evidence_policy_activation_created", "evidence_policy_activation_replayed"],
+    issues: ["DIAGNOSTIC_EVIDENCE_POLICY_INVALID", "DIAGNOSTIC_EVIDENCE_POLICY_SCOPE_MISMATCH"],
+    emitted_events: [],
+    next_operations: ["diagnostic.evidence_policy_activation.get", "diagnostic.effect_evaluation.process"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.evidence_policy_activation.get",
+    summary: "Inspect exact activated evidence-selection, retention formulas, and packager identity.",
+    path: "/diagnostic/v0/evidence-policy-activations/{evidence_policy_activation_id}",
+    idName: "evidence_policy_activation_id",
+    resultKey: "evidence_policy_activation",
+    issues: ["DIAGNOSTIC_EVIDENCE_POLICY_ACTIVATION_NOT_FOUND"],
+    nextOperations: ["diagnostic.evidence_collection.process"]
+  }),
+  {
+    operation_id: "diagnostic.evidence_collection.process",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Request one durable collection-job wake and freeze only on completion or its stored deadline.",
+    visibility: "public",
+    authority_class: "authenticated_diagnostic_owner_wakeup_requester",
+    effect_class: "deterministic_evidence_package_freeze",
+    idempotency: "case_collection_job_and_exact_semantic_package_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/evidence-collections/process" },
+    input_schema: {
+      type: "object",
+      required: ["case_id"],
+      additionalProperties: false,
+      properties: { case_id: { type: "string", format: "uuid" } }
+    },
+    output_schema: { type: "object", required: ["collection", "evidence_package"] },
+    supported_modes: ["live"],
+    preconditions: ["policy_bound_trigger_exists", "durable_collection_job_exists"],
+    outcomes: ["collection_pending", "evidence_package_frozen", "evidence_package_replayed"],
+    issues: ["DIAGNOSTIC_EVIDENCE_POLICY_NOT_BOUND", "DIAGNOSTIC_EVIDENCE_PACKAGE_NONDETERMINISM"],
+    emitted_events: ["diagnostic.evidence_package.frozen"],
+    next_operations: ["diagnostic.evidence_collection.get", "diagnostic.evidence_package.get"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.evidence_collection.get",
+    summary: "Inspect one durable collection lease, reference set, scheduler state, and package-pin release.",
+    path: "/diagnostic/v0/evidence-collections/{case_id}",
+    idName: "case_id",
+    resultKey: "evidence_collection",
+    issues: ["DIAGNOSTIC_EVIDENCE_COLLECTION_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.evidence_package.get",
+    summary: "Inspect one immutable content-addressed worker package with complete disclosure accounting.",
+    path: "/diagnostic/v0/evidence-packages/{evidence_package_id}",
+    idName: "evidence_package_id",
+    resultKey: "evidence_package",
+    issues: ["DIAGNOSTIC_EVIDENCE_PACKAGE_NOT_FOUND"]
+  }),
   commandDescriptor({
     operationId: "diagnostic.case.report_failure",
     summary: "Open one authority-free Diagnostic Case from an explicit authenticated failure report.",

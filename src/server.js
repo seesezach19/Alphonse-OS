@@ -33,6 +33,7 @@ import { createDiagnosticObservationService } from "./diagnostic-observation-ser
 import { createDiagnosticTokenizationProofService } from "./diagnostic-tokenization-proof-service.js";
 import { createDiagnosticCorrelationService } from "./diagnostic-correlation-service.js";
 import { createDiagnosticEffectEvaluationService } from "./diagnostic-effect-evaluation-service.js";
+import { createDiagnosticEvidencePackageService } from "./diagnostic-evidence-package-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
 import { createPackageService } from "./package-service.js";
@@ -152,6 +153,7 @@ let diagnosticObservationService = null;
 let diagnosticTokenizationProofService = null;
 let diagnosticCorrelationService = null;
 let diagnosticEffectEvaluationService = null;
+let diagnosticEvidencePackageService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -304,6 +306,25 @@ const packageService = createPackageService(database, identityIntent, contextSer
 const packageTrustService = createPackageTrustService(database, installationId, environmentId, environmentClass);
 const deploymentService = createDeploymentService(database, identityIntent, packageService, installationId, environmentId);
 if (diagnosticDatabase && diagnosticArtifactStore) {
+  const resolveDeployedExports = async (deploymentId, exportIds) => {
+    const deployment = await deploymentService.getDeployment(deploymentId);
+    const packageVersion = await packageService.getPackageVersion(deployment.package_version_id);
+    const exports = new Map();
+    for (const exportId of exportIds) {
+      const exported = packageVersion.candidate.exports.find((entry) => entry.export_id === exportId);
+      if (!exported) {
+        throw new KernelError(404, "DEPLOYED_DIAGNOSTIC_EXPORT_NOT_FOUND",
+          "Deployment does not contain a requested diagnostic export.", { export_id: exportId });
+      }
+      exports.set(exportId, exported);
+    }
+    return {
+      deployment_id: deployment.deployment_id,
+      package_version_id: packageVersion.package_version_id,
+      package_artifact_digest: packageVersion.artifact_digest,
+      exports
+    };
+  };
   diagnosticObservationService = createDiagnosticObservationService({
     database: diagnosticDatabase,
     artifactStore: diagnosticArtifactStore,
@@ -349,25 +370,16 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     installationId,
     environmentId,
     correlationReader: diagnosticCorrelationService,
-    async resolveDeploymentExports(deploymentId, exportIds) {
-      const deployment = await deploymentService.getDeployment(deploymentId);
-      const packageVersion = await packageService.getPackageVersion(deployment.package_version_id);
-      const exports = new Map();
-      for (const exportId of exportIds) {
-        const exported = packageVersion.candidate.exports.find((entry) => entry.export_id === exportId);
-        if (!exported) {
-          throw new KernelError(404, "DEPLOYED_DIAGNOSTIC_INTERPRETATION_EXPORT_NOT_FOUND",
-            "Deployment does not contain a requested diagnostic interpretation export.", { export_id: exportId });
-        }
-        exports.set(exportId, exported);
-      }
-      return {
-        deployment_id: deployment.deployment_id,
-        package_version_id: packageVersion.package_version_id,
-        package_artifact_digest: packageVersion.artifact_digest,
-        exports
-      };
-    }
+    resolveDeploymentExports: resolveDeployedExports
+  });
+  diagnosticEvidencePackageService = createDiagnosticEvidencePackageService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    installationId,
+    environmentId,
+    correlationReader: diagnosticCorrelationService,
+    effectReader: diagnosticEffectEvaluationService,
+    resolveDeploymentExports: resolveDeployedExports
   });
 }
 const upgradeService = createUpgradeService(database, identityIntent, packageService, deploymentService,
@@ -552,6 +564,14 @@ function requireDiagnosticEffectEvaluation() {
   return diagnosticEffectEvaluationService;
 }
 
+function requireDiagnosticEvidencePackaging() {
+  if (!diagnosticEvidencePackageService) {
+    throw new KernelError(503, "DIAGNOSTIC_EVIDENCE_PACKAGING_UNAVAILABLE",
+      "Deterministic evidence collection and packaging are not configured.");
+  }
+  return diagnosticEvidencePackageService;
+}
+
 function observationAuthentication(request, body) {
   return body.authentication ?? {
     principal_id: request.headers["x-observation-principal-id"],
@@ -660,7 +680,8 @@ async function route(request, response) {
       canonical_observation_intake: diagnosticObservationService ? "healthy" : "not_configured",
       tokenization_proof_registry: diagnosticTokenizationProofService ? "healthy" : "not_configured",
       correlation_projection: diagnosticCorrelationService ? "healthy" : "not_configured",
-      effect_evaluation: diagnosticEffectEvaluationService ? "healthy" : "not_configured"
+      effect_evaluation: diagnosticEffectEvaluationService ? "healthy" : "not_configured",
+      evidence_packaging: diagnosticEvidencePackageService ? "healthy" : "not_configured"
     });
   }
 
@@ -852,6 +873,39 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { diagnostic_case: await service.getDeterministicCase(
       pathId(url.pathname, "/diagnostic/v0/deterministic-cases/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/evidence-policy-activations") {
+    const service = requireDiagnosticEvidencePackaging();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.evidence_policy_activation.activate");
+    return sendCommandResult(response, await service.activatePolicy(await readJson(request, 64 * 1024), actor.id));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/evidence-policy-activations\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEvidencePackaging();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { evidence_policy_activation: await service.getPolicyActivation(
+      pathId(url.pathname, "/diagnostic/v0/evidence-policy-activations/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/evidence-collections/process") {
+    const service = requireDiagnosticEvidencePackaging();
+    await authenticateDiagnosticOwner(request, "diagnostic.evidence_collection.process");
+    return sendCommandResult(response, await service.processCollection(await readJson(request, 64 * 1024)));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/evidence-collections\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEvidencePackaging();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { evidence_collection: await service.getCollection(
+      pathId(url.pathname, "/diagnostic/v0/evidence-collections/")) });
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/evidence-packages\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEvidencePackaging();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { evidence_package: await service.getPackage(
+      pathId(url.pathname, "/diagnostic/v0/evidence-packages/")) });
   }
 
   if (request.method === "GET" && url.pathname === "/diagnostic/v0/bootstrap") {

@@ -67,7 +67,8 @@
     "013_legacy_runtime_canonical_projection.sql",
     "014_correlation_projections.sql",
     "015_correlation_integrity_hardening.sql",
-    "016_effect_interpretation_and_behavior_cases.sql"
+    "016_effect_interpretation_and_behavior_cases.sql",
+    "017_evidence_collection_and_packages.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

@@ -25,7 +25,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through09 = process.argv.includes("--through-09");
+const through10 = process.argv.includes("--through-10");
+const through09 = through10 || process.argv.includes("--through-09");
 const through08 = through09 || process.argv.includes("--through-08");
 const through07 = through08 || process.argv.includes("--through-07");
 
@@ -679,15 +680,52 @@ try {
           assert.ok(stageFiles.includes(required), required);
         }
 
-        const processed = await post("/diagnostic/v0/effect-evaluations", {
+        let evidencePolicyActivation = null;
+        if (through10) {
+          const evidencePolicyActivationId = randomUUID();
+          const policyActivated = await post("/diagnostic/v0/evidence-policy-activations", {
+            evidence_policy_activation_id: evidencePolicyActivationId,
+            interpretation_activation_id: activationId,
+            deployment_id: deployment.deployment_id,
+            selection_policy_export_id: deployment.evidence_selection_policy_export.export_id,
+            retention_policy_export_id: deployment.diagnostic_retention_policy_export.export_id
+          });
+          assert.equal(policyActivated.response.status, 201, JSON.stringify(policyActivated.body));
+          evidencePolicyActivation = policyActivated.body.evidence_policy_activation;
+          assert.equal(evidencePolicyActivation.evidence_policy_activation_id, evidencePolicyActivationId);
+          assert.deepEqual(evidencePolicyActivation.retention_requirements, {
+            pretrigger_observation_horizon_seconds: 120,
+            pretrigger_pipeline_retry_horizon_seconds: 120,
+            ordinary_retention_min_seconds: 270,
+            collection_window_seconds: 60,
+            post_trigger_retry_horizon_seconds: 90,
+            collection_lease_min_seconds: 180
+          });
+          assert.equal(evidencePolicyActivation.stage.artifact_manifest.schema_version,
+            "alphonse.diagnostic-evidence-stage-artifact-manifest.v0.1");
+          const evidenceStageFiles = evidencePolicyActivation.stage.artifact_manifest.module_closure
+            .map((entry) => entry.path);
+          for (const required of ["src/diagnostic-evidence-package-service.js",
+            "src/diagnostic-evidence-selector.js", "src/diagnostic-evidence-contracts.js",
+            "src/diagnostic-evidence-collection-persistence.js"]) {
+            assert.ok(evidenceStageFiles.includes(required), required);
+          }
+        }
+
+        const effectEvaluationInput = {
           correlation_projection_id: projection.projection_id,
-          activation_id: activationId
-        });
+          activation_id: activationId,
+          ...(evidencePolicyActivation ? {
+            evidence_policy_activation_id: evidencePolicyActivation.evidence_policy_activation_id
+          } : {})
+        };
+        const processed = await post("/diagnostic/v0/effect-evaluations", effectEvaluationInput);
         assert.equal(processed.response.status, 201, JSON.stringify(processed.body));
         const effectProjection = processed.body.diagnostic_effect_projection;
         const evaluation = processed.body.behavior_evaluation;
         const trigger = processed.body.diagnostic_trigger;
         const diagnosticCase = processed.body.diagnostic_case;
+        const initialCollection = processed.body.evidence_collection;
         assert.equal(effectProjection.semantic_projection.schema_version,
           "alphonse.diagnostic-effect-projection.v0.1");
         assert.equal(effectProjection.semantic_projection.effects.length, 2);
@@ -710,6 +748,22 @@ try {
         assert.equal(trigger.root_cause_established, false);
         assert.equal(trigger.repair_authority_granted, false);
         assert.equal(trigger.kernel_effect_authority_granted, false);
+        if (through10) {
+          assert.equal(trigger.evidence_policy_activation_id,
+            evidencePolicyActivation.evidence_policy_activation_id);
+          assert.equal(trigger.evidence_collection_required, true);
+          assert.equal(initialCollection.state, "active");
+          assert.equal(initialCollection.scheduler.status, "pending");
+          assert.equal(initialCollection.scheduler.attempt_count, 0);
+          assert.ok(Date.parse(initialCollection.lease_expires_at)
+            > Date.parse(initialCollection.collection_deadline));
+          assert.ok(initialCollection.references.length >= 19,
+            JSON.stringify(initialCollection.references));
+          assert.ok(initialCollection.references.every((reference) =>
+            reference.reference_stage === "trigger_input"));
+        } else {
+          assert.equal(initialCollection, null);
+        }
         assert.equal(diagnosticCase.state, "open");
         assert.equal(diagnosticCase.root_cause_status, "NOT_ESTABLISHED");
         assert.deepEqual(diagnosticCase.authority, {
@@ -730,10 +784,7 @@ try {
         assert.ok(diagnosticCase.claims.every((claim) => claim.processing_profile === "D0"
           && claim.evidence_references.length > 0));
 
-        const replayed = await post("/diagnostic/v0/effect-evaluations", {
-          correlation_projection_id: projection.projection_id,
-          activation_id: activationId
-        });
+        const replayed = await post("/diagnostic/v0/effect-evaluations", effectEvaluationInput);
         assert.equal(replayed.response.status, 200, JSON.stringify(replayed.body));
         assert.equal(replayed.body.diagnostic_effect_projection.effect_projection_id,
           effectProjection.effect_projection_id);
@@ -756,10 +807,7 @@ try {
           await effectPrivileged.query(
             "ALTER TABLE diagnostic_effect_projections ENABLE TRIGGER diagnostic_effect_projections_immutable"
           );
-          const corruptEffectReplay = await post("/diagnostic/v0/effect-evaluations", {
-            correlation_projection_id: projection.projection_id,
-            activation_id: activationId
-          });
+          const corruptEffectReplay = await post("/diagnostic/v0/effect-evaluations", effectEvaluationInput);
           assert.equal(corruptEffectReplay.response.status, 500, JSON.stringify(corruptEffectReplay.body));
           assert.equal(corruptEffectReplay.body.error.code,
             "DIAGNOSTIC_EFFECT_PROJECTION_INTEGRITY_VIOLATION");
@@ -813,7 +861,145 @@ try {
           );
           assert.deepEqual(counts.rows[0], { effects: 1, evaluations: 1, triggers: 1, cases: 1 });
         } finally { await immutableDerived.end(); }
-        interpretation = { activation, effectProjection, evaluation, trigger, diagnosticCase };
+        let evidencePackage = null;
+        let finalCollection = initialCollection;
+        if (through10) {
+          const frozen = await post("/diagnostic/v0/evidence-collections/process", {
+            case_id: diagnosticCase.case_id
+          });
+          assert.equal(frozen.response.status, 201, JSON.stringify(frozen.body));
+          evidencePackage = frozen.body.evidence_package;
+          finalCollection = frozen.body.collection;
+          assert.equal(frozen.body.readiness.reason, "required_sources_complete");
+          assert.equal(finalCollection.state, "released_to_package_pins");
+          assert.equal(finalCollection.scheduler.status, "frozen");
+          assert.equal(finalCollection.scheduler.attempt_count, 1);
+          assert.ok(finalCollection.references.length > initialCollection.references.length);
+          assert.ok(finalCollection.references.some((reference) =>
+            reference.reference_stage === "collection_extension"
+            && reference.reference_type === "diagnostic_observation_receipt"));
+          assert.equal(evidencePackage.freeze_reason, "required_sources_complete");
+          assert.equal(evidencePackage.semantic_package.schema_version,
+            "alphonse.diagnostic-evidence-package.v0.1");
+          assert.equal(evidencePackage.semantic_package.freeze.required_sources_complete, true);
+          assert.equal(evidencePackage.semantic_package.freeze.committed_intake_cutoff,
+            projection.committed_intake_cutoff);
+          assert.equal(evidencePackage.semantic_package.manifest.authenticated_observations.observations.length, 8);
+          assert.ok(evidencePackage.semantic_package.manifest.authenticated_observations
+            .authenticated_provenance_dependencies.length > 0);
+          assert.deepEqual(evidencePackage.semantic_package.manifest.role_completion.selected_counts_by_type, {
+            "destination.effect": 2,
+            "destination.request": 2,
+            "runtime.execution": 2,
+            "source.delivery": 2
+          });
+          assert.equal(evidencePackage.semantic_package.manifest.role_completion.missing_roles.length, 0);
+          assert.equal(evidencePackage.semantic_package.manifest.coverage_and_limitations.gaps.length, 0);
+          assert.equal(evidencePackage.semantic_package.manifest.coverage_and_limitations.conflicts.length, 0);
+          assert.equal(evidencePackage.semantic_package.manifest.coverage_and_limitations.rejections.length, 0);
+          assert.equal(evidencePackage.semantic_package.manifest.coverage_and_limitations
+            .unresolved_relationships.length, 0);
+          assert.equal(evidencePackage.semantic_package.manifest.disclosure_accounting
+            .broad_logical_operation_search_used, false);
+          assert.equal(evidencePackage.semantic_package.manifest.disclosure_accounting
+            .model_selected_evidence, false);
+          assert.deepEqual(evidencePackage.semantic_package.authority, {
+            assignment_created: false,
+            dispatch_authorized: false,
+            worker_run_created: false,
+            model_request_created: false,
+            diagnosis_established: false,
+            repair_authorized: false,
+            kernel_effect_authorized: false
+          });
+          assert.match(evidencePackage.semantic_digest, /^sha256:[0-9a-f]{64}$/u);
+          assert.match(evidencePackage.package_artifact_digest, /^sha256:[0-9a-f]{64}$/u);
+
+          const packageReplay = await post("/diagnostic/v0/evidence-collections/process", {
+            case_id: diagnosticCase.case_id
+          });
+          assert.equal(packageReplay.response.status, 200, JSON.stringify(packageReplay.body));
+          assert.equal(packageReplay.body.evidence_package.evidence_package_id,
+            evidencePackage.evidence_package_id);
+          assert.equal(packageReplay.body.evidence_package.semantic_digest, evidencePackage.semantic_digest);
+          const policyRead = await kernel(`/diagnostic/v0/evidence-policy-activations/${
+            evidencePolicyActivation.evidence_policy_activation_id}`);
+          assert.equal(policyRead.response.status, 200, JSON.stringify(policyRead.body));
+          const collectionRead = await kernel(`/diagnostic/v0/evidence-collections/${diagnosticCase.case_id}`);
+          assert.equal(collectionRead.response.status, 200, JSON.stringify(collectionRead.body));
+          assert.equal(collectionRead.body.evidence_collection.lease_id, finalCollection.lease_id);
+          const packageRead = await kernel(`/diagnostic/v0/evidence-packages/${evidencePackage.evidence_package_id}`);
+          assert.equal(packageRead.response.status, 200, JSON.stringify(packageRead.body));
+          assert.equal(packageRead.body.evidence_package.package_artifact_digest,
+            evidencePackage.package_artifact_digest);
+
+          const packageDb = new pg.Client({ connectionString:
+            "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+          await packageDb.connect();
+          try {
+            await assert.rejects(packageDb.query(
+              "UPDATE diagnostic_evidence_packages SET freeze_reason='collection_deadline' WHERE evidence_package_id=$1",
+              [evidencePackage.evidence_package_id]), /immutable records cannot be updated/u);
+            const packageCounts = await packageDb.query(
+              `SELECT
+                (SELECT COUNT(*)::int FROM diagnostic_evidence_packages) AS packages,
+                (SELECT COUNT(*)::int FROM diagnostic_evidence_collection_leases) AS leases,
+                (SELECT COUNT(*)::int FROM diagnostic_evidence_collection_lease_releases) AS releases,
+                (SELECT COUNT(*)::int FROM diagnostic_artifact_retention_pins) AS pins,
+                (SELECT COUNT(*)::int FROM diagnostic_diagnosis_requests) AS diagnosis_requests`
+            );
+            assert.equal(packageCounts.rows[0].packages, 1);
+            assert.equal(packageCounts.rows[0].leases, 1);
+            assert.equal(packageCounts.rows[0].releases, 1);
+            assert.ok(packageCounts.rows[0].pins >= finalCollection.references.length + 1);
+            assert.equal(packageCounts.rows[0].diagnosis_requests, 0);
+          } finally { await packageDb.end(); }
+
+          const packagePrivileged = new pg.Client({ connectionString:
+            "postgresql://alphonse:local-development-only@127.0.0.1:45505/alphonse_diagnostic" });
+          await packagePrivileged.connect();
+          try {
+            await packagePrivileged.query(
+              "ALTER TABLE diagnostic_evidence_packages DISABLE TRIGGER diagnostic_evidence_packages_immutable"
+            );
+            await packagePrivileged.query(
+              "UPDATE diagnostic_evidence_packages SET semantic_package=$2::jsonb WHERE evidence_package_id=$1",
+              [evidencePackage.evidence_package_id,
+                JSON.stringify({ ...evidencePackage.semantic_package, privileged_tamper: true })]
+            );
+            await packagePrivileged.query(
+              "ALTER TABLE diagnostic_evidence_packages ENABLE TRIGGER diagnostic_evidence_packages_immutable"
+            );
+            const corruptPackageReplay = await post("/diagnostic/v0/evidence-collections/process", {
+              case_id: diagnosticCase.case_id
+            });
+            assert.equal(corruptPackageReplay.response.status, 500,
+              JSON.stringify(corruptPackageReplay.body));
+            assert.equal(corruptPackageReplay.body.error.code,
+              "DIAGNOSTIC_EVIDENCE_PACKAGE_INTEGRITY_VIOLATION");
+            const corruptPackageCounts = await packagePrivileged.query(
+              `SELECT
+                (SELECT COUNT(*)::int FROM diagnostic_evidence_packages) AS packages,
+                (SELECT COUNT(*)::int FROM diagnostic_evidence_collection_lease_releases) AS releases`
+            );
+            assert.deepEqual(corruptPackageCounts.rows[0], { packages: 1, releases: 1 },
+              "stored package corruption must not be accepted as replay or create replacement evidence");
+          } finally {
+            await packagePrivileged.query(
+              "ALTER TABLE diagnostic_evidence_packages DISABLE TRIGGER diagnostic_evidence_packages_immutable"
+            ).catch(() => {});
+            await packagePrivileged.query(
+              "UPDATE diagnostic_evidence_packages SET semantic_package=$2::jsonb WHERE evidence_package_id=$1",
+              [evidencePackage.evidence_package_id, JSON.stringify(evidencePackage.semantic_package)]
+            ).catch(() => {});
+            await packagePrivileged.query(
+              "ALTER TABLE diagnostic_evidence_packages ENABLE TRIGGER diagnostic_evidence_packages_immutable"
+            ).catch(() => {});
+            await packagePrivileged.end();
+          }
+        }
+        interpretation = { activation, evidencePolicyActivation, effectProjection, evaluation, trigger,
+          diagnosticCase, finalCollection, evidencePackage };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -834,10 +1020,12 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through09 ? "canonical-diagnostic-proof-09"
+    schema_version: "0.1.0", ticket: through10 ? "canonical-diagnostic-proof-10"
+      : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through09 ? "deterministic_committed_effect_violation_case"
+    status: "passed", completed_capability: through10 ? "frozen_content_addressed_evidence_package"
+      : through09 ? "deterministic_committed_effect_violation_case"
       : through08 ? "immutable_cross_stream_correlation_projection"
       : through07 ? "bound_runtime_and_separate_crm_observation" : "journaled_duplicate_ingress_observation",
     proven: ["journal_before_forward", "stable_opaque_logical_operation", "distinct_delivery_attempts",
@@ -858,7 +1046,13 @@ try {
         "two_committed_effects_counted", "behavior_invariant_violated",
         "deterministic_trigger_and_case", "temporal_claim_envelopes",
         "root_cause_not_established", "no_repair_or_effect_authority",
-        "stored_effect_corruption_not_replay"] : [])],
+        "stored_effect_corruption_not_replay"] : []),
+      ...(through10 ? ["cumulative_retention_formulas_validated",
+        "trigger_transactional_collection_lease", "durable_collection_scheduler_state",
+        "matched_effect_typed_ancestor_selection", "complete_disclosure_accounting",
+        "authenticated_provenance_dependencies_selected", "content_addressed_worker_package",
+        "collection_lease_replaced_by_retention_pins", "immutable_package_exact_replay",
+        "stored_package_corruption_not_replay", "no_assignment_dispatch_worker_or_model"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
@@ -871,6 +1065,12 @@ try {
       .filter((effect) => effect.status === "committed").length ?? 0,
     behavior_evaluation_result: extendedResult?.interpretation?.evaluation.semantic_evaluation.result ?? null,
     deterministic_case_count: extendedResult?.interpretation ? 1 : 0,
+    evidence_collection_lease_count: extendedResult?.interpretation?.finalCollection ? 1 : 0,
+    evidence_package_count: extendedResult?.interpretation?.evidencePackage ? 1 : 0,
+    evidence_package_semantic_digest:
+      extendedResult?.interpretation?.evidencePackage?.semantic_digest ?? null,
+    evidence_package_artifact_digest:
+      extendedResult?.interpretation?.evidencePackage?.package_artifact_digest ?? null,
     model_requests: 0, worker_run_created: false
   }, null, 2)}\n`);
 } catch (error) {

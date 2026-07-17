@@ -7,9 +7,9 @@ import { sha256Digest } from "./canonical-json.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRYPOINTS = [
-  "src/diagnostic-effect-evaluation-service.js",
-  "src/diagnostic-effect-projector.js",
-  "src/diagnostic-effect-evaluator.js"
+  "src/diagnostic-evidence-package-service.js",
+  "src/diagnostic-evidence-selector.js",
+  "src/diagnostic-evidence-collection-persistence.js"
 ];
 const BOUND_FILES = [
   "package.json",
@@ -38,12 +38,12 @@ function relativeModuleSpecifiers(source) {
 function projectPath(absolutePath) {
   const relative = path.relative(PROJECT_ROOT, absolutePath).replaceAll(path.sep, "/");
   if (relative.startsWith("../") || path.isAbsolute(relative)) {
-    throw new Error(`Diagnostic effect artifact dependency escapes the project root: ${absolutePath}`);
+    throw new Error(`Diagnostic evidence artifact dependency escapes the project root: ${absolutePath}`);
   }
   return relative;
 }
 
-export function collectDiagnosticEffectModuleClosure(entrypoints = ENTRYPOINTS, readFile = readFileSync) {
+export function collectDiagnosticEvidenceModuleClosure(entrypoints = ENTRYPOINTS, readFile = readFileSync) {
   const pending = entrypoints.map((entry) => path.resolve(PROJECT_ROOT, entry));
   const visited = new Set();
   while (pending.length) {
@@ -64,21 +64,21 @@ function fileEntry(relativePath, readFile) {
   return { path: relativePath, size_bytes: bytes.length, digest: rawDigest(bytes) };
 }
 
-export function buildDiagnosticEffectArtifactManifest({
+export function buildDiagnosticEvidenceArtifactManifest({
   readFile = readFileSync,
   nodeVersion = process.version
 } = {}) {
   return {
-    schema_version: "alphonse.diagnostic-effect-stage-artifact-manifest.v0.1",
+    schema_version: "alphonse.diagnostic-evidence-stage-artifact-manifest.v0.1",
     entrypoints: [...ENTRYPOINTS],
-    module_closure: collectDiagnosticEffectModuleClosure(ENTRYPOINTS, readFile)
+    module_closure: collectDiagnosticEvidenceModuleClosure(ENTRYPOINTS, readFile)
       .map((relativePath) => fileEntry(relativePath, readFile)),
     bound_files: BOUND_FILES.map((relativePath) => fileEntry(relativePath, readFile)),
     runtime: { node_version: nodeVersion, module_format: "node-esm-source" }
   };
 }
 
-export const DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_MANIFEST =
-  Object.freeze(buildDiagnosticEffectArtifactManifest());
-export const DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_DIGEST =
-  sha256Digest(DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_MANIFEST);
+export const DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MANIFEST =
+  Object.freeze(buildDiagnosticEvidenceArtifactManifest());
+export const DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_DIGEST =
+  sha256Digest(DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MANIFEST);

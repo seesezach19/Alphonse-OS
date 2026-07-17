@@ -301,6 +301,67 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       output_states: ["indeterminate", "satisfied", "violated"]
     }
   };
+  const evidenceSelectionPolicy = {
+    kind: "evidence_selection_policy",
+    export_id: "evidence:typed-effect-ancestors",
+    contract_version: "0.1.0",
+    content: {
+      schema_version: "alphonse.evidence-selection-policy.v0.1",
+      policy_id: "policy:typed-effect-ancestors",
+      seed: "matched_committed_effects",
+      required_roles: ["designated_commit", "destination_request", "source_delivery",
+        "terminal_runtime_execution"],
+      required_relationships: ["delivery_reported_execution", "delivery_reported_request",
+        "logical_operation_contains_delivery", "request_reported_ledger_claim"],
+      allowed_relationships: ["delivery_identity_equals_request_key", "delivery_reported_execution",
+        "delivery_reported_request", "logical_operation_contains_delivery", "request_keys_are_distinct",
+        "request_reported_ledger_claim"],
+      coverage: {
+        require_contributing_streams_complete: true,
+        include_gaps: true,
+        include_conflicts: true,
+        include_rejections: true,
+        include_unresolved_relationships: true,
+        include_limitations: true
+      },
+      provenance: { follow_tokenization_dependencies: true, require_complete_proof_chain: true },
+      detail: { allowed_media_types: [], omission_reason: "policy_excludes_opaque_detail" },
+      optional_roles: ["destination_snapshot"]
+    }
+  };
+  const diagnosticRetentionPolicy = {
+    kind: "diagnostic_retention_policy",
+    export_id: "retention:first-evidence-package",
+    contract_version: "0.1.0",
+    content: {
+      schema_version: "alphonse.diagnostic-retention-policy.v0.1",
+      policy_id: "policy:first-evidence-package-retention",
+      ordinary_retention_seconds: 300,
+      collection_lease_seconds: 240,
+      package_pin_seconds: 604800,
+      pretrigger_observation_horizon_seconds: 120,
+      pretrigger_stage_intervals: [
+        { stage: "correlation_projection", max_scheduling_delay_seconds: 10,
+          max_retry_delay_seconds: 20 },
+        { stage: "effect_interpretation", max_scheduling_delay_seconds: 10,
+          max_retry_delay_seconds: 20 },
+        { stage: "behavior_evaluation", max_scheduling_delay_seconds: 10,
+          max_retry_delay_seconds: 20 },
+        { stage: "diagnostic_trigger", max_scheduling_delay_seconds: 10,
+          max_retry_delay_seconds: 20 }
+      ],
+      collection_window_seconds: 60,
+      post_trigger_stage_intervals: [
+        { stage: "evidence_collection", max_scheduling_delay_seconds: 10,
+          max_retry_delay_seconds: 20 },
+        { stage: "evidence_packaging", max_scheduling_delay_seconds: 10,
+          max_retry_delay_seconds: 20 },
+        { stage: "assignment_creation", max_scheduling_delay_seconds: 10,
+          max_retry_delay_seconds: 20 }
+      ],
+      gc_margin_seconds: 30
+    }
+  };
   const candidate = {
     schema_version: "alphonse.package_candidate.v0.1",
     identity: { package_id: "com.alphonse.canonical-proof", version: "0.1.0",
@@ -320,6 +381,8 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       integrationBehaviorContract,
       behaviorContract,
       diagnosticEvaluator,
+      evidenceSelectionPolicy,
+      diagnosticRetentionPolicy,
       { kind: "schema", export_id: "configuration", contract_version: "1.0.0", content: {
         type: "object", required: ["enabled"], properties: { enabled: { type: "boolean" } }
       } },
@@ -456,6 +519,8 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
     destination_effect_schema_export: destinationEffectSchema,
     integration_behavior_contract_export: integrationBehaviorContract,
     behavior_contract_export: behaviorContract,
-    diagnostic_evaluator_export: diagnosticEvaluator
+    diagnostic_evaluator_export: diagnosticEvaluator,
+    evidence_selection_policy_export: evidenceSelectionPolicy,
+    diagnostic_retention_policy_export: diagnosticRetentionPolicy
   };
 }

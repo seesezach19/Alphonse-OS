@@ -5,20 +5,23 @@ content-addressed worker package on required-source completion or durable deadli
 
 **Blocked by:** 09 - Interpret committed effects and open the diagnostic case.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Validate cumulative ordinary-retention and collection-lease formulas from exact activated policy artifacts and
+- [x] Validate cumulative ordinary-retention and collection-lease formulas from exact activated policy artifacts and
       reject a configuration where individual intervals fit but the applicable sum does not.
-- [ ] Create an Evidence Collection Retention Lease transactionally with the Diagnostic Trigger and extend it for
+- [x] Create an Evidence Collection Retention Lease transactionally with the Diagnostic Trigger and extend it for
       newly relevant collection material.
-- [ ] Define required role completion for source deliveries, terminal executions, destination requests, designated
+- [x] Define required role completion for source deliveries, terminal executions, destination requests, designated
       commits, explicit correlation paths, and adequate contributing-stream coverage.
-- [ ] Freeze on required-source completion or a durable first-party deadline through scheduler state rather than an
+- [x] Freeze on required-source completion or a durable first-party deadline through scheduler state rather than an
       in-process timer.
-- [ ] Select from matched committed effects through policy-allowed typed inbound edges, including required ancestors,
+- [x] Select from matched committed effects through policy-allowed typed inbound edges, including required ancestors,
       gaps, conflicts, contradictions, unresolved relationships, coverage, and exact interpretation dependencies.
-- [ ] Separate governed dependencies, authenticated observations, deterministic facts, and coverage limitations in
+- [x] Separate governed dependencies, authenticated observations, deterministic facts, and coverage limitations in
       the package manifest with complete disclosure accounting.
-- [ ] Verify every selected artifact by digest and atomically replace collection leases with package retention pins.
-- [ ] Produce one immutable semantic package digest and no assignment, dispatch authority, worker run, or model
+- [x] Verify every selected artifact by digest and atomically replace collection leases with package retention pins.
+- [x] Produce one immutable semantic package digest and no assignment, dispatch authority, worker run, or model
       request yet.
+
+Verified with 258/258 unit tests and a fresh-volume `--through-10` Docker proof, including exact replay and
+privileged stored-package corruption classification.

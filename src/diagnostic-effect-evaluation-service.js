@@ -12,6 +12,11 @@ import {
   validateIntegrationBehaviorContract
 } from "./diagnostic-effect-contracts.js";
 import {
+  createEvidenceCollectionForTrigger,
+  getEvidencePolicyActivation,
+  loadEvidenceCollection
+} from "./diagnostic-evidence-collection-persistence.js";
+import {
   DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_DIGEST,
   DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_MANIFEST
 } from "./diagnostic-effect-artifact.js";
@@ -32,7 +37,9 @@ const STAGE_ACTIVATION_SCHEMA = "alphonse.diagnostic-interpretation-activation.v
 const EFFECT_RECORD_SCHEMA = "alphonse.diagnostic-effect-projection-record.v0.1";
 const EVALUATION_RECORD_SCHEMA = "alphonse.behavior-evaluation-record.v0.1";
 const TRIGGER_SCHEMA = "alphonse.diagnostic-trigger.v0.1";
+const TRIGGER_SCHEMA_WITH_COLLECTION = "alphonse.diagnostic-trigger.v0.2";
 const CASE_SCHEMA = "alphonse.diagnostic-case.v0.1";
+const CASE_SCHEMA_WITH_COLLECTION = "alphonse.diagnostic-case.v0.2";
 const STAGE_AUTHOR = "diagnostic-stage-worker:effect-evaluation-v0.1";
 
 function same(left, right) {
@@ -202,11 +209,15 @@ function verifyEvaluationRow(row) {
 }
 
 function triggerView(row) {
+  const withCollection = row?.trigger_document?.schema_version === TRIGGER_SCHEMA_WITH_COLLECTION;
   if (!row || sha256Digest(row.trigger_document) !== row.trigger_digest
-      || row.trigger_document.schema_version !== TRIGGER_SCHEMA
+      || ![TRIGGER_SCHEMA, TRIGGER_SCHEMA_WITH_COLLECTION].includes(row.trigger_document.schema_version)
       || row.trigger_document.trigger_id !== row.trigger_id
       || row.trigger_document.evaluation_id !== row.evaluation_id
       || row.trigger_document.logical_operation_id !== row.logical_operation_id
+      || (withCollection
+        ? row.trigger_document.evidence_policy_activation_id !== row.evidence_policy_activation_id
+        : row.evidence_policy_activation_id !== null)
       || row.trigger_document.created_at !== iso(row.created_at)) {
     failIntegrity("DIAGNOSTIC_TRIGGER_INTEGRITY_VIOLATION",
       "Stored Diagnostic Trigger does not match its immutable digest.");
@@ -238,12 +249,17 @@ function claimManifestDigest(claims) {
 }
 
 function caseView(row, trigger, claims) {
+  const withCollection = row?.case_document?.schema_version === CASE_SCHEMA_WITH_COLLECTION;
   if (!row || row.case_origin !== "deterministic_behavior_trigger"
       || sha256Digest(row.case_document) !== row.case_digest
-      || row.case_document.schema_version !== CASE_SCHEMA
+      || ![CASE_SCHEMA, CASE_SCHEMA_WITH_COLLECTION].includes(row.case_document.schema_version)
       || row.case_document.case_id !== row.case_id
       || row.case_document.trigger_id !== row.trigger_id
       || row.case_document.trigger_digest !== trigger.trigger_digest
+      || (withCollection
+        ? row.case_document.evidence_policy_activation_id !== trigger.evidence_policy_activation_id
+          || row.case_document.evidence_collection_required !== true
+        : trigger.evidence_policy_activation_id !== undefined)
       || row.case_document.opening_basis.evaluation_id !== trigger.evaluation_id
       || row.case_document.opening_basis.evaluation_semantic_digest !== trigger.evaluation_semantic_digest
       || row.case_document.claim_manifest_digest !== claimManifestDigest(claims)
@@ -410,12 +426,15 @@ export function createDiagnosticEffectEvaluationService({
       "SELECT * FROM diagnostic_claim_envelopes WHERE installation_id=$1 AND case_id=$2 ORDER BY claim_type,claim_id",
       [installationId, caseRow?.case_id]
     )).rows;
-      const claims = claimRows.map(claimView);
-      return {
+    const claims = claimRows.map(claimView);
+    const collection = trigger.evidence_policy_activation_id
+      ? (await loadEvidenceCollection(client, installationId, caseRow.case_id)).view : null;
+    return {
       diagnostic_effect_projection: effectView(effectRow),
       behavior_evaluation: evaluationView(evaluationRow),
       diagnostic_trigger: trigger,
-      diagnostic_case: caseView(caseRow, trigger, claims)
+      diagnostic_case: caseView(caseRow, trigger, claims),
+      evidence_collection: collection
     };
   }
 
@@ -526,9 +545,14 @@ export function createDiagnosticEffectEvaluationService({
   }
 
   async function process(input, now = new Date()) {
-    exact(input, "input", ["correlation_projection_id", "activation_id"]);
+    const withEvidenceCollection = Object.hasOwn(input ?? {}, "evidence_policy_activation_id");
+    exact(input, "input", withEvidenceCollection
+      ? ["correlation_projection_id", "activation_id", "evidence_policy_activation_id"]
+      : ["correlation_projection_id", "activation_id"]);
     const correlationProjectionId = uuid(input.correlation_projection_id, "correlation_projection_id");
     const activationId = uuid(input.activation_id, "activation_id");
+    const evidencePolicyActivationId = withEvidenceCollection
+      ? uuid(input.evidence_policy_activation_id, "evidence_policy_activation_id") : null;
     const projection = await correlationReader.getProjection(correlationProjectionId);
     if (projection.semantic_projection.schema_version !== "alphonse.correlation-projection.v0.2") {
       throw new KernelError(409, "DIAGNOSTIC_EFFECT_PROJECTION_VERSION_UNSUPPORTED",
@@ -544,6 +568,20 @@ export function createDiagnosticEffectEvaluationService({
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
         [`diagnostic-effect:${installationId}:${correlationProjectionId}:${activationId}`]);
       const activation = await getActivation(activationId, client);
+      const evidencePolicyActivation = evidencePolicyActivationId
+        ? await getEvidencePolicyActivation(client, {
+          installationId,
+          environmentId,
+          evidencePolicyActivationId
+        }) : null;
+      if (evidencePolicyActivation
+          && (evidencePolicyActivation.interpretation_activation_id !== activationId
+            || evidencePolicyActivation.deployment_id !== activation.deployment_id
+            || evidencePolicyActivation.package_version_id !== activation.package_version_id
+            || evidencePolicyActivation.package_artifact_digest !== activation.package_artifact_digest)) {
+        throw new KernelError(409, "DIAGNOSTIC_EVIDENCE_POLICY_SCOPE_MISMATCH",
+          "Evidence policy activation does not bind the exact interpretation activation and deployed package.");
+      }
       if (activation.stage_artifact_digest !== DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_DIGEST
           || !same(activation.stage_artifact_manifest, DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_MANIFEST)
           || activation.interpreter_rules_digest !== DIAGNOSTIC_EFFECT_INTERPRETER_RULES_DIGEST
@@ -618,6 +656,10 @@ export function createDiagnosticEffectEvaluationService({
             "Exact projection, activation, and verified observation inputs produced different effect semantics.");
         }
         const result = await loadExistingPipeline(client, existing);
+        if ((result.diagnostic_trigger.evidence_policy_activation_id ?? null) !== evidencePolicyActivationId) {
+          throw new KernelError(409, "DIAGNOSTIC_EVIDENCE_POLICY_TRIGGER_CONFLICT",
+            "Existing deterministic trigger binds a different evidence collection policy.");
+        }
         const expectedEvaluation = recomputedEvaluation();
         if (result.behavior_evaluation.evaluation_id !== expectedEvaluation.evaluation_id
             || result.behavior_evaluation.semantic_digest !== expectedEvaluation.semantic_digest
@@ -681,7 +723,7 @@ export function createDiagnosticEffectEvaluationService({
       });
       const caseId = deterministicUuid({ namespace: "diagnostic-case", trigger_id: triggerId });
       const triggerDocument = {
-        schema_version: TRIGGER_SCHEMA,
+        schema_version: evidencePolicyActivation ? TRIGGER_SCHEMA_WITH_COLLECTION : TRIGGER_SCHEMA,
         trigger_id: triggerId,
         case_id: caseId,
         evaluation_id: evaluation.evaluation_id,
@@ -692,16 +734,22 @@ export function createDiagnosticEffectEvaluationService({
         root_cause_established: false,
         repair_authority_granted: false,
         kernel_effect_authority_granted: false,
+        ...(evidencePolicyActivation ? {
+          evidence_policy_activation_id: evidencePolicyActivation.evidence_policy_activation_id,
+          evidence_policy_activation_digest: evidencePolicyActivation.activation_digest,
+          evidence_collection_required: true
+        } : {}),
         created_at: createdAt
       };
       const triggerDigest = sha256Digest(triggerDocument);
       const triggerRow = (await client.query(
         `INSERT INTO diagnostic_behavior_triggers
           (trigger_id,installation_id,environment_id,evaluation_id,logical_operation_id,
-           trigger_document,trigger_digest,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+           trigger_document,trigger_digest,created_at,evidence_policy_activation_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [triggerId, installationId, environmentId, evaluation.evaluation_id,
-          projection.logical_operation_id, triggerDocument, triggerDigest, createdAt]
+          projection.logical_operation_id, triggerDocument, triggerDigest, createdAt,
+          evidencePolicyActivation?.evidence_policy_activation_id ?? null]
       )).rows[0];
       const trigger = triggerView(triggerRow);
       const claimMaterials = claimsForPipeline({
@@ -715,7 +763,7 @@ export function createDiagnosticEffectEvaluationService({
         assessedAt: createdAt
       });
       const caseDocument = {
-        schema_version: CASE_SCHEMA,
+        schema_version: evidencePolicyActivation ? CASE_SCHEMA_WITH_COLLECTION : CASE_SCHEMA,
         case_id: caseId,
         trigger_id: triggerId,
         trigger_digest: triggerDigest,
@@ -730,6 +778,11 @@ export function createDiagnosticEffectEvaluationService({
           ...claim.document,
           claim_digest: claim.claim_digest
         }))),
+        ...(evidencePolicyActivation ? {
+          evidence_policy_activation_id: evidencePolicyActivation.evidence_policy_activation_id,
+          evidence_policy_activation_digest: evidencePolicyActivation.activation_digest,
+          evidence_collection_required: true
+        } : {}),
         root_cause_status: "NOT_ESTABLISHED",
         authority: {
           diagnosis: "not_granted",
@@ -758,6 +811,38 @@ export function createDiagnosticEffectEvaluationService({
             claim.document, claim.claim_digest, createdAt]
         );
       }
+      const evidenceCollection = evidencePolicyActivation
+        ? await createEvidenceCollectionForTrigger({
+          client,
+          installationId,
+          environmentId,
+          caseId,
+          triggerId,
+          triggerDigest,
+          evidencePolicyActivation,
+          initialReferences: [
+            { reference_type: "correlation_projection", reference_id: correlationProjectionId,
+              reference_digest: projection.semantic_digest },
+            { reference_type: "diagnostic_interpretation_activation", reference_id: activationId,
+              reference_digest: activation.activation_digest },
+            { reference_type: "evidence_policy_activation",
+              reference_id: evidencePolicyActivation.evidence_policy_activation_id,
+              reference_digest: evidencePolicyActivation.activation_digest },
+            { reference_type: "diagnostic_effect_projection", reference_id: effectProjectionId,
+              reference_digest: interpreted.semantic_digest },
+            { reference_type: "behavior_evaluation", reference_id: evaluation.evaluation_id,
+              reference_digest: evaluation.semantic_digest },
+            { reference_type: "diagnostic_trigger", reference_id: triggerId,
+              reference_digest: triggerDigest },
+            { reference_type: "diagnostic_case", reference_id: caseId, reference_digest: caseDigest },
+            ...claimMaterials.map((claim) => ({
+              reference_type: "diagnostic_claim_envelope",
+              reference_id: claim.document.claim_id,
+              reference_digest: claim.claim_digest
+            }))
+          ],
+          createdAt
+        }) : null;
       const transitionId = randomUUID();
       const stageCommandId = `behavior-trigger:${triggerId}`;
       await client.query(
@@ -767,8 +852,10 @@ export function createDiagnosticEffectEvaluationService({
         [installationId, stageCommandId, sha256Digest({
           correlation_projection_id: correlationProjectionId,
           activation_id: activationId,
+          evidence_policy_activation_id: evidencePolicyActivationId,
           evaluation_semantic_digest: evaluation.semantic_digest
-        }), STAGE_AUTHOR, { trigger_id: triggerId, case_id: caseId, case_digest: caseDigest }, createdAt]
+        }), STAGE_AUTHOR, { trigger_id: triggerId, case_id: caseId, case_digest: caseDigest,
+          evidence_collection_lease_id: evidenceCollection?.row.lease_id ?? null }, createdAt]
       );
       const node = (await client.query(
         "SELECT revision,next_sequence FROM diagnostic_nodes WHERE installation_id=$1 FOR UPDATE",
@@ -783,7 +870,8 @@ export function createDiagnosticEffectEvaluationService({
         [transitionId, installationId, String(node.next_sequence), caseId,
           stageCommandId, STAGE_AUTHOR,
           { trigger_id: triggerId, trigger_digest: triggerDigest,
-            evaluation_id: evaluation.evaluation_id, case_digest: caseDigest }, createdAt]
+            evaluation_id: evaluation.evaluation_id, case_digest: caseDigest,
+            evidence_collection_lease_id: evidenceCollection?.row.lease_id ?? null }, createdAt]
       );
       await client.query(
         "UPDATE diagnostic_nodes SET revision=revision+1,next_sequence=next_sequence+1,updated_at=$2 WHERE installation_id=$1",
@@ -799,7 +887,8 @@ export function createDiagnosticEffectEvaluationService({
         diagnostic_effect_projection: effectView(effectRow),
         behavior_evaluation: evaluationView(evaluationRow),
         diagnostic_trigger: trigger,
-        diagnostic_case: caseView(caseRow, trigger, claims)
+        diagnostic_case: caseView(caseRow, trigger, claims),
+        evidence_collection: evidenceCollection?.view ?? null
       } };
     } catch (error) {
       await client.query("ROLLBACK");
