@@ -54,7 +54,7 @@ function findSensitivePath(value, path = "candidate") {
   if (!object(value)) return null;
   for (const [key, child] of Object.entries(value)) {
     if (/(^|_)(secret|password|private_key|token|api_key|credential|auth|authorization|cookie|dsn|connection_string)($|_)/i.test(key)
-      && !/_ref$/i.test(key)) return `${path}.${key}`;
+      && !/_ref$/i.test(key) && !path.endsWith(".properties")) return `${path}.${key}`;
     const found = findSensitivePath(child, `${path}.${key}`);
     if (found) return found;
   }
@@ -91,16 +91,29 @@ function validateJsonSchemaSubset(schema, path, issues) {
     issues.push(issue("SCHEMA_CONTRACT_INCOMPLETE", path, "Schema must be an object."));
     return;
   }
-  rejectUnknownKeys(schema, ["type", "required", "properties"], path, issues);
+  rejectUnknownKeys(schema, ["type", "additionalProperties", "required", "properties", "observation"], path, issues);
   if (schema.type !== "object" || !nonEmptyStrings(schema.required) || !object(schema.properties)) {
     issues.push(issue("SCHEMA_CONTRACT_INCOMPLETE", path, "Schema requires object type, required fields, and properties."));
     return;
   }
   for (const [name, property] of Object.entries(schema.properties)) {
-    rejectUnknownKeys(property, ["type", "format"], `${path}.properties.${name}`, issues);
+    rejectUnknownKeys(property, ["type", "format", "minLength", "maxLength", "enum"], `${path}.properties.${name}`, issues);
     if (!new Set(["string", "integer", "number", "boolean", "object", "array"]).has(property?.type)
       || (property.format !== undefined && !new Set(["date-time", "uuid"]).has(property.format))) {
       issues.push(issue("SCHEMA_CONTRACT_INCOMPLETE", `${path}.properties.${name}`, "Schema property type or format is unsupported."));
+    }
+  }
+  if (schema.observation !== undefined) {
+    rejectUnknownKeys(schema.observation,
+      ["observation_type", "allowed_detail_media_types", "required_correlation_roles"],
+      `${path}.observation`, issues);
+    if (!string(schema.observation?.observation_type)
+      || !Array.isArray(schema.observation?.allowed_detail_media_types)
+      || !schema.observation.allowed_detail_media_types.every((item) => Boolean(string(item)))
+      || !nonEmptyStrings(schema.observation?.required_correlation_roles)
+      || schema.additionalProperties !== false) {
+      issues.push(issue("OBSERVATION_SCHEMA_CONTRACT_INCOMPLETE", `${path}.observation`,
+        "Observation Schema requires closed claims, a type, detail media types, and correlation roles."));
     }
   }
 }

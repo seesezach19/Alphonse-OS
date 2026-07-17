@@ -146,10 +146,24 @@ export function createDiagnosticDatabase(connectionString) {
       }
     },
     async bootstrapNode(installationId) {
-      await pool.query(
-        `INSERT INTO diagnostic_nodes (installation_id) VALUES ($1)
-         ON CONFLICT (installation_id) DO NOTHING`, [installationId]
-      );
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `INSERT INTO diagnostic_nodes (installation_id) VALUES ($1)
+           ON CONFLICT (installation_id) DO NOTHING`, [installationId]
+        );
+        await client.query(
+          `INSERT INTO diagnostic_intake_prefixes (installation_id,next_position,updated_at)
+           VALUES ($1,1,now()) ON CONFLICT (installation_id) DO NOTHING`, [installationId]
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
     async getNode(installationId) {
       const result = await pool.query(

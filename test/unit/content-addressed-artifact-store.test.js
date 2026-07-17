@@ -58,3 +58,33 @@ test("artifact byte deletion is exact and leaves metadata decisions to the calle
   });
   await assert.rejects(store.deleteJson("../../outside"), (error) => error.code === "INVALID_ARTIFACT_DIGEST");
 });
+
+test("bounded opaque detail commits by exact digest before metadata can reference it", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "alphonse-diagnostic-artifacts-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = createContentAddressedArtifactStore(root);
+  const bytes = Buffer.from("redacted diagnostic detail", "utf8");
+  const expectedDigest = "sha256:6677837892565a0ec8ded0ecd2f2cab8f528a5e620f40910dac972a81ebc79c8";
+
+  const stored = await store.putBytes(bytes, {
+    mediaType: "text/plain",
+    expectedDigest,
+    maxBytes: 64
+  });
+  const replay = await store.putBytes(bytes, {
+    mediaType: "text/plain",
+    expectedDigest,
+    maxBytes: 64
+  });
+  assert.deepEqual(replay, stored);
+  const retrieved = await store.getBytes(expectedDigest);
+  assert.deepEqual(retrieved.bytes, bytes);
+  assert.equal(retrieved.artifact.verified, true);
+
+  await assert.rejects(store.putBytes(Buffer.from("changed"), {
+    mediaType: "text/plain", expectedDigest, maxBytes: 64
+  }), (error) => error.code === "ARTIFACT_DIGEST_MISMATCH");
+  await assert.rejects(store.putBytes(Buffer.alloc(65), {
+    mediaType: "application/octet-stream", maxBytes: 64
+  }), (error) => error.code === "ARTIFACT_TOO_LARGE");
+});

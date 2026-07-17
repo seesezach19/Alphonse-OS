@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 import { canonicalize } from "./canonical-json.js";
@@ -28,7 +27,7 @@ export function createContentAddressedArtifactStore(root) {
   }
   const resolvedRoot = path.resolve(root);
 
-  async function getJson(digest) {
+  async function getBytes(digest, mediaType = "application/octet-stream") {
     const { absolutePath, storageKey } = location(resolvedRoot, digest);
     let bytes;
     try {
@@ -46,47 +45,103 @@ export function createContentAddressedArtifactStore(root) {
         actual_digest: actualDigest
       });
     }
-    let content;
-    try {
-      content = JSON.parse(bytes.toString("utf8"));
-    } catch {
-      throw new KernelError(409, "ARTIFACT_INVALID_JSON", "Verified artifact bytes are not valid JSON.");
-    }
     return {
       artifact: {
         artifact_digest: digest,
         size_bytes: bytes.length,
-        media_type: "application/json",
+        media_type: mediaType,
         storage_key: storageKey,
         verified: true
       },
+      bytes
+    };
+  }
+
+  async function getJson(digest) {
+    const stored = await getBytes(digest, "application/json");
+    let content;
+    try {
+      content = JSON.parse(stored.bytes.toString("utf8"));
+    } catch {
+      throw new KernelError(409, "ARTIFACT_INVALID_JSON", "Verified artifact bytes are not valid JSON.");
+    }
+    return {
+      artifact: stored.artifact,
       content
     };
   }
 
-  async function putJson(value) {
-    const bytes = Buffer.from(canonicalize(value), "utf8");
+  async function fsyncDirectory(directory) {
+    let handle;
+    try {
+      handle = await open(directory, "r");
+      await handle.sync();
+    } catch (error) {
+      if (process.platform !== "win32" || !["EPERM", "EISDIR", "EINVAL"].includes(error.code)) throw error;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  async function putBytes(value, { mediaType = "application/octet-stream", expectedDigest = null,
+    maxBytes = 1024 * 1024 } = {}) {
+    const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    if (!Number.isInteger(maxBytes) || maxBytes < 0 || bytes.length > maxBytes) {
+      throw new KernelError(413, "ARTIFACT_TOO_LARGE", "Artifact exceeds its exact byte limit.", {
+        size_bytes: bytes.length, max_bytes: maxBytes
+      });
+    }
+    if (typeof mediaType !== "string" || !mediaType || mediaType.length > 160) {
+      throw new KernelError(400, "INVALID_ARTIFACT_MEDIA_TYPE", "Artifact media type is invalid.");
+    }
     const digest = bytesDigest(bytes);
+    if (expectedDigest !== null && expectedDigest !== digest) {
+      throw new KernelError(409, "ARTIFACT_DIGEST_MISMATCH", "Artifact bytes do not match the signed digest.", {
+        expected_digest: expectedDigest, actual_digest: digest
+      });
+    }
     const { absolutePath, storageKey } = location(resolvedRoot, digest);
     await mkdir(path.dirname(absolutePath), { recursive: true });
     const temporaryPath = `${absolutePath}.${process.pid}.${randomUUID()}.tmp`;
+    let temporaryHandle;
     try {
-      await writeFile(temporaryPath, bytes, { flag: "wx" });
+      temporaryHandle = await open(temporaryPath, "wx");
+      await temporaryHandle.writeFile(bytes);
+      await temporaryHandle.sync();
+      await temporaryHandle.close();
+      temporaryHandle = null;
       try {
-        await copyFile(temporaryPath, absolutePath, fsConstants.COPYFILE_EXCL);
+        await link(temporaryPath, absolutePath);
       } catch (error) {
         if (error.code !== "EEXIST") throw error;
       }
+      if (process.platform !== "win32") {
+        const finalHandle = await open(absolutePath, "r");
+        try {
+          await finalHandle.sync();
+        } finally {
+          await finalHandle.close();
+        }
+      }
+      await fsyncDirectory(path.dirname(absolutePath));
     } finally {
+      await temporaryHandle?.close();
       await rm(temporaryPath, { force: true });
     }
-    const stored = await getJson(digest);
+    const stored = await getBytes(digest, mediaType);
     return {
       artifact_digest: stored.artifact.artifact_digest,
       size_bytes: stored.artifact.size_bytes,
-      media_type: stored.artifact.media_type,
+      media_type: mediaType,
       storage_key: storageKey
     };
+  }
+
+  async function putJson(value) {
+    return putBytes(Buffer.from(canonicalize(value), "utf8"), {
+      mediaType: "application/json",
+      maxBytes: Number.MAX_SAFE_INTEGER
+    });
   }
 
   async function deleteJson(digest) {
@@ -100,5 +155,5 @@ export function createContentAddressedArtifactStore(root) {
     }
   }
 
-  return { deleteJson, getJson, putJson };
+  return { deleteJson, getBytes, getJson, putBytes, putJson };
 }
