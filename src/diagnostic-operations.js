@@ -469,6 +469,116 @@ const descriptors = [
     resultKey: "correlation_projection",
     issues: ["CORRELATION_PROJECTION_NOT_FOUND"]
   }),
+  {
+    operation_id: "diagnostic.interpretation_activation.activate",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Activate exact deployed Integration, Behavior, evaluator, and deterministic stage material.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner_requester",
+    effect_class: "immutable_diagnostic_contract_activation",
+    idempotency: "activation_identity_and_canonical_activation_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/interpretation-activations" },
+    input_schema: {
+      type: "object",
+      required: ["activation_id", "deployment_id", "integration_contract_export_id",
+        "behavior_contract_export_id", "evaluator_export_id"],
+      additionalProperties: false,
+      properties: {
+        activation_id: { type: "string", format: "uuid" },
+        deployment_id: { type: "string", format: "uuid" },
+        integration_contract_export_id: { type: "string", minLength: 1, maxLength: 200 },
+        behavior_contract_export_id: { type: "string", minLength: 1, maxLength: 200 },
+        evaluator_export_id: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    output_schema: { type: "object", required: ["interpretation_activation"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_customer_owner", "deployment_exists"],
+    outcomes: ["interpretation_activation_created", "interpretation_activation_replayed"],
+    issues: ["AUTHENTICATION_REQUIRED", "DIAGNOSTIC_INTERPRETATION_CONTRACT_INVALID",
+      "DIAGNOSTIC_INTERPRETATION_EXPORT_MISMATCH", "DIAGNOSTIC_INTERPRETATION_SCOPE_MISMATCH"],
+    emitted_events: [],
+    next_operations: ["diagnostic.interpretation_activation.get", "diagnostic.effect_evaluation.process"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.interpretation_activation.get",
+    summary: "Inspect exact activated interpretation contracts, evaluator, and deterministic stage identity.",
+    path: "/diagnostic/v0/interpretation-activations/{activation_id}",
+    idName: "activation_id",
+    resultKey: "interpretation_activation",
+    issues: ["DIAGNOSTIC_INTERPRETATION_ACTIVATION_NOT_FOUND"],
+    nextOperations: ["diagnostic.effect_evaluation.process"]
+  }),
+  {
+    operation_id: "diagnostic.effect_evaluation.process",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Interpret designated-feed claims, evaluate one bounded invariant, and open a case only on violation.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner_requester",
+    effect_class: "deterministic_diagnostic_derivation",
+    idempotency: "correlation_projection_and_interpretation_activation",
+    transport: { method: "POST", path: "/diagnostic/v0/effect-evaluations" },
+    input_schema: {
+      type: "object",
+      required: ["correlation_projection_id", "activation_id"],
+      additionalProperties: false,
+      properties: {
+        correlation_projection_id: { type: "string", format: "uuid" },
+        activation_id: { type: "string", format: "uuid" }
+      }
+    },
+    output_schema: { type: "object", required: ["diagnostic_effect_projection", "behavior_evaluation",
+      "diagnostic_trigger", "diagnostic_case"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "hardened_correlation_projection_exists",
+      "interpretation_activation_exists"],
+    outcomes: ["diagnostic_case_created", "diagnostic_case_replayed", "behavior_not_violated"],
+    issues: ["AUTHENTICATION_REQUIRED", "DIAGNOSTIC_EFFECT_PROJECTION_VERSION_UNSUPPORTED",
+      "DIAGNOSTIC_INTERPRETATION_ARTIFACT_MISMATCH", "BEHAVIOR_EVALUATION_NOT_VIOLATED"],
+    emitted_events: ["diagnostic.case.behavior_violation_opened"],
+    next_operations: ["diagnostic.effect_projection.get", "diagnostic.behavior_evaluation.get",
+      "diagnostic.trigger.get", "diagnostic.deterministic_case.get"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.effect_projection.get",
+    summary: "Inspect immutable contract-bound external-effect interpretations with no Kernel Effect authority.",
+    path: "/diagnostic/v0/effect-projections/{effect_projection_id}",
+    idName: "effect_projection_id",
+    resultKey: "diagnostic_effect_projection",
+    issues: ["DIAGNOSTIC_EFFECT_PROJECTION_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.behavior_evaluation.get",
+    summary: "Inspect one immutable bounded Behavior Evaluation over normalized effects only.",
+    path: "/diagnostic/v0/behavior-evaluations/{evaluation_id}",
+    idName: "evaluation_id",
+    resultKey: "behavior_evaluation",
+    issues: ["BEHAVIOR_EVALUATION_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.trigger.get",
+    summary: "Inspect one deterministic violated-evaluation trigger without causal or repair claims.",
+    path: "/diagnostic/v0/diagnostic-triggers/{trigger_id}",
+    idName: "trigger_id",
+    resultKey: "diagnostic_trigger",
+    issues: ["DIAGNOSTIC_TRIGGER_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.claim_envelope.get",
+    summary: "Inspect one minimal temporal claim with separate provenance, support, and authority fields.",
+    path: "/diagnostic/v0/claim-envelopes/{claim_id}",
+    idName: "claim_id",
+    resultKey: "claim_envelope",
+    issues: ["DIAGNOSTIC_CLAIM_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.deterministic_case.get",
+    summary: "Inspect one deterministic invariant-violation case and its bounded Claim Envelopes.",
+    path: "/diagnostic/v0/deterministic-cases/{case_id}",
+    idName: "case_id",
+    resultKey: "diagnostic_case",
+    issues: ["DIAGNOSTIC_CASE_NOT_FOUND"]
+  }),
   commandDescriptor({
     operationId: "diagnostic.case.report_failure",
     summary: "Open one authority-free Diagnostic Case from an explicit authenticated failure report.",

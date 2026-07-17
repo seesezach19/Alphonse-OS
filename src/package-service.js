@@ -2,6 +2,10 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import jsonLogic from "json-logic-js";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import {
+  DIAGNOSTIC_INTERPRETATION_EXPORT_KINDS,
+  validateDiagnosticInterpretationExport
+} from "./diagnostic-effect-contracts.js";
 import { KernelError } from "./errors.js";
 
 const VALIDATOR_VERSION = "alphonse.package-validator.v0.1";
@@ -222,7 +226,8 @@ function validateCandidateShape(candidate, passport, session) {
       return;
     }
     rejectUnknownKeys(entry, ["kind", "export_id", "contract_version", "content"], path, issues);
-    if (![...REQUIRED_EXPORT_KINDS, "capability"].includes(entry.kind)) {
+    if (![...REQUIRED_EXPORT_KINDS, "capability", ...DIAGNOSTIC_INTERPRETATION_EXPORT_KINDS]
+      .includes(entry.kind)) {
       issues.push(issue("UNKNOWN_EXPORT_KIND", `${path}.kind`, "Export kind is unsupported."));
     }
     if (exportMap.has(entry.export_id)) issues.push(issue("DUPLICATE_EXPORT_ID", `${path}.export_id`, "Export IDs must be package-unique."));
@@ -243,6 +248,14 @@ function validateCandidateShape(candidate, passport, session) {
 
   for (const entry of exportMap.values()) {
     const path = `candidate.exports[${entry.index}].content`;
+    if (DIAGNOSTIC_INTERPRETATION_EXPORT_KINDS.includes(entry.kind)) {
+      try {
+        validateDiagnosticInterpretationExport(entry.kind, entry.content);
+      } catch (error) {
+        issues.push(issue(error.code ?? "DIAGNOSTIC_INTERPRETATION_CONTRACT_INVALID", path,
+          error.message ?? "Diagnostic interpretation export is invalid."));
+      }
+    }
     if (entry.kind === "schema") validateJsonSchemaSubset(entry.content, path, issues);
     if (entry.kind === "skill") {
       rejectUnknownKeys(entry.content, ["program", "input_schema", "output_schema", "steps", "context_requirements",

@@ -32,6 +32,7 @@ import { createDiagnosticGrantApplicationService } from "./diagnostic-grant-appl
 import { createDiagnosticObservationService } from "./diagnostic-observation-service.js";
 import { createDiagnosticTokenizationProofService } from "./diagnostic-tokenization-proof-service.js";
 import { createDiagnosticCorrelationService } from "./diagnostic-correlation-service.js";
+import { createDiagnosticEffectEvaluationService } from "./diagnostic-effect-evaluation-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
 import { createPackageService } from "./package-service.js";
@@ -150,6 +151,7 @@ let diagnosticGrantApplicationService = null;
 let diagnosticObservationService = null;
 let diagnosticTokenizationProofService = null;
 let diagnosticCorrelationService = null;
+let diagnosticEffectEvaluationService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -342,6 +344,31 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
       };
     }
   });
+  diagnosticEffectEvaluationService = createDiagnosticEffectEvaluationService({
+    database: diagnosticDatabase,
+    installationId,
+    environmentId,
+    correlationReader: diagnosticCorrelationService,
+    async resolveDeploymentExports(deploymentId, exportIds) {
+      const deployment = await deploymentService.getDeployment(deploymentId);
+      const packageVersion = await packageService.getPackageVersion(deployment.package_version_id);
+      const exports = new Map();
+      for (const exportId of exportIds) {
+        const exported = packageVersion.candidate.exports.find((entry) => entry.export_id === exportId);
+        if (!exported) {
+          throw new KernelError(404, "DEPLOYED_DIAGNOSTIC_INTERPRETATION_EXPORT_NOT_FOUND",
+            "Deployment does not contain a requested diagnostic interpretation export.", { export_id: exportId });
+        }
+        exports.set(exportId, exported);
+      }
+      return {
+        deployment_id: deployment.deployment_id,
+        package_version_id: packageVersion.package_version_id,
+        package_artifact_digest: packageVersion.artifact_digest,
+        exports
+      };
+    }
+  });
 }
 const upgradeService = createUpgradeService(database, identityIntent, packageService, deploymentService,
   installationId, environmentId, dataPlaneReceiptSecret);
@@ -517,6 +544,14 @@ function requireDiagnosticCorrelation() {
   return diagnosticCorrelationService;
 }
 
+function requireDiagnosticEffectEvaluation() {
+  if (!diagnosticEffectEvaluationService) {
+    throw new KernelError(503, "DIAGNOSTIC_EFFECT_EVALUATION_UNAVAILABLE",
+      "Deterministic effect interpretation and behavior evaluation are not configured.");
+  }
+  return diagnosticEffectEvaluationService;
+}
+
 function observationAuthentication(request, body) {
   return body.authentication ?? {
     principal_id: request.headers["x-observation-principal-id"],
@@ -624,7 +659,8 @@ async function route(request, response) {
       diagnostic_grant_receiver: diagnosticGrantApplicationService ? "healthy" : "not_configured",
       canonical_observation_intake: diagnosticObservationService ? "healthy" : "not_configured",
       tokenization_proof_registry: diagnosticTokenizationProofService ? "healthy" : "not_configured",
-      correlation_projection: diagnosticCorrelationService ? "healthy" : "not_configured"
+      correlation_projection: diagnosticCorrelationService ? "healthy" : "not_configured",
+      effect_evaluation: diagnosticEffectEvaluationService ? "healthy" : "not_configured"
     });
   }
 
@@ -762,6 +798,60 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { correlation_projection: await service.getProjection(
       pathId(url.pathname, "/diagnostic/v0/correlation-projections/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/interpretation-activations") {
+    const service = requireDiagnosticEffectEvaluation();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.interpretation_activation.activate");
+    return sendCommandResult(response, await service.activate(await readJson(request, 64 * 1024), actor.id));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/interpretation-activations\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEffectEvaluation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { interpretation_activation: await service.getActivation(
+      pathId(url.pathname, "/diagnostic/v0/interpretation-activations/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/effect-evaluations") {
+    const service = requireDiagnosticEffectEvaluation();
+    await authenticateDiagnosticOwner(request, "diagnostic.effect_evaluation.process");
+    return sendCommandResult(response, await service.process(await readJson(request, 64 * 1024)));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/effect-projections\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEffectEvaluation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnostic_effect_projection: await service.getEffectProjection(
+      pathId(url.pathname, "/diagnostic/v0/effect-projections/")) });
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/behavior-evaluations\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEffectEvaluation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { behavior_evaluation: await service.getEvaluation(
+      pathId(url.pathname, "/diagnostic/v0/behavior-evaluations/")) });
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/diagnostic-triggers\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEffectEvaluation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnostic_trigger: await service.getTrigger(
+      pathId(url.pathname, "/diagnostic/v0/diagnostic-triggers/")) });
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/claim-envelopes\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEffectEvaluation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { claim_envelope: await service.getClaim(
+      pathId(url.pathname, "/diagnostic/v0/claim-envelopes/")) });
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/deterministic-cases\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEffectEvaluation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnostic_case: await service.getDeterministicCase(
+      pathId(url.pathname, "/diagnostic/v0/deterministic-cases/")) });
   }
 
   if (request.method === "GET" && url.pathname === "/diagnostic/v0/bootstrap") {

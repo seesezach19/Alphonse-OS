@@ -162,6 +162,50 @@ function compareText(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+export function verifyProjectedObservationMaterials({
+  receiptReferences,
+  observationRows,
+  installationId,
+  environmentId
+}) {
+  const expectedByReceipt = new Map();
+  for (const reference of receiptReferences) {
+    if (expectedByReceipt.has(reference.receipt_id)) {
+      fail("CORRELATION_ACCEPTED_RECEIPT_INTEGRITY_VIOLATION",
+        "Projected observation receipt references contain a duplicate.", { receipt_id: reference.receipt_id });
+    }
+    expectedByReceipt.set(reference.receipt_id, reference);
+  }
+  const rowsByReceipt = new Map(observationRows.map((row) => [row.receipt_id, row]));
+  if (rowsByReceipt.size !== observationRows.length || rowsByReceipt.size !== expectedByReceipt.size) {
+    fail("CORRELATION_ACCEPTED_RECEIPT_INTEGRITY_VIOLATION",
+      "Projected observation references and preserved receipt rows do not form one exact set.");
+  }
+  return [...expectedByReceipt.values()].map((reference) => {
+    const row = rowsByReceipt.get(reference.receipt_id);
+    if (!row || row.receipt_digest !== reference.receipt_digest
+        || String(row.intake_position) !== String(reference.intake_position)) {
+      fail("CORRELATION_ACCEPTED_RECEIPT_INTEGRITY_VIOLATION",
+        "Projected observation reference does not match its preserved receipt.", {
+          receipt_id: reference.receipt_id
+        });
+    }
+    const envelope = canonicalEnvelope(row, String(reference.intake_position));
+    if (envelope.installation_id !== installationId || envelope.environment_id !== environmentId) {
+      fail("CORRELATION_ACCEPTED_RECEIPT_INTEGRITY_VIOLATION",
+        "Projected observation is outside the requested installation or environment.", {
+          receipt_id: reference.receipt_id
+        });
+    }
+    verifyReceiptBindings(row, {
+      intake_position: String(reference.intake_position),
+      outcome_id: reference.receipt_id,
+      outcome_digest: reference.receipt_digest
+    }, envelope);
+    return { receipt_id: row.receipt_id, receipt_digest: row.receipt_digest, envelope };
+  });
+}
+
 export async function verifyCorrelationAcceptedInputs({
   outcomeRows,
   observationRows,

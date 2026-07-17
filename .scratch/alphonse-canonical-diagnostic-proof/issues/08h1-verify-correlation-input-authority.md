@@ -12,7 +12,8 @@ semantic authority.
       bytes, recompute the envelope digest, and require the JSONB envelope to match those bytes.
 - [x] Derive observation type, installation/environment, principal, grant, key, stream, sequence, workflow,
       integration, schema, detail binding, claims, limitations, and dependency IDs from the verified envelope.
-- [x] Verify every duplicated receipt row and immutable Diagnostic Observation Receipt field against the envelope,
+- [x] Verify every projection-relevant duplicated receipt row and immutable Diagnostic Observation Receipt field
+      against the envelope,
       committed intake outcome, receipt time, authority flags, grant snapshot, and transition binding.
 - [x] Verify schema activation installation/environment, observation type, and exact signed schema tuple. Exclude
       unbound convenience fields from semantic manifests rather than treating them as provenance.

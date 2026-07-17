@@ -25,7 +25,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through08 = process.argv.includes("--through-08");
+const through09 = process.argv.includes("--through-09");
+const through08 = through09 || process.argv.includes("--through-08");
 const through07 = through08 || process.argv.includes("--through-07");
 
 function run(command, args, options = {}) {
@@ -490,6 +491,7 @@ try {
     assert.equal(prefixAfterRestart.body.intake_prefix.committed_through,
       prefixBeforeRestart.body.intake_prefix.committed_through);
     let correlation = null;
+    let interpretation = null;
     if (through08) {
       const registrationId = randomUUID();
       const registered = await post("/diagnostic/v0/correlation-registrations", {
@@ -651,8 +653,170 @@ try {
           [projection.projection_id]), /immutable records cannot be updated/u);
       } finally { await immutable.end(); }
       correlation = { registration, projection };
+
+      if (through09) {
+        const activationId = randomUUID();
+        const activated = await post("/diagnostic/v0/interpretation-activations", {
+          activation_id: activationId,
+          deployment_id: deployment.deployment_id,
+          integration_contract_export_id: deployment.integration_behavior_contract_export.export_id,
+          behavior_contract_export_id: deployment.behavior_contract_export.export_id,
+          evaluator_export_id: deployment.diagnostic_evaluator_export.export_id
+        });
+        assert.equal(activated.response.status, 201, JSON.stringify(activated.body));
+        const activation = activated.body.interpretation_activation;
+        assert.equal(activation.activation_id, activationId);
+        assert.equal(activation.exports.integration_behavior_contract.kind,
+          "integration_behavior_contract");
+        assert.equal(activation.exports.behavior_contract.kind, "behavior_contract");
+        assert.equal(activation.exports.diagnostic_evaluator.kind, "diagnostic_evaluator");
+        assert.equal(activation.stage.artifact_manifest.schema_version,
+          "alphonse.diagnostic-effect-stage-artifact-manifest.v0.1");
+        const stageFiles = activation.stage.artifact_manifest.module_closure.map((entry) => entry.path);
+        for (const required of ["src/diagnostic-effect-evaluation-service.js",
+          "src/diagnostic-effect-projector.js", "src/diagnostic-effect-evaluator.js",
+          "src/diagnostic-claim-envelope.js", "src/diagnostic-effect-contracts.js"]) {
+          assert.ok(stageFiles.includes(required), required);
+        }
+
+        const processed = await post("/diagnostic/v0/effect-evaluations", {
+          correlation_projection_id: projection.projection_id,
+          activation_id: activationId
+        });
+        assert.equal(processed.response.status, 201, JSON.stringify(processed.body));
+        const effectProjection = processed.body.diagnostic_effect_projection;
+        const evaluation = processed.body.behavior_evaluation;
+        const trigger = processed.body.diagnostic_trigger;
+        const diagnosticCase = processed.body.diagnostic_case;
+        assert.equal(effectProjection.semantic_projection.schema_version,
+          "alphonse.diagnostic-effect-projection.v0.1");
+        assert.equal(effectProjection.semantic_projection.effects.length, 2);
+        assert.ok(effectProjection.semantic_projection.effects.every((effect) =>
+          effect.status === "committed"
+          && effect.commitment_basis === "designated_append_only_commit_record"
+          && effect.effect_class === "diagnostic_derived_external_effect"
+          && effect.authority === "none"));
+        assert.equal(effectProjection.semantic_projection.authority.kernel_effect, false);
+        assert.equal(effectProjection.semantic_projection.authority.external_truth_established, false);
+        assert.equal(evaluation.semantic_evaluation.result, "violated");
+        assert.equal(evaluation.semantic_evaluation.measurement.matched_effect_count, 2);
+        assert.equal(evaluation.semantic_evaluation.assertion.threshold, 1);
+        assert.deepEqual(evaluation.semantic_evaluation.evaluator.input_boundary,
+          ["behavior_contract", "diagnostic_effect_projection", "diagnostic_evaluator"]);
+        const evaluationBytes = JSON.stringify(evaluation.semantic_evaluation);
+        for (const prohibited of ["transport_status", "effect_feed", "external_claim", "receipt_id"]) {
+          assert.equal(evaluationBytes.includes(prohibited), false, prohibited);
+        }
+        assert.equal(trigger.root_cause_established, false);
+        assert.equal(trigger.repair_authority_granted, false);
+        assert.equal(trigger.kernel_effect_authority_granted, false);
+        assert.equal(diagnosticCase.state, "open");
+        assert.equal(diagnosticCase.root_cause_status, "NOT_ESTABLISHED");
+        assert.deepEqual(diagnosticCase.authority, {
+          diagnosis: "not_granted", repair: "not_granted", kernel_effect: "not_granted"
+        });
+        assert.equal(diagnosticCase.claims.length, 12);
+        assert.equal(diagnosticCase.claims.filter((claim) =>
+          claim.claim_type === "authenticated_observation").length, 8);
+        assert.equal(diagnosticCase.claims.filter((claim) =>
+          claim.claim_type === "committed_effect_interpretation").length, 2);
+        assert.equal(diagnosticCase.claims.filter((claim) =>
+          claim.claim_type === "behavior_invariant_evaluation").length, 1);
+        const unresolvedClaim = diagnosticCase.claims.find((claim) =>
+          claim.claim_type === "unresolved_conclusion");
+        assert.equal(unresolvedClaim.effective_support, "NOT_ESTABLISHED");
+        assert.equal(unresolvedClaim.authority_decision.authority, "none");
+        assert.equal(unresolvedClaim.temporal_scope.freshness, "frozen_historical");
+        assert.ok(diagnosticCase.claims.every((claim) => claim.processing_profile === "D0"
+          && claim.evidence_references.length > 0));
+
+        const replayed = await post("/diagnostic/v0/effect-evaluations", {
+          correlation_projection_id: projection.projection_id,
+          activation_id: activationId
+        });
+        assert.equal(replayed.response.status, 200, JSON.stringify(replayed.body));
+        assert.equal(replayed.body.diagnostic_effect_projection.effect_projection_id,
+          effectProjection.effect_projection_id);
+        assert.equal(replayed.body.behavior_evaluation.evaluation_id, evaluation.evaluation_id);
+        assert.equal(replayed.body.diagnostic_trigger.trigger_id, trigger.trigger_id);
+        assert.equal(replayed.body.diagnostic_case.case_id, diagnosticCase.case_id);
+
+        const effectPrivileged = new pg.Client({ connectionString:
+          "postgresql://alphonse:local-development-only@127.0.0.1:45505/alphonse_diagnostic" });
+        await effectPrivileged.connect();
+        try {
+          await effectPrivileged.query(
+            "ALTER TABLE diagnostic_effect_projections DISABLE TRIGGER diagnostic_effect_projections_immutable"
+          );
+          await effectPrivileged.query(
+            "UPDATE diagnostic_effect_projections SET semantic_projection=$2::jsonb WHERE effect_projection_id=$1",
+            [effectProjection.effect_projection_id,
+              JSON.stringify({ ...effectProjection.semantic_projection, privileged_tamper: true })]
+          );
+          await effectPrivileged.query(
+            "ALTER TABLE diagnostic_effect_projections ENABLE TRIGGER diagnostic_effect_projections_immutable"
+          );
+          const corruptEffectReplay = await post("/diagnostic/v0/effect-evaluations", {
+            correlation_projection_id: projection.projection_id,
+            activation_id: activationId
+          });
+          assert.equal(corruptEffectReplay.response.status, 500, JSON.stringify(corruptEffectReplay.body));
+          assert.equal(corruptEffectReplay.body.error.code,
+            "DIAGNOSTIC_EFFECT_PROJECTION_INTEGRITY_VIOLATION");
+          const downstreamCounts = await effectPrivileged.query(
+            `SELECT
+              (SELECT COUNT(*)::int FROM diagnostic_behavior_evaluations) AS evaluations,
+              (SELECT COUNT(*)::int FROM diagnostic_behavior_triggers) AS triggers,
+              (SELECT COUNT(*)::int FROM diagnostic_cases WHERE case_origin='deterministic_behavior_trigger') AS cases`
+          );
+          assert.deepEqual(downstreamCounts.rows[0], { evaluations: 1, triggers: 1, cases: 1 },
+            "stored effect corruption must not be accepted as replay or create downstream material");
+        } finally {
+          await effectPrivileged.query(
+            "ALTER TABLE diagnostic_effect_projections DISABLE TRIGGER diagnostic_effect_projections_immutable"
+          ).catch(() => {});
+          await effectPrivileged.query(
+            "UPDATE diagnostic_effect_projections SET semantic_projection=$2::jsonb WHERE effect_projection_id=$1",
+            [effectProjection.effect_projection_id, JSON.stringify(effectProjection.semantic_projection)]
+          ).catch(() => {});
+          await effectPrivileged.query(
+            "ALTER TABLE diagnostic_effect_projections ENABLE TRIGGER diagnostic_effect_projections_immutable"
+          ).catch(() => {});
+          await effectPrivileged.end();
+        }
+
+        for (const [route, key, id] of [
+          ["effect-projections", "diagnostic_effect_projection", effectProjection.effect_projection_id],
+          ["behavior-evaluations", "behavior_evaluation", evaluation.evaluation_id],
+          ["diagnostic-triggers", "diagnostic_trigger", trigger.trigger_id],
+          ["deterministic-cases", "diagnostic_case", diagnosticCase.case_id],
+          ["claim-envelopes", "claim_envelope", unresolvedClaim.claim_id]
+        ]) {
+          const readResult = await kernel(`/diagnostic/v0/${route}/${id}`);
+          assert.equal(readResult.response.status, 200, JSON.stringify(readResult.body));
+          assert.ok(readResult.body[key]);
+        }
+
+        const immutableDerived = new pg.Client({ connectionString:
+          "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+        await immutableDerived.connect();
+        try {
+          await assert.rejects(immutableDerived.query(
+            "UPDATE diagnostic_behavior_evaluations SET logical_operation_id='tampered' WHERE evaluation_id=$1",
+            [evaluation.evaluation_id]), /immutable records cannot be updated/u);
+          const counts = await immutableDerived.query(
+            `SELECT
+              (SELECT COUNT(*)::int FROM diagnostic_effect_projections) AS effects,
+              (SELECT COUNT(*)::int FROM diagnostic_behavior_evaluations) AS evaluations,
+              (SELECT COUNT(*)::int FROM diagnostic_behavior_triggers) AS triggers,
+              (SELECT COUNT(*)::int FROM diagnostic_cases WHERE case_origin='deterministic_behavior_trigger') AS cases`
+          );
+          assert.deepEqual(counts.rows[0], { effects: 1, evaluations: 1, triggers: 1, cases: 1 });
+        } finally { await immutableDerived.end(); }
+        interpretation = { activation, effectProjection, evaluation, trigger, diagnosticCase };
+      }
     }
-    extendedResult = { runtime, requests, ledger, correlation };
+    extendedResult = { runtime, requests, ledger, correlation, interpretation };
   }
 
   compose("restart", "customer-ingress-api", "customer-ingress-forwarder", "customer-ingress-reporter");
@@ -670,9 +834,11 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through08 ? "canonical-diagnostic-proof-08"
+    schema_version: "0.1.0", ticket: through09 ? "canonical-diagnostic-proof-09"
+      : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through08 ? "immutable_cross_stream_correlation_projection"
+    status: "passed", completed_capability: through09 ? "deterministic_committed_effect_violation_case"
+      : through08 ? "immutable_cross_stream_correlation_projection"
       : through07 ? "bound_runtime_and_separate_crm_observation" : "journaled_duplicate_ingress_observation",
     proven: ["journal_before_forward", "stable_opaque_logical_operation", "distinct_delivery_attempts",
       "independent_forward_and_report_loops", "n8n_context_propagation", "diagnostic_outage_decoupled",
@@ -686,7 +852,13 @@ try {
         "typed_claim_locations_preserved", "scoped_token_equality_and_inequality",
         "canonical_envelope_authority_verified", "signed_token_provenance_reverified",
         "transitive_projector_artifact_frozen", "normalized_projector_input_frozen",
-        "stored_corruption_not_nondeterminism", "immutable_projection_record"] : [])],
+        "stored_corruption_not_nondeterminism", "immutable_projection_record"] : []),
+      ...(through09 ? ["closed_interpretation_contracts_activated",
+        "designated_commit_feed_interpreted", "raw_observations_excluded_from_evaluator",
+        "two_committed_effects_counted", "behavior_invariant_violated",
+        "deterministic_trigger_and_case", "temporal_claim_envelopes",
+        "root_cause_not_established", "no_repair_or_effect_authority",
+        "stored_effect_corruption_not_replay"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
@@ -694,6 +866,11 @@ try {
     crm_effect_observation_count: extendedResult?.ledger.reported_count ?? 0,
     correlation_projection_count: extendedResult?.correlation ? 1 : 0,
     correlation_semantic_digest: extendedResult?.correlation?.projection.semantic_digest ?? null,
+    diagnostic_effect_projection_count: extendedResult?.interpretation ? 1 : 0,
+    committed_effect_count: extendedResult?.interpretation?.effectProjection.semantic_projection.effects
+      .filter((effect) => effect.status === "committed").length ?? 0,
+    behavior_evaluation_result: extendedResult?.interpretation?.evaluation.semantic_evaluation.result ?? null,
+    deterministic_case_count: extendedResult?.interpretation ? 1 : 0,
     model_requests: 0, worker_run_created: false
   }, null, 2)}\n`);
 } catch (error) {

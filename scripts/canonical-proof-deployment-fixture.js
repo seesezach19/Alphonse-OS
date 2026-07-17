@@ -237,6 +237,70 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       }, observation: { observation_type: "destination.effect", allowed_detail_media_types: [],
         required_correlation_roles: ["logical_operation", "delivery", "request", "resource"] } }
   };
+  const integrationBehaviorContract = {
+    kind: "integration_behavior_contract",
+    export_id: "interpretation:destination-a",
+    contract_version: "0.1.0",
+    content: {
+      schema_version: "alphonse.integration-behavior-contract.v0.1",
+      contract_id: "contract:destination-a-semantics",
+      integration_id: "integration:mock-crm",
+      destination_id: "destination:crm-primary",
+      idempotency: {
+        key_location: "request.header.idempotency-key",
+        comparison: "exact_string",
+        matching_key_behavior: "return_existing_result_without_new_commit"
+      },
+      commit_feed: {
+        feed_id: "mock_crm_append_only_ledger",
+        feed_kind: "append_only_ledger",
+        feed_identity_claim: "effect_feed",
+        event_identity_claim: "commit_id",
+        resource_identity_claim: "resource_id",
+        request_identity_claim: "request_id",
+        operation_claim: "operation",
+        committed_at_claim: "committed_at",
+        external_claim_field: "external_claim",
+        commit_record_semantics: "record_means_resource_operation_committed",
+        consistency: "append_visible_after_commit"
+      },
+      reconciliation: { strategy: "query_by_request_identity", unresolved_outcome: "ambiguous" }
+    }
+  };
+  const behaviorContract = {
+    kind: "behavior_contract",
+    export_id: "behavior:operation-effect-cardinality",
+    contract_version: "0.1.0",
+    content: {
+      schema_version: "alphonse.behavior-contract.v0.1",
+      contract_id: "contract:operation-effect-cardinality",
+      workflow_id: "workflow:agency-lab:lead-ingestion",
+      integration_id: "integration:mock-crm",
+      correlation_role: "logical_operation_id",
+      selector: {
+        effect_class: "diagnostic_derived_external_effect",
+        destination_id: "destination:crm-primary",
+        operation: "create_lead",
+        status: "committed",
+        commitment_bases: ["designated_append_only_commit_record"]
+      },
+      assertion: { comparison: "less_than_or_equal", threshold: 1 }
+    }
+  };
+  const diagnosticEvaluator = {
+    kind: "diagnostic_evaluator",
+    export_id: "evaluator:count-by-correlation",
+    contract_version: "0.1.0",
+    content: {
+      schema_version: "alphonse.diagnostic-evaluator.v0.1",
+      evaluator_id: "alphonse.count-by-correlation",
+      evaluator_version: "0.1.0",
+      operation: "count_by_correlation",
+      input_schema_version: "alphonse.diagnostic-effect-projection.v0.1",
+      group_field: "logical_operation_id",
+      output_states: ["indeterminate", "satisfied", "violated"]
+    }
+  };
   const candidate = {
     schema_version: "alphonse.package_candidate.v0.1",
     identity: { package_id: "com.alphonse.canonical-proof", version: "0.1.0",
@@ -253,6 +317,9 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       legacyRuntimeExecutionSchema,
       destinationRequestSchema,
       destinationEffectSchema,
+      integrationBehaviorContract,
+      behaviorContract,
+      diagnosticEvaluator,
       { kind: "schema", export_id: "configuration", contract_version: "1.0.0", content: {
         type: "object", required: ["enabled"], properties: { enabled: { type: "boolean" } }
       } },
@@ -386,6 +453,9 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
     runtime_attestation_failure_schema_export: runtimeAttestationFailureSchema,
     legacy_runtime_schema_export: legacyRuntimeExecutionSchema,
     destination_request_schema_export: destinationRequestSchema,
-    destination_effect_schema_export: destinationEffectSchema
+    destination_effect_schema_export: destinationEffectSchema,
+    integration_behavior_contract_export: integrationBehaviorContract,
+    behavior_contract_export: behaviorContract,
+    diagnostic_evaluator_export: diagnosticEvaluator
   };
 }
