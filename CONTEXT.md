@@ -60,8 +60,17 @@ _Avoid_: Kernel state, universal business database
 The Data Plane is an optional companion for workflows whose reliability depends on governed context authority, freshness, typed relationships, or reproducible snapshots. Core diagnostic and governance value cannot require business-data ingestion or migration.
 
 **Diagnostic Plane**:
-A retention-controlled system that stores attributed agent traces, model and tool interactions, timing, errors, and debugging artifacts outside Kernel authority state. Its records are untrusted observations unless separately admitted as exact evidence.
+A retention-controlled private system that stores attributed agent traces, model and tool interactions, timing,
+errors, and debugging artifacts outside Kernel authority state. Public customer traffic terminates at adapters;
+observation intake, role-scoped reads, and pipeline administration use separately authorized private network
+surfaces. Network trust never replaces signed reporting identity. Its records are untrusted observations unless
+separately admitted as exact evidence.
 _Avoid_: Kernel ledger, Data Plane, trusted evidence store, authority source
+
+Adapters report observations to the Diagnostic Plane. First-party deterministic Diagnostic Services preserve,
+correlate, and package them. Kernel Authority Services grant reporting authority and reference immutable
+diagnostic evidence when adjudicating governed actions; they do not absorb diagnostic observations into
+authority state.
 
 Diagnostic collection, raw storage, and Diagnostic Agent execution remain inside a customer-controlled boundary by default. Managed hosting must preserve equivalent per-customer isolation; hosted coordination receives only minimal metadata unless the customer explicitly authorizes redacted payload transfer.
 
@@ -104,6 +113,38 @@ Intelligence may propose changes but cannot approve itself, activate authority, 
 **Diagnostic Agent**:
 A replaceable Intelligence Plane agent with a separate identity and bounded workspace that investigates Diagnostic Cases, reproduces failures, and produces Failure Specifications and Reproduction Bundles. The affected customer agent may self-report but cannot adjudicate its own behavior or certify a fix.
 _Avoid_: Kernel validator, original customer agent, autonomous approver
+
+**Diagnostic Assignment**:
+An immutable request for one bounded diagnostic attempt against one exact Diagnostic Evidence Package,
+instruction and output contract, worker eligibility class, isolation and mount policy, network and capability
+limits, resources, and expiry. It describes required authority but grants none; retry creates a linked new
+assignment, and an assignment never returns to `unclaimed` after claim.
+_Avoid_: Mutable queue item, Agent Passport, worker run, ambient diagnostic access
+
+**Diagnostic Dispatch Authorization**:
+A short-lived single-use Kernel authority record permitting one dispatcher and runner audience to claim one exact
+unclaimed Diagnostic Assignment for one proposed Worker Run, worker Principal and Passport, package, model and
+broker policy, image and isolation configuration, data classification, egress destination, resource ceilings, and
+validity window. It stores Diagnostic Plane references and digests rather than evidence bytes and grants no external
+business-effect authority.
+_Avoid_: Diagnostic Assignment, reusable runner token, model credential, worker Passport
+
+**Diagnostic Worker Run**:
+One isolated execution of a claimed Diagnostic Assignment by an eligible worker Principal. It binds exact
+worker, Passport, model, runtime, container, workspace, mount, policy, and output provenance without changing
+the assignment or package.
+_Avoid_: Diagnostic Assignment, reusable workspace, diagnosis artifact
+
+**Model Broker**:
+A customer-controlled service that exchanges a short-lived Worker Run-bound grant for narrowly permitted model
+requests while retaining provider credentials outside the worker container. It enforces model, configuration,
+budget, expiry, audience, network, and evidence-classification limits and grants no Kernel or business authority.
+_Avoid_: Provider credential mount, general network proxy, Kernel credential, ambient Codex login profile
+
+**Diagnostic Reevaluation Notice**:
+An immutable record that a materially changed evidence package may affect prior assignments or diagnoses. It
+does not launch a worker unless an exact deployed policy or governed request separately authorizes reevaluation.
+_Avoid_: Silent diagnosis replacement, automatic mutable retry, current-result pointer
 
 **Repair Worker**:
 A replaceable customer-selected coding agent that receives an exact source revision and Reproduction Bundle in a bounded workspace and proposes a patch plus targeted regression artifact. It has a separate Agent Passport and cannot verify, approve, merge, deploy, or expand its own authority.
@@ -156,6 +197,281 @@ Agent-facing and human-facing products invoke the same typed underlying operatio
 **Principal**:
 The stable typed attribution root for a human, agent, or deterministic system recognized by one Kernel Environment. A Principal identifies who or what participated but grants no role, delegation, access, approval, or execution authority.
 _Avoid_: Permission, Agent Passport, external login account
+
+**Observation Reporting Grant**:
+A revocable Kernel authority record permitting one deterministic Principal and dedicated signing key to report
+specific observation types for an exact installation, environment, adapter binding, workflow or integration,
+and stream within bounded time, rate, and payload limits. Acceptance proves reporting authorization for exact
+bytes, not truthfulness. Historical receipts retain their original grant and key attribution after revocation
+or rotation. V1 HMAC verification provides observer-specific authenticated attribution but not exclusive authorship,
+because the verification key holder can also sign; controller exclusion from key custody is proven separately.
+_Avoid_: Shared adapter credential, evidence truth, Integration Behavior Contract, ambient telemetry access
+
+**Observation Grant Activation Snapshot**:
+A signed immutable Kernel authority export containing the exact active or revoked Observation Reporting Grant
+identities, digests, key references, scopes, validity, authority sequence, and freshness limit required by Diagnostic
+Plane intake. Diagnostic Plane consumes it through a one-way authority feed and never reads the general authority
+database; stale or missing grant state fails intake closed.
+_Avoid_: General Kernel database access, observer secret, mutable permission cache, evidence receipt
+
+**Observation Grant Application Receipt**:
+A signed immutable Diagnostic Plane record proving one exact Observation Grant Activation Snapshot was durably
+applied at a local authority sequence and first-party time. Grant activation or revocation becomes effective at that
+application transaction; Kernel records the effective state only after verifying this receipt, and deployment sealing
+waits for it.
+Diagnostic Plane submits the exact signed receipt through Kernel's private grant-application receipt endpoint.
+Kernel validates service identity, signature, snapshot, authority sequence, predecessor, target state, and service
+transaction identity before preserving the receipt bytes.
+_Avoid_: Reporting Grant, observation receipt, publication acknowledgement without durable application
+
+**Observation Stream**:
+The ordered emission namespace of one observer under an Observation Reporting Grant. Sequence establishes
+only emission order within that stream; it establishes neither cross-stream time, causality, nor completeness.
+Redeployment or reset creates a new stream identity rather than silently restarting sequence.
+_Avoid_: Global event order, causal graph, complete source history
+
+**Observation Journal**:
+A customer-side durable adapter log that commits source identity mapping, logical operation, delivery attempt,
+redacted claims and digests, and pending forwarding state before customer delivery. Independent forwarder and
+reporter loops consume it, so Diagnostic Plane outages degrade visible coverage without normally blocking
+customer operations. Silent loss is prohibited.
+_Avoid_: Diagnostic Plane receipt store, distributed transaction, transient retry queue, raw payload archive
+
+**Test Orchestrator**:
+A privileged one-shot acceptance-test Principal that registers exact inactive test material and grants, requests
+readiness, waits for Workflow Attestation Binding, then requests activation, records the ordered Sealed Deployment
+Manifest, relinquishes credentials, and exits before scenario stimulus. It has no observation, evidence-packaging,
+assignment, or worker-output authority and no observer-key custody.
+_Avoid_: Scenario controller, evidence author, long-lived test administrator
+
+**Scenario Stimulus**:
+A separate one-shot acceptance-test Principal permitted only to submit a bounded set of source requests to the
+customer ingress endpoint. It reports no observations, receives no internal read authority, records only transport
+responses, and is destroyed before verification begins. The ingress observer journals and reports the deliveries.
+_Avoid_: Ingress observer, test controller, evidence fixture writer
+
+**Acceptance Verifier**:
+A read-only acceptance-test Principal that starts after Scenario Stimulus destruction and checks immutable
+diagnostic artifacts, provenance, diagnoses, and hidden expected assertions without any path to author or mutate
+tested system state. It may judge the proof but cannot participate in producing it.
+_Avoid_: Diagnostic Packager, dispatcher, worker, controller-authored evidence
+
+**Sealed Deployment Manifest**:
+An immutable acceptance-test artifact binding the exact image, Deployment, contract, schema, normalizer,
+projector, evaluator, and policy digests proven ready before the Test Orchestrator exits. It establishes the test
+environment inputs but is not an observation or evidence package.
+_Avoid_: Runtime observation, mutable readiness dashboard, post-execution revision binding
+
+**Runtime Evidence Compatibility Translator**:
+A deterministic versioned boundary that verifies a legacy runtime envelope and authentication context, maps only
+signed or digest-committed material into canonical `runtime.execution` claims, and submits those claims through
+canonical observation intake. It preserves the original protocol, envelope, authentication, translator, rules,
+and limitation digests and never invents absent attestation or timing claims.
+_Avoid_: Second runtime evidence store, lossy migration shim, inferred attestation, legacy truth source
+
+**Diagnostic Consistency Test Policy**:
+An exact deployed policy authorizing multiple independent Diagnostic Assignments over one frozen evidence package
+for a preregistered repeatability experiment. It fixes the worker-visible inputs and runtime configuration, binds a
+hidden structured rubric before dispatch, and evaluates each immutable diagnosis independently without synthesizing
+or majority-rewriting the results.
+_Avoid_: Production retry policy, consensus diagnosis, prose equality test, post-hoc scoring rubric
+
+**Diagnostic Mechanism Taxonomy**:
+A neutral reusable worker-visible output vocabulary containing multiple mechanism categories, identity scopes,
+evidence statuses, and implementation-location states applicable across diagnostic cases. It contains no
+fixture-specific expected tuple; the exact expected structured diagnosis exists only in the preregistered hidden
+rubric.
+_Avoid_: Answer key, single-value enum, case-specific output schema, free-form replacement for citations
+
+**Assignment-Creation Acceptance Proof**:
+The deterministic first stage of the duplicate-delivery black-box acceptance test. After a Test Orchestrator seals
+the environment and exits and Scenario Stimulus sends two bounded deliveries and exits, first-party services alone
+must ingest, project, interpret, evaluate, trigger, package, and create one immutable unclaimed Diagnostic Assignment.
+The read-only verifier confirms provenance and explicitly confirms that no worker, broker grant, or model request
+exists.
+_Avoid_: Diagnostic consistency test, model evaluation, controller-built evidence, database inspection
+
+The first canonical-observation vertical proof is one customer-controlled Docker Compose installation using
+Postgres, local filesystem CAS, private networks, unique observer HMAC keys and grants, n8n, a public local ingress
+adapter, mock CRM commit ledger, five exact observation schemas, pre-execution revision binding, and one exact
+projector, effect interpreter, evaluator, collection policy, package, assignment, dispatcher, isolated runner, and
+Model Broker path. Hosted tenancy, remote observers, public evidence gateways, mTLS, asymmetric signing, batching,
+SDK and MCP surfaces, generalized policy languages, arbitrary package code, additional providers, cryptographic host
+attestation, and distributed CAS are deferred without removing their identity and protocol extension points.
+
+**Diagnostic Stage Transition**:
+An immutable, inbox-deduplicated record of one local deterministic pipeline stage loading exact inputs, computing an
+identity and content digest, inserting or verifying one result, and committing its next outbox event. Lifecycle is
+`pending`, `processing`, `succeeded`, `retryable_failed`, or `failed_transition`. Repeating one identity with different
+content is a critical nondeterminism conflict and halts visibly.
+_Avoid_: Distributed transaction, opaque dead-letter item, mutable job row, synchronous request chain
+
+**Diagnostic Logical Component Author**:
+The deterministic component provenance attached to a Diagnostic Plane stage output within the shared first-party
+Stage Worker boundary. It binds component identity, version, artifact and rules digests, exact package and Deployment,
+worker image, and input event and artifact digests. It is not represented as an independently enforced service
+Principal when the same process can execute multiple components.
+_Avoid_: Separate security principal, observer identity, Kernel authority, cosmetic microservice attribution
+
+**Worker Run Configuration Digest**:
+A semantic digest over all fixed inputs of a diagnostic consistency experiment, including package, instructions,
+output schema, model claim, reasoning and sampling settings, limits, image, isolation, mount, broker, and tool
+policies. Assignment, run, worker, ephemeral credential, and timestamp identities are excluded. Unverifiable model
+snapshot or seed properties remain explicit limitations.
+_Avoid_: Worker Run ID, provider reproducibility guarantee, diagnosis digest
+
+**Artifact Retention Pin**:
+A governed reference record preventing ordinary garbage collection of claims or permitted detail artifacts selected
+by a Diagnostic Evidence Package through its applicable case, diagnosis, review, audit, or legal-hold retention.
+Pins reference CAS objects rather than copying them and may be overridden only by an authorized security, privacy,
+or legal erasure decision.
+_Avoid_: Permanent storage guarantee, package copy, legal hold itself
+
+**Diagnostic Artifact Tombstone**:
+An immutable record left after governed artifact-byte erasure that preserves the digest, exact policy and decision,
+reason, authorizing Principal, request and completion times, deletion verification, affected packages, and known
+replica or provider limitations. It never rewrites the original receipt or package.
+_Avoid_: Deleted receipt, proof all copies ceased to exist, mutable package manifest
+
+**Evidence Material Availability Projection**:
+A mutable rebuildable projection reporting whether an immutable Diagnostic Evidence Package is `complete`,
+`partially_unavailable`, or `material_unavailable` after retention or governed erasure. Availability changes may
+degrade reproducibility but never silently delete, rewrite, or rescore historical diagnoses.
+_Avoid_: Package revision, evidence completeness at freeze, diagnosis validity
+
+**Logical Operation Identity**:
+A stable opaque customer-side identity for one intended operational act across distinct deliveries,
+executions, requests, and destination resources. It is created at the earliest trustworthy boundary and
+propagated unchanged across retries. Kernel may verify or report its absence but cannot invent it retroactively.
+_Avoid_: Delivery ID, execution ID, inferred entity match, Kernel case ID
+
+**Source Identity Token**:
+A nonreversible versioned customer-side token representing equality of one stable source identity only within an
+exact installation, environment, source binding, and identifier namespace. It is domain-separated across customers
+and integrations, treated as pseudonymous sensitive metadata, and generated without exposing tokenization secrets
+to observers. It supports deterministic redelivery mapping without disclosing the customer identifier.
+_Avoid_: Bare identifier hash, anonymous data, global customer identity, cross-integration join key
+
+**Exact-Value Equality Token**:
+A pseudonymous token produced by a dedicated customer-side tokenization service over exact length-delimited bytes
+within one customer, environment, integration, and comparison-purpose namespace. Narrow Tokenization Use Grants permit
+tokenization only of designated fields and expose no secret or arbitrary oracle. Matching versioned tokens permit a
+deterministic projection to establish equality or inequality without disclosing the original values.
+_Avoid_: Raw idempotency key, general hashing API, normalized string comparison, cross-domain join key
+
+**Tokenization Use Grant**:
+A separate Kernel authority record permitting one exact observer Principal to ask one customer-side Tokenization
+Service to tokenize only a designated field role under one integration, namespace, algorithm version, collection
+window, byte limit, and rate limit. It grants no observation-reporting or arbitrary tokenization authority.
+_Avoid_: Observation Reporting Grant, tokenization secret, general hashing endpoint, cross-domain correlation grant
+
+**Tokenization Grant Activation Snapshot**:
+A signed immutable Kernel authority export containing the exact desired active or revoked Tokenization Use Grant
+state, service binding and verification identity, authority sequence, and freshness required by one Tokenization
+Service. The service receives it through a dedicated one-way authority feed and never reads the Kernel database.
+_Avoid_: Observation grant snapshot, tokenization secret, general authority cache
+
+**Tokenization Grant Application Receipt**:
+A signed immutable Tokenization Service record proving one exact Tokenization Grant Activation Snapshot was durably
+applied. Tokenization activation or revocation becomes effective at this application transaction; Kernel records the
+effective state only after verifying the receipt, and deployment sealing waits for it.
+The Tokenization Service submits the exact signed receipt through Kernel's private grant-application receipt
+endpoint under the same service-identity, signature, snapshot, ordering, target-state, and transaction checks.
+_Avoid_: Tokenization Result Receipt, Tokenization Use Grant, best-effort configuration acknowledgement
+
+**Tokenization Result Receipt**:
+An immutable customer-side Tokenization Service record binding service and requester Principals, Tokenization Use
+Grant, exact Grant Activation Snapshot and Grant Application Receipt, field role, namespace and version, result token,
+timing, and bounded request provenance without retaining raw input or an unsalted digest of low-entropy material.
+Observation claims cite its identity and digest.
+_Avoid_: Raw identifier record, Diagnostic Observation Receipt, anonymous token, oracle log
+
+The Tokenization Service signs every Tokenization Result Receipt with its registered asymmetric service identity and
+submits the exact signed result receipt, Grant Activation Snapshot, and Grant Application Receipt bytes through
+canonical private Diagnostic Plane receipt intake before any observation may cite it. Diagnostic Plane validates the
+complete Kernel-to-service grant proof, service identity, effective grant application, field scope, token and digest,
+preserves the proof chain immutably, and rejects missing, mismatched, revoked, or unapplied references.
+
+**Source Identity Mapping Receipt**:
+A customer-side durable journal record binding one scoped Source Identity Token to one opaque Logical Operation
+Identity, exact mapping service and version, source binding, journal sequence, and record digest before forwarding.
+`source.delivery` observations cite it as mapping provenance; the receipt establishes an attributed mapping claim,
+not external business truth.
+_Avoid_: Diagnostic Observation Receipt, raw submission identifier, inferred correlation edge
+
+**Correlation Token**:
+A signed propagation artifact binding a Logical Operation Identity to its installation, environment,
+namespace, issuer, and validity. Downstream systems pass it unchanged; observers do not receive the issuer's
+private key or a shared pseudonymization secret.
+_Avoid_: Observer credential, bearer authority for effects, cross-customer tracking identifier
+
+**Stream Coverage Projection**:
+A versioned, cutoff-bound derivation of received and missing ranges for one Observation Stream. It reports
+source coverage limitations without mutating accepted receipts or invalidating unrelated evidence; later
+arrivals may support a newer evidence package without changing an existing one.
+_Avoid_: Evidence truth score, strict delivery queue, cross-stream ordering
+
+**Diagnostic Committed Intake Position**:
+A contiguous installation-local position assigned to every durably preserved intake outcome while holding one
+transaction-scoped finalization lock through commit. Rollback also rolls back the position advance, so every cutoff
+identifies a stable committed prefix across observer streams. It establishes inclusion order, not external time or
+causality.
+_Avoid_: Postgres sequence allocation, observer stream sequence, wall-clock cutoff, causal order
+
+**Correlation Projection**:
+An immutable deterministic Diagnostic Plane revision deriving canonically ordered entities, typed
+relationships, unresolved relationships, and facts from an exact ingestion cutoff, receipt set, interpretation
+dependencies, and projector version. Its semantic digest excludes random identity and creation time; its
+record digest binds provenance metadata. Query indexes are disposable and never evidence authority.
+_Avoid_: Mutable graph database, inferred fuzzy join, current-state evidence, Accountability Projection
+
+**Evidence Selection Policy**:
+An immutable versioned policy defining the allowed typed-edge traversal, required source roles, contradiction
+and unresolved-relationship inclusion, acceptable commitment bases, role-completion predicates, source-coverage
+requirements, optional corroboration, detail classes, redaction, and disclosure accounting used to derive one
+Diagnostic Evidence Package from an exact evaluation and projection. Required roles are contract-specific and may
+be relational: every matched effect must have the required request, execution, and delivery ancestors. It contains
+no model-selected rules or universal evidence checklist.
+_Avoid_: Search prompt, arbitrary graph neighborhood, hidden filter, artifact JSONPath
+
+**Diagnostic Evidence Package**:
+An immutable content-addressed Diagnostic Plane artifact derived from one exact evaluation by an Evidence
+Selection Policy. It preserves an inspectable correlation path, supporting and contradictory receipt-backed
+claims, unresolved relationships, coverage and conflicts, exact interpretation dependencies, and disclosure
+accounting. Its manifest separates `governed_interpretation_dependencies`, `authenticated_observations`,
+`deterministic_derived_facts`, and `coverage_and_limitations`. Governed contracts explain interpretation but
+cannot encode incident facts or expected diagnosis; observations supply claims; deterministic services derive
+facts; the packager introduces none. It is intentionally bounded and does not claim exhaustive or causal coverage.
+_Avoid_: Reproduction Bundle, causal proof, complete data export, controller-authored workspace
+
+When a selected observation or equality edge depends on tokenization, the package includes and retention-pins the
+signed Tokenization Result Receipt, service verification identity, Grant Activation Snapshot, and Grant Application
+Receipt as `authenticated_provenance_dependency` records in a distinct `authenticated_provenance_dependencies`
+collection under `authenticated_observations`. They support authenticated observations but are not themselves
+observations or governed interpretation.
+
+**Evidence Collection Retention Lease**:
+A temporary governed retention reference created with a Diagnostic Trigger over proving inputs and extended to newly
+relevant correlation-group material while a case collects evidence. It lasts through the collection deadline,
+maximum stage-retry horizon, and garbage-collection margin, then converts selected material to package pins or
+expires visibly.
+_Avoid_: Permanent package pin, ordinary retention policy, legal hold, mutable evidence package
+
+Ordinary retention must satisfy `pretrigger_observation_horizon + pretrigger_pipeline_retry_horizon + gc_margin`.
+Collection lease duration from trigger commit must satisfy `collection_window + post_trigger_retry_horizon +
+gc_margin`. Readiness evaluates the sums, not each interval independently.
+
+**Independent Diagnostic Verification Bundle**:
+An immutable privileged read-API export containing every preserved intake outcome and exact bytes or tombstone from
+Diagnostic Committed Intake Position `1..cutoff`, plus schemas, contracts, grant application state, signed
+tokenization receipts and service verification identities, rules artifacts, and published input manifests. A
+separate verifier checks prefix contiguity and independently determines eligible inputs before recomputing projection,
+effect interpretation, evaluation, and package semantic digests without database or Stage Worker access.
+_Avoid_: Precomputed verification answer, database dump, Stage Worker self-check, hidden rubric
+
+Late observations never mutate a Diagnostic Evidence Package, its projection, assignment, or bound diagnosis.
+Policy-defined material changes may create a newer package revision; identical deterministic content creates no
+revision, and historical diagnoses remain bound to their original packages.
 
 **Agent Passport**:
 A versioned identity document binding an agent Principal to its sponsor, runtime, model, exact package and skill configuration, environment identity, permitted intent classes, provenance, and validity window. It proves what the agent is; it grants no business authority.
@@ -255,13 +571,34 @@ Governance scales with consequence: public contracts are discoverable, customer 
 An attributed, immutable Diagnostic Plane observation imported from an agent system that did not execute under Kernel admission. It supports diagnosis and migration into governance but proves neither enforcement nor external effect.
 _Avoid_: Observed Run, Run, trusted evidence, retroactive governance
 
+**Diagnostic Effect Projection**:
+An immutable deterministic Diagnostic Plane assessment of an external effect as `committed`, `not_committed`,
+`ambiguous`, or `unknown`, binding exact request, state or designated effect-feed receipts, Integration Behavior
+Contract, interpreter and rules, correlation, and coverage limitations. Commitment basis is explicit; generic
+external claims remain non-authoritative. Every result is classified `diagnostic_derived_external_effect` with
+`authority: none`; direct designated-feed observations still require interpretation before evaluation. Generic
+transport success is only acknowledgement unless the exact contract defines it as durable commitment.
+_Avoid_: Kernel Effect Record, HTTP success, observer self-certification, mutable destination status
+
 **Diagnostic Case**:
 A builder-facing investigation that groups exact traces, Runs, revisions, hypotheses, reproductions, evaluations, and fix verification for one behavioral problem. It may propose changes but grants no authority and does not repair business consequences.
 _Avoid_: Recovery Case, Accountable Work Thread, alert, mutable Run
 
+A deterministically triggered case begins in `collecting_evidence`. Diagnosis assignment becomes available only
+after required diagnostic source roles complete under exact policy or a durable first-party collection deadline
+freezes partial evidence at an exact Diagnostic Committed Intake Position cutoff.
+
+One Diagnostic Assignment binds one package, instruction contract, worker authority boundary, and reproducible
+attempt. Later package revisions create Diagnostic Reevaluation Notices rather than silently replacing active
+assignments or historical diagnoses.
+
 **Diagnostic Trigger**:
 An explicit human or agent failure report, structured runtime/tool failure, Kernel accountability or Effect state, or external business mismatch that initiates diagnosis. Model-detected anomaly alone may suggest review but cannot declare failure.
 _Avoid_: Model confidence threshold, unexplained alert, inferred business failure
+
+A violated Behavior Evaluation Record may deterministically create a Diagnostic Trigger keyed by exact
+contract, correlation group, and proving evidence. Later evaluation revisions attach to the existing case
+rather than duplicating the same demonstrated violation.
 
 **Failure Specification**:
 A Diagnostic Case-bound statement of demonstrated expected-versus-actual behavior, reproduction conditions, and targeted repair verification. It supports fixing one known problem without claiming to evaluate overall agent quality.
@@ -274,6 +611,27 @@ _Avoid_: Production payload archive, mutable test workspace, Operational Package
 **Behavior Contract**:
 An optional versioned declaration for builders who want proactive workflow monitoring against selected outcomes, invariants, prohibited behavior, or performance boundaries. It grants no authority and is not required for onboarding, diagnosis, or repair.
 _Avoid_: Accountability Contract, Capability Contract, model rubric, authority policy
+
+**Behavior Evaluation Record**:
+An immutable deterministic Diagnostic Plane result binding an exact Behavior Contract, bounded evaluator,
+Diagnostic Effect Projection, correlation group, threshold, and source coverage. The evaluator may count only
+normalized effects whose status is `committed` and whose operation, destination, correlation role, and commitment
+basis satisfy the contract; it cannot read raw requests, responses, snapshots, feed claims, or arbitrary detail.
+Its result is `satisfied`, `violated`, or `indeterminate`; insufficient required-source coverage can never produce
+`satisfied`, while independently proven prohibited effects may establish `violated` despite unrelated gaps.
+_Avoid_: Model score, causal diagnosis, authority decision, generic policy execution
+
+**Integration Behavior Contract**:
+An immutable, versioned, environment-attributed declaration of external integration semantics needed to
+interpret observations deterministically, such as idempotency comparison, commit behavior, and resource
+identity. Observations reference its exact identity and digest; adapter reports cannot create or mutate it.
+_Avoid_: Observation, provider documentation link, credential, Behavior Contract
+
+**Contract Discovery Evidence**:
+Adapter-submitted provider metadata, documentation, or observed behavior offered to support an Integration
+Behavior Contract. It remains a diagnostic observation or contract candidate until governed registration
+makes an exact contract version authoritative configuration.
+_Avoid_: Registered Integration Behavior Contract, adapter-defined authority, automatic contract activation
 
 **Repair Candidate**:
 A non-authoritative proposed change binding one Diagnostic Case and exact base Agent Revision to a candidate revision, expected behavior change, targeted verification plan, and verification results. It cannot mutate source, approve itself, or promote itself.
@@ -291,9 +649,60 @@ _Avoid_: Credential, Repair Candidate, ambient write access
 A versioned external-substrate integration that describes workflow and revision identity, receives or retrieves execution observations, requests supported replay, and reports runtime health through typed contracts. It never defines Alphonse workflow semantics or reads an external runtime database directly.
 _Avoid_: Repair Delivery Adapter, Kernel execution substrate, direct database integration
 
+**Workflow Attestation Binding**:
+An immutable pre-execution environment binding between one exact Agent Revision and one published provider
+workflow version normalized under pinned runtime image, node metadata, dependency, normalizer, and rules
+digests. A short-lived readiness receipt must establish required read access, execution-snapshot retention, and
+normalization coverage before its Reporting Grant activates. Runtime observations may confirm or contradict the
+binding but can never create, learn, or replace its expected digest.
+_Avoid_: Execution-derived expectation, workflow ID-only attribution, mutable adapter cache, deployment draft
+
 **Runtime Event Envelope**:
 A provider-neutral signed observation from a Workflow Runtime Adapter binding exact adapter, workflow, revision, external execution, event identity and sequence, lifecycle claim, correlation, idempotency, timestamp, and payload digest or reference. Receipt preserves the claim but does not make it Kernel execution truth.
 _Avoid_: Run transition, raw webhook payload, trusted external effect evidence
+
+**Diagnostic Observation Envelope**:
+A schema-versioned signed report containing only the typed claims one authorized observer may make, together
+with exact stream, identity, correlation, timing, limitation, redaction, and optional detail-artifact binding.
+Typed claims drive deterministic projections; opaque artifacts never do.
+_Avoid_: Provider payload archive, arbitrary JSON facts, Diagnostic Observation Receipt, external truth
+
+**Observation Schema Export**:
+An immutable signed Operational Package artifact conforming to the Core observation meta-schema and defining
+one exact observation type's typed claims, correlation roles, allowed detail media, and compatibility metadata.
+An exact Deployment activates it and Observation Reporting Grants authorize its full identity, version, and
+digest tuple; adapters cannot submit or redefine schemas at intake.
+_Avoid_: Runtime schema upload, adapter-owned semantics, mutable validator, provider payload schema
+
+**Diagnostic Observation Receipt**:
+An immutable first-party record authored by Diagnostic Plane intake, binding the accepted Diagnostic Observation
+Envelope, authenticated Principal attribution, Reporting Grant and key, exact Observation Grant Activation Snapshot,
+authentication context, canonical envelope and detail digests, Diagnostic Committed Intake Position, and
+authoritative receipt time. It proves what exact bytes intake accepted under which reporting attribution and grant,
+and when; HMAC does not prove exclusive observer authorship, and the receipt does not prove the external claim true.
+Governed retention or erasure may
+remove sensitive envelope or detail bytes while preserving receipt identity, provenance, digests, and an immutable
+tombstone, so receipt immutability does not imply immortal sensitive material.
+_Avoid_: External effect truth, Kernel Run evidence, mutable telemetry row
+
+**Observation Intake Result**:
+The independently retryable outcome of submitting one signed Diagnostic Observation Envelope with zero or one
+bounded detail artifact. It is exactly one newly accepted receipt, exact replay, bounded rejection, or identity or
+sequence conflict and binds the canonical envelope and verified artifact digests, grant, stream, sequence,
+authoritative receipt time, and resulting record identity.
+_Avoid_: Batch acknowledgement, journal commit, observer truth attestation, cross-observation transaction
+
+**Diagnostic Artifact**:
+An immutable content-addressed object durably verified before any accepted Diagnostic Plane record references
+its metadata. Stored but unreferenced objects are recoverable garbage, not observations or evidence; accepted
+records must never reference missing artifact bytes.
+_Avoid_: Mutable file path, accepted receipt, orphan as evidence, external payload authority
+
+**Rejected Intake Record**:
+A bounded immutable Diagnostic Plane audit record preserving authenticated attribution when available,
+claimed schema tuple, received body digest and size, receipt time, and rejection reason without retaining
+arbitrary invalid bytes by default. Encrypted quarantine requires explicit policy.
+_Avoid_: Accepted observation, unrestricted dead-letter payload, evidence receipt
 
 **Execution Envelope**:
 An immutable admission record binding one exact request to active capability authority, Agent Passport, Work Intent, delegation, context and credential references, effect limits, evidence requirements, recovery posture, expiry, and idempotency. One Envelope admits exactly one Run; it is not that Run and proves no effect occurred.
@@ -310,6 +719,9 @@ _Avoid_: Run status, model confidence, single success boolean
 **Effect Record**:
 A first-class Run-linked aggregate with immutable identity and attempt facts, append-only status transitions, and a derived current projection for one external effect. Reconciliation may resolve uncertainty while permanently preserving that uncertainty occurred.
 _Avoid_: Run status, model claim, implementation log
+
+Diagnostic Effect Projections describe externally observed activity that did not execute under Kernel admission;
+they never become or masquerade as governed Effect Records.
 
 Every external effect is admitted by Kernel immediately before dispatch. Multiple effects may be batch-admitted only when each exact effect, target, idempotency key, and limit consumption is enumerated atomically; adapters never receive an ambient effect budget.
 

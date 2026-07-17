@@ -1,0 +1,83 @@
+{
+  "schema_version": "0.1.0",
+  "threat_model": {
+    "host": "trusted_customer_host",
+    "docker_daemon": "trusted",
+    "bootstrap_launcher": "trusted_one_shot",
+    "claim": "configured_exclusion_not_host_attestation"
+  },
+  "roles": {
+    "trusted_bootstrap": {
+      "process_class": "one_shot",
+      "credentials": ["compose-launch", "secret-install"],
+      "mounts": [
+        { "name": "compose-definition", "mode": "read_only" },
+        { "name": "bootstrap-secret-source", "mode": "read_only" },
+        { "name": "bootstrap-receipt", "mode": "write_only" }
+      ],
+      "network": ["docker-daemon", "private-bootstrap"],
+      "permissions": ["infrastructure.start", "observer-secrets.install", "bootstrap-receipt.write"],
+      "docker_socket": true,
+      "secret_store": true,
+      "read_only": false,
+      "enforcement_claim": "configured_exclusion_under_trusted_host"
+    },
+    "test_orchestrator": {
+      "process_class": "one_shot",
+      "credentials": ["configuration-register", "readiness-read", "manifest-seal"],
+      "mounts": [
+        { "name": "bootstrap-receipt", "mode": "read_only" },
+        { "name": "deployment-workspace", "mode": "read_write" }
+      ],
+      "network": ["kernel-authority-private", "diagnostic-readiness-private", "tokenization-readiness-private"],
+      "permissions": ["configuration.register_inactive", "readiness.read", "deployment-manifest.seal"],
+      "docker_socket": false,
+      "secret_store": false,
+      "read_only": false,
+      "enforcement_claim": "configured_exclusion_under_trusted_host"
+    },
+    "runtime_supervisor": {
+      "process_class": "scenario_sequencer",
+      "credentials": [],
+      "mounts": [
+        { "name": "sealed-role-manifests", "mode": "read_only" },
+        { "name": "process-results", "mode": "read_only" }
+      ],
+      "network": [],
+      "permissions": ["process.sequence"],
+      "docker_socket": false,
+      "secret_store": false,
+      "read_only": true,
+      "enforcement_claim": "configured_exclusion_under_trusted_host"
+    },
+    "scenario_stimulus": {
+      "process_class": "one_shot",
+      "credentials": ["stimulus-token-route-scoped"],
+      "mounts": [
+        { "name": "source-payloads", "mode": "read_only" },
+        { "name": "transport-responses", "mode": "write_only" }
+      ],
+      "network": ["customer-ingress"],
+      "permissions": ["ingress.request"],
+      "request_limit": 2,
+      "docker_socket": false,
+      "secret_store": false,
+      "read_only": false,
+      "enforcement_claim": "configured_exclusion_under_trusted_host"
+    },
+    "acceptance_verifier": {
+      "process_class": "one_shot",
+      "credentials": ["diagnostic-read-only", "kernel-audit-read-only"],
+      "mounts": [
+        { "name": "hidden-assertions", "mode": "read_only" },
+        { "name": "verification-report", "mode": "write_only" }
+      ],
+      "network": ["diagnostic-read-api", "kernel-audit-read-api"],
+      "permissions": ["diagnostic-status.read", "kernel-audit.read"],
+      "docker_socket": false,
+      "secret_store": false,
+      "read_only": true,
+      "enforcement_claim": "configured_exclusion_under_trusted_host"
+    }
+  }
+}
