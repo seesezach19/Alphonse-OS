@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, createPublicKey, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
@@ -27,6 +27,10 @@ import { createExecutionService } from "./execution-service.js";
 import { KernelError } from "./errors.js";
 import { createIdentityIntentService, validateCommandEnvelope } from "./identity-intent-service.js";
 import { createHandoffService } from "./handoff-service.js";
+import { createGrantAuthorityService } from "./grant-authority-service.js";
+import { createDiagnosticGrantApplicationService } from "./diagnostic-grant-application-service.js";
+import { createDiagnosticObservationService } from "./diagnostic-observation-service.js";
+import { createDiagnosticTokenizationProofService } from "./diagnostic-tokenization-proof-service.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
 import { createPackageService } from "./package-service.js";
 import { createPackageTrustService } from "./package-trust-service.js";
@@ -101,6 +105,18 @@ const adapterDispatchTimeoutMs = Number(process.env.ADAPTER_DISPATCH_TIMEOUT_MS 
 const environmentCoordinationPrivateKey = process.env.KERNEL_COORDINATION_PRIVATE_KEY;
 const coordinatorEnrollmentToken = process.env.COORDINATOR_ENROLLMENT_TOKEN;
 const supportDiagnosticSecret = process.env.KERNEL_SUPPORT_DIAGNOSTIC_SECRET;
+const grantSnapshotSigningKeyId = process.env.KERNEL_GRANT_SNAPSHOT_SIGNING_KEY_ID;
+const grantSnapshotSigningSecret = process.env.KERNEL_GRANT_SNAPSHOT_SIGNING_SECRET;
+const diagnosticGrantApplicationKeyId = process.env.DIAGNOSTIC_GRANT_APPLICATION_SIGNING_KEY_ID;
+const diagnosticGrantApplicationSecret = process.env.DIAGNOSTIC_GRANT_APPLICATION_SIGNING_SECRET;
+const grantAuthorityFeedToken = process.env.GRANT_AUTHORITY_FEED_TOKEN;
+const grantApplicationReceiptServiceToken = process.env.GRANT_APPLICATION_RECEIPT_SERVICE_TOKEN;
+const diagnosticObserverKeys = JSON.parse(process.env.DIAGNOSTIC_OBSERVER_KEYS ?? "{}");
+const tokenizationGrantApplicationKeyId = process.env.TOKENIZATION_GRANT_APPLICATION_SIGNING_KEY_ID;
+const tokenizationGrantApplicationSecret = process.env.TOKENIZATION_GRANT_APPLICATION_SIGNING_SECRET;
+const tokenizationServiceKeyId = process.env.TOKENIZATION_SERVICE_SIGNING_KEY_ID;
+const tokenizationServicePublicKeyDer = process.env.TOKENIZATION_SERVICE_PUBLIC_KEY_DER_BASE64;
+const diagnosticTokenizationResultToken = process.env.DIAGNOSTIC_TOKENIZATION_RESULT_TOKEN;
 
 if (!databaseUrl) throw new Error("DATABASE_URL is required.");
 if (!bootstrapToken) throw new Error("KERNEL_BOOTSTRAP_TOKEN is required.");
@@ -125,6 +141,9 @@ let diagnosticRepairDeliveryService = null;
 let diagnosticVerificationService = null;
 let diagnosticPromotionService = null;
 let diagnosticArtifactStore = null;
+let diagnosticGrantApplicationService = null;
+let diagnosticObservationService = null;
+let diagnosticTokenizationProofService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -160,7 +179,36 @@ if (diagnosticDatabaseUrl) {
   );
 }
 const identityIntent = createIdentityIntentService(database, installationId, environmentId, bootstrapPrincipalId);
+const grantAuthorityConfigured = grantSnapshotSigningKeyId && grantSnapshotSigningSecret
+  && diagnosticGrantApplicationKeyId && diagnosticGrantApplicationSecret;
+const grantAuthorityService = grantAuthorityConfigured
+  ? createGrantAuthorityService(database, installationId, environmentId, {
+    snapshotKeyId: grantSnapshotSigningKeyId,
+    snapshotSecret: grantSnapshotSigningSecret,
+    applicationKeys: {
+      "diagnostic-plane": {
+        keyId: diagnosticGrantApplicationKeyId,
+        secret: diagnosticGrantApplicationSecret
+      },
+      ...(tokenizationGrantApplicationKeyId && tokenizationGrantApplicationSecret ? {
+        "tokenization-service": {
+          keyId: tokenizationGrantApplicationKeyId,
+          secret: tokenizationGrantApplicationSecret
+        }
+      } : {})
+    }
+  })
+  : null;
 if (diagnosticDatabase) {
+  if (grantAuthorityConfigured) {
+    diagnosticGrantApplicationService = createDiagnosticGrantApplicationService(
+      diagnosticDatabase, installationId, {
+        serviceId: "diagnostic-plane",
+        authorityKey: { keyId: grantSnapshotSigningKeyId, secret: grantSnapshotSigningSecret },
+        applicationKey: { keyId: diagnosticGrantApplicationKeyId, secret: diagnosticGrantApplicationSecret }
+      }
+    );
+  }
   diagnosticRepairWorkerService = createDiagnosticRepairWorkerService(
     diagnosticDatabase, diagnosticArtifactStore, installationId, identityIntent
   );
@@ -210,12 +258,54 @@ if (diagnosticDatabase) {
       fixture_version: verificationFixtureVersion
     }
   });
+  if (tokenizationServiceKeyId && tokenizationServicePublicKeyDer
+      && grantSnapshotSigningKeyId && grantSnapshotSigningSecret
+      && tokenizationGrantApplicationKeyId && tokenizationGrantApplicationSecret) {
+    diagnosticTokenizationProofService = createDiagnosticTokenizationProofService(
+      diagnosticDatabase, installationId, environmentId, {
+        serviceKeyId: tokenizationServiceKeyId,
+        servicePublicKey: createPublicKey({
+          key: Buffer.from(tokenizationServicePublicKeyDer, "base64"), format: "der", type: "spki"
+        }),
+        authorityKey: { keyId: grantSnapshotSigningKeyId, secret: grantSnapshotSigningSecret },
+        applicationKey: {
+          keyId: tokenizationGrantApplicationKeyId,
+          secret: tokenizationGrantApplicationSecret
+        }
+      }
+    );
+  }
 }
 const contextService = createContextService(database, identityIntent, installationId, environmentId);
 const packageService = createPackageService(database, identityIntent, contextService, installationId, environmentId,
   packageSigningSecret, packageSigningKeyId, dataPlaneReceiptSecret, dataPlaneId, packageVerificationKeys);
 const packageTrustService = createPackageTrustService(database, installationId, environmentId, environmentClass);
 const deploymentService = createDeploymentService(database, identityIntent, packageService, installationId, environmentId);
+if (diagnosticDatabase && diagnosticArtifactStore) {
+  diagnosticObservationService = createDiagnosticObservationService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    installationId,
+    environmentId,
+    observerKeys: diagnosticObserverKeys,
+    dependencyValidator: diagnosticTokenizationProofService,
+    async resolveDeployedSchema(deploymentId, schemaExportId) {
+      const deployment = await deploymentService.getDeployment(deploymentId);
+      const packageVersion = await packageService.getPackageVersion(deployment.package_version_id);
+      const exported = packageVersion.candidate.exports.find((entry) => entry.export_id === schemaExportId);
+      if (!exported) {
+        throw new KernelError(404, "DEPLOYED_OBSERVATION_SCHEMA_NOT_FOUND",
+          "Deployment does not contain the requested Schema export.");
+      }
+      return {
+        deployment_id: deployment.deployment_id,
+        package_version_id: packageVersion.package_version_id,
+        package_artifact_digest: packageVersion.artifact_digest,
+        export_record: { ...exported, export_digest: sha256Digest(exported.content) }
+      };
+    }
+  });
+}
 const upgradeService = createUpgradeService(database, identityIntent, packageService, deploymentService,
   installationId, environmentId, dataPlaneReceiptSecret);
 const handoffService = createHandoffService(database, identityIntent, contextService, packageService, deploymentService,
@@ -353,6 +443,58 @@ function requireDiagnosticReproduction() {
   return diagnosticReproductionService;
 }
 
+function requireGrantAuthority() {
+  if (!grantAuthorityService) {
+    throw new KernelError(503, "GRANT_AUTHORITY_UNAVAILABLE", "Grant authority protocol is not configured.");
+  }
+  return grantAuthorityService;
+}
+
+function requireDiagnosticGrantApplication() {
+  if (!diagnosticGrantApplicationService) {
+    throw new KernelError(503, "GRANT_APPLICATION_RECEIVER_UNAVAILABLE", "Diagnostic grant receiver is not configured.");
+  }
+  return diagnosticGrantApplicationService;
+}
+
+function requireDiagnosticObservation() {
+  if (!diagnosticObservationService) {
+    throw new KernelError(503, "OBSERVATION_INTAKE_UNAVAILABLE", "Canonical observation intake is not configured.");
+  }
+  return diagnosticObservationService;
+}
+
+function requireDiagnosticTokenizationProof() {
+  if (!diagnosticTokenizationProofService) {
+    throw new KernelError(503, "TOKENIZATION_PROOF_UNAVAILABLE",
+      "Tokenization Result Receipt verification is not configured.");
+  }
+  return diagnosticTokenizationProofService;
+}
+
+function observationAuthentication(request, body) {
+  return body.authentication ?? {
+    principal_id: request.headers["x-observation-principal-id"],
+    grant_id: request.headers["x-observation-grant-id"],
+    key_id: request.headers["x-observation-key-id"],
+    signed_at: request.headers["x-observation-signed-at"],
+    signature: request.headers["x-observation-signature"]
+  };
+}
+
+function authenticatePrivateService(request, expectedToken, code) {
+  if (!expectedToken) throw new KernelError(503, `${code}_UNAVAILABLE`, "Private service authentication is not configured.");
+  const suppliedValue = request.headers.authorization?.startsWith("Bearer ")
+    ? request.headers.authorization.slice("Bearer ".length) : "";
+  const supplied = Buffer.from(suppliedValue, "utf8");
+  const expected = Buffer.from(expectedToken, "utf8");
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+    throw new KernelError(403, code, "Private service authentication failed.");
+  }
+  return { type: "service", id: code === "GRANT_AUTHORITY_FEED_AUTHENTICATION_FAILED"
+    ? "kernel-grant-authority-feed" : "diagnostic-plane" };
+}
+
 function requireDiagnosticRepairWorker() {
   if (!diagnosticRepairWorkerService) {
     throw new KernelError(503, "DIAGNOSTIC_PLANE_UNAVAILABLE", "Diagnostic repair workers are not configured.");
@@ -432,8 +574,120 @@ async function route(request, response) {
       protocol_version: PROTOCOL_VERSION,
       diagnostic_plane: diagnosticDatabase ? "healthy" : "not_configured",
       diagnostic_runtime: diagnosticRuntimeService ? "healthy" : "not_configured",
-      diagnostic_repair_delivery: diagnosticRepairDeliveryService ? "healthy" : "not_configured"
+      diagnostic_repair_delivery: diagnosticRepairDeliveryService ? "healthy" : "not_configured",
+      grant_authority: grantAuthorityService ? "healthy" : "not_configured",
+      diagnostic_grant_receiver: diagnosticGrantApplicationService ? "healthy" : "not_configured",
+      canonical_observation_intake: diagnosticObservationService ? "healthy" : "not_configured",
+      tokenization_proof_registry: diagnosticTokenizationProofService ? "healthy" : "not_configured"
     });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/grant-authority/grants") {
+    const service = requireGrantAuthority();
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request, 256 * 1024),
+      "kernel.authority_grant.register");
+    return sendCommandResult(response, await service.registerGrant(command, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/grant-authority/readiness-receipts") {
+    const service = requireGrantAuthority();
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request, 256 * 1024),
+      "kernel.authority_grant.readiness.record");
+    return sendCommandResult(response, await service.recordReadiness(command, actor));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/grant-authority/snapshots") {
+    const service = requireGrantAuthority();
+    const actor = authenticateBootstrapOperator(request);
+    const command = validateCommandEnvelope(await readJson(request, 64 * 1024),
+      "kernel.authority_grant.snapshot.publish");
+    return sendCommandResult(response, await service.publishSnapshot(command, actor));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/kernel/v0/grant-authority/grants/")) {
+    const service = requireGrantAuthority();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { grant_state: await service.getGrantState(
+      pathId(url.pathname, "/kernel/v0/grant-authority/grants/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/grant-authority/seal-readiness") {
+    const service = requireGrantAuthority();
+    authenticateBootstrapOperator(request);
+    const body = await readJson(request, 64 * 1024);
+    return sendJson(response, 200, await service.assertSealEligible(body.grant_ids));
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/internal/v0/grant-activation-snapshots") {
+    const service = requireDiagnosticGrantApplication();
+    authenticatePrivateService(request, grantAuthorityFeedToken,
+      "GRANT_AUTHORITY_FEED_AUTHENTICATION_FAILED");
+    const body = await readJson(request, 256 * 1024);
+    const accepted = await service.applySnapshot(body.signed_snapshot_bytes);
+    return sendCommandResult(response, accepted);
+  }
+
+  if (request.method === "POST" && url.pathname === "/authority/v0/grant-application-receipts") {
+    const service = requireGrantAuthority();
+    const actor = authenticatePrivateService(request, grantApplicationReceiptServiceToken,
+      "GRANT_APPLICATION_RECEIPT_AUTHENTICATION_FAILED");
+    const body = await readJson(request, 256 * 1024);
+    return sendCommandResult(response, await service.acceptApplicationReceipt(body.signed_receipt_bytes, actor));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/grant-projections\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticGrantApplication();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { grant_projection: await service.getEffectiveState(
+      environmentId, pathId(url.pathname, "/diagnostic/v0/grant-projections/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/observation-schema-activations") {
+    const service = requireDiagnosticObservation();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.observation_schema.activate");
+    const body = await readJson(request, 64 * 1024);
+    return sendCommandResult(response, await service.activateSchema(body, actor.id));
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/observations") {
+    const service = requireDiagnosticObservation();
+    const body = await readJson(request, 2 * 1024 * 1024);
+    const envelopeBytes = body.envelope_bytes ?? canonicalize(body.envelope);
+    return sendCommandResult(response, await service.receiveObservation({
+      envelope_bytes: envelopeBytes,
+      authentication: observationAuthentication(request, body),
+      detail_base64: body.detail_base64 ?? null
+    }));
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/internal/v0/tokenization-result-receipts") {
+    const service = requireDiagnosticTokenizationProof();
+    authenticatePrivateService(request, diagnosticTokenizationResultToken,
+      "TOKENIZATION_RESULT_SERVICE_AUTHENTICATION_FAILED");
+    const body = await readJson(request, 256 * 1024);
+    return sendCommandResult(response, await service.preserveResultReceipt(body));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/tokenization-result-receipts\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticTokenizationProof();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { tokenization_result_receipt: await service.getResultReceipt(
+      pathId(url.pathname, "/diagnostic/v0/tokenization-result-receipts/")) });
+  }
+
+  if (request.method === "GET" && url.pathname === "/diagnostic/v0/intake-prefix") {
+    const service = requireDiagnosticObservation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { intake_prefix: await service.getIntakePrefix() });
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/observation-receipts\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticObservation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { observation_receipt: await service.getReceipt(
+      pathId(url.pathname, "/diagnostic/v0/observation-receipts/")) });
   }
 
   if (request.method === "GET" && url.pathname === "/diagnostic/v0/bootstrap") {

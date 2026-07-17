@@ -26,6 +26,8 @@ services:
       DIAGNOSTIC_DATABASE_NAME: alphonse_diagnostic
       DIAGNOSTIC_DATABASE_ROLE: alphonse_diagnostic
       DIAGNOSTIC_DATABASE_PASSWORD: local-diagnostic-only
+      TOKENIZATION_DATABASE_ROLE: alphonse_tokenization
+      TOKENIZATION_DATABASE_PASSWORD: local-tokenization-only
     depends_on:
       postgres:
         condition: service_healthy
@@ -67,6 +69,18 @@ services:
       DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
       DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
       KERNEL_SUPPORT_DIAGNOSTIC_SECRET: local-support-diagnostic-encryption-secret-v1
+      KERNEL_GRANT_SNAPSHOT_SIGNING_KEY_ID: local-kernel-grant-snapshot-key-v1
+      KERNEL_GRANT_SNAPSHOT_SIGNING_SECRET: local-kernel-grant-snapshot-secret-with-sufficient-length-v1
+      DIAGNOSTIC_GRANT_APPLICATION_SIGNING_KEY_ID: local-diagnostic-grant-application-key-v1
+      DIAGNOSTIC_GRANT_APPLICATION_SIGNING_SECRET: local-diagnostic-grant-application-secret-with-sufficient-length-v1
+      GRANT_AUTHORITY_FEED_TOKEN: local-grant-authority-feed-token
+      GRANT_APPLICATION_RECEIPT_SERVICE_TOKEN: local-grant-application-receipt-token
+      DIAGNOSTIC_OBSERVER_KEYS: '{"observer-webhook-key-v1":"observer-webhook-secret-with-sufficient-length-v1","observer-runtime-key-v1":"observer-runtime-secret-with-sufficient-length-v1","observer-crm-key-v1":"observer-crm-secret-with-sufficient-length-v1"}'
+      TOKENIZATION_GRANT_APPLICATION_SIGNING_KEY_ID: local-tokenization-grant-application-key-v1
+      TOKENIZATION_GRANT_APPLICATION_SIGNING_SECRET: local-tokenization-grant-application-secret-with-sufficient-length-v1
+      TOKENIZATION_SERVICE_SIGNING_KEY_ID: local-tokenization-service-ed25519-v1
+      TOKENIZATION_SERVICE_PUBLIC_KEY_DER_BASE64: MCowBQYDK2VwAyEAd3J+TM4tUSgFYA35F1emcJ2zGrmunrS8ynmYe6aCCYE=
+      DIAGNOSTIC_TOKENIZATION_RESULT_TOKEN: local-tokenization-result-submission-token
       VERIFICATION_RUNNER_ID: 00000000-0000-4000-8000-000000000700
       VERIFICATION_RUNNER_VERSION: 0.2.0
       VERIFICATION_FIXTURE_VERSION: inventory-v1
@@ -84,6 +98,38 @@ services:
       - diagnostic-artifacts:/var/lib/alphonse-diagnostics
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  tokenization-service:
+    profiles: ["canonical-tokenization"]
+    build:
+      context: .
+    command: ["node", "src/tokenization-service-server.js"]
+    environment:
+      TOKENIZATION_PORT: 3500
+      DIAGNOSTIC_DATABASE_URL: postgresql://alphonse_tokenization:local-tokenization-only@postgres:5432/alphonse_diagnostic
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
+      KERNEL_GRANT_SNAPSHOT_SIGNING_KEY_ID: local-kernel-grant-snapshot-key-v1
+      KERNEL_GRANT_SNAPSHOT_SIGNING_SECRET: local-kernel-grant-snapshot-secret-with-sufficient-length-v1
+      TOKENIZATION_GRANT_APPLICATION_SIGNING_KEY_ID: local-tokenization-grant-application-key-v1
+      TOKENIZATION_GRANT_APPLICATION_SIGNING_SECRET: local-tokenization-grant-application-secret-with-sufficient-length-v1
+      GRANT_AUTHORITY_FEED_TOKEN: local-grant-authority-feed-token
+      TOKENIZATION_SERVICE_SIGNING_KEY_ID: local-tokenization-service-ed25519-v1
+      TOKENIZATION_SERVICE_PRIVATE_KEY_DER_BASE64: MC4CAQAwBQYDK2VwBCIEID6S6GMVo8K+m7qRAsy60widyVhn9uoh7GmOj3QsHfhR
+      TOKENIZATION_ROOT_SECRET: local-tokenization-domain-root-secret-with-sufficient-length-v1
+      TOKENIZATION_REQUESTER_TOKENS: '{"observer:webhook-ingress":"local-webhook-tokenization-requester-token","observer:crm-request":"local-crm-tokenization-requester-token"}'
+      DIAGNOSTIC_TOKENIZATION_RESULT_URL: http://kernel:3000/diagnostic/internal/v0/tokenization-result-receipts
+      DIAGNOSTIC_TOKENIZATION_RESULT_TOKEN: local-tokenization-result-submission-token
+    ports:
+      - "127.0.0.1:${TOKENIZATION_PORT:-3500}:3500"
+    depends_on:
+      kernel:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3500/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
       interval: 2s
       timeout: 3s
       retries: 20
@@ -119,6 +165,12 @@ services:
       DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
       DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
       KERNEL_SUPPORT_DIAGNOSTIC_SECRET: local-support-diagnostic-encryption-secret-v1
+      KERNEL_GRANT_SNAPSHOT_SIGNING_KEY_ID: local-kernel-grant-snapshot-key-v1
+      KERNEL_GRANT_SNAPSHOT_SIGNING_SECRET: local-kernel-grant-snapshot-secret-with-sufficient-length-v1
+      DIAGNOSTIC_GRANT_APPLICATION_SIGNING_KEY_ID: local-diagnostic-grant-application-key-v1
+      DIAGNOSTIC_GRANT_APPLICATION_SIGNING_SECRET: local-diagnostic-grant-application-secret-with-sufficient-length-v1
+      GRANT_AUTHORITY_FEED_TOKEN: local-grant-authority-feed-token
+      GRANT_APPLICATION_RECEIPT_SERVICE_TOKEN: local-grant-application-receipt-token
       DATA_PLANE_ID: reference-data-plane
     ports:
       - "127.0.0.1:${KERNEL_PRODUCTION_PORT:-3001}:3000"
@@ -357,6 +409,12 @@ services:
       DATA_PLANE_SERVICE_TOKEN: local-data-plane-service-token
       DATA_PLANE_RECEIPT_SECRET: local-data-plane-receipt-secret
       KERNEL_SUPPORT_DIAGNOSTIC_SECRET: local-support-diagnostic-encryption-secret-v1
+      KERNEL_GRANT_SNAPSHOT_SIGNING_KEY_ID: local-kernel-grant-snapshot-key-v1
+      KERNEL_GRANT_SNAPSHOT_SIGNING_SECRET: local-kernel-grant-snapshot-secret-with-sufficient-length-v1
+      DIAGNOSTIC_GRANT_APPLICATION_SIGNING_KEY_ID: local-diagnostic-grant-application-key-v1
+      DIAGNOSTIC_GRANT_APPLICATION_SIGNING_SECRET: local-diagnostic-grant-application-secret-with-sufficient-length-v1
+      GRANT_AUTHORITY_FEED_TOKEN: local-grant-authority-feed-token
+      GRANT_APPLICATION_RECEIPT_SERVICE_TOKEN: local-grant-application-receipt-token
       DATA_PLANE_ID: reference-data-plane
       KERNEL_BUILD: 0.1.0
       COORDINATOR_ENROLLMENT_TOKEN: local-development-enrollment-only
