@@ -29,6 +29,8 @@ export function createLegacyRuntimeCompatibility(config, receiveObservation) {
       legacy_authentication_key_id: verified.authentication.key_id,
       legacy_authentication_signed_at: verified.authentication.signed_at,
       legacy_authentication_signature_digest: sha256Digest(verified.authentication.signature),
+      legacy_envelope_bytes: JSON.stringify(verified.envelope),
+      legacy_authentication_bytes: JSON.stringify(verified.authentication),
       ...translator
     };
     if (source.payload.digest) claims.payload_digest = source.payload.digest;

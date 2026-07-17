@@ -47,3 +47,9 @@ REVOKE ALL ON crm_gateway_state,crm_gateway_requests,mock_crm_commits FROM PUBLI
 GRANT SELECT,INSERT,UPDATE ON crm_gateway_state,crm_gateway_requests TO alphonse_crm_gateway;
 GRANT SELECT,INSERT ON mock_crm_commits TO alphonse_mock_crm;
 GRANT USAGE,SELECT ON SEQUENCE mock_crm_commits_ledger_sequence_seq TO alphonse_mock_crm;
+
+GRANT USAGE,CREATE ON SCHEMA public TO alphonse_crm_gateway,alphonse_mock_crm;
+ALTER TABLE crm_gateway_state OWNER TO alphonse_crm_gateway;
+ALTER TABLE crm_gateway_requests OWNER TO alphonse_crm_gateway;
+ALTER TABLE mock_crm_commits OWNER TO alphonse_mock_crm;
+REVOKE CREATE ON SCHEMA public FROM alphonse_crm_gateway,alphonse_mock_crm;

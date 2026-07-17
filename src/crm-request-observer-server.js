@@ -54,9 +54,9 @@ async function acceptAndForward(request, lead) {
   if (!/^[0-9a-f-]{36}$/i.test(forwardingId) || !logicalOperationId || !deliveryId || !idempotencyKey) {
     throw new Error("CRM_REQUEST_CONTEXT_INVALID");
   }
+  const currentToken = await tokenize(idempotencyKey);
   let row = (await pool.query("SELECT * FROM crm_gateway_requests WHERE forwarding_id=$1", [forwardingId])).rows[0];
   if (!row) {
-    const token = await tokenize(idempotencyKey);
     const encrypted = createEncryptedIngressPayload(lead, config.payloadSecret);
     const client = await pool.connect();
     try {
@@ -71,8 +71,8 @@ async function acceptAndForward(request, lead) {
              idempotency_key_equality_token,token_result_receipt_id,payload_digest,payload_algorithm,payload_nonce,
              payload_ciphertext,payload_authentication_tag,received_at,forwarding_state,reporting_state,observation_id)
            VALUES ($1,$2,$3,$4,$5,'create_lead',$6,$7,$8,$9,$10,$11,$12,now(),'pending','pending',$13) RETURNING *`,
-          [randomUUID(), forwardingId, sequence, logicalOperationId, deliveryId, token.equality_token,
-            token.result_receipt_id, encrypted.payload_digest, encrypted.algorithm, Buffer.from(encrypted.nonce, "base64"),
+          [randomUUID(), forwardingId, sequence, logicalOperationId, deliveryId, currentToken.equality_token,
+            currentToken.result_receipt_id, encrypted.payload_digest, encrypted.algorithm, Buffer.from(encrypted.nonce, "base64"),
             Buffer.from(encrypted.ciphertext, "base64"), Buffer.from(encrypted.authentication_tag, "base64"),
             randomUUID()]
         )).rows[0];
@@ -80,6 +80,10 @@ async function acceptAndForward(request, lead) {
       }
       await client.query("COMMIT");
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+  if (row.logical_operation_id !== logicalOperationId || row.delivery_id !== deliveryId
+      || !same(row.idempotency_key_equality_token, currentToken.equality_token)) {
+    throw new Error("CRM_REQUEST_REPLAY_MATERIAL_CONFLICT");
   }
   if (row.forwarding_state === "succeeded") return { status: row.transport_status, replayed: true };
   const crm = await fetch(`${config.crmUrl}/v0/leads`, { method: "POST", headers: {
@@ -142,6 +146,9 @@ const server = http.createServer(async (request, response) => {
       return send(response, 202, await acceptAndForward(request, await readJson(request)));
     }
     return send(response, 404, { error: "not_found" });
-  } catch (error) { return send(response, 500, { error: error.message }); }
+  } catch (error) {
+    return send(response, error.message === "CRM_REQUEST_REPLAY_MATERIAL_CONFLICT" ? 409 : 500,
+      { error: error.message });
+  }
 });
 server.listen(config.port, "0.0.0.0");

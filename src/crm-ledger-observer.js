@@ -25,6 +25,7 @@ async function poll() {
   if (!response.ok) throw new Error(`LEDGER_HTTP_${response.status}`);
   const { commits } = await response.json();
   for (const commit of commits) {
+    const capturedAt = new Date().toISOString();
     const claims = createCrmEffectObservationClaims(commit);
     const envelope = { schema_version: "0.1.0", observation_id: deterministicUuid({
       namespace: "observation:crm-ledger", stream_id: config.streamId, commit_id: commit.commit_id
@@ -34,7 +35,7 @@ async function poll() {
       environment_id: config.environmentId, adapter_binding: JSON.parse(config.adapter), stream_id: config.streamId,
       sequence: String(commit.ledger_sequence), workflow_id: "workflow:agency-lab:lead-ingestion",
       integration_id: "integration:mock-crm", occurred_at: new Date(commit.committed_at).toISOString(),
-      observed_at: new Date(commit.committed_at).toISOString(), claims, limitations: ["authenticated_external_commit_feed_claim"],
+      observed_at: capturedAt, claims, limitations: ["authenticated_external_commit_feed_claim"],
       redaction: { policy_id: "redaction:crm-ledger-claims", policy_digest: `sha256:${"9".repeat(64)}` },
       detail: null, provenance_dependencies: [] };
     const signed = createSignedObservation(envelope, { keyId: config.keyId, secret: config.secret });

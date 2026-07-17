@@ -155,12 +155,31 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       observation: { observation_type: "runtime.execution", allowed_detail_media_types: [],
         required_correlation_roles: ["logical_operation", "delivery"] } }
   };
+  const runtimeAttestationFailureSchema = {
+    kind: "schema", export_id: "observation:runtime.attestation-failure", contract_version: "0.1.0",
+    content: { type: "object", additionalProperties: false,
+      required: ["execution_id", "attestation_status", "expected_normalized_workflow_digest",
+        "observed_normalized_workflow_digest", "expected_provider_workflow_version_id",
+        "observed_provider_workflow_version_id", "binding_digest", "expected_identity_updated"],
+      properties: {
+        execution_id: { type: "string", minLength: 1, maxLength: 200 },
+        attestation_status: { type: "string", enum: ["revision_mismatch"] },
+        expected_normalized_workflow_digest: { type: "string", minLength: 1, maxLength: 200 },
+        observed_normalized_workflow_digest: { type: "string", minLength: 1, maxLength: 200 },
+        expected_provider_workflow_version_id: { type: "string", minLength: 1, maxLength: 200 },
+        observed_provider_workflow_version_id: { type: "string", minLength: 1, maxLength: 200 },
+        binding_digest: { type: "string", minLength: 1, maxLength: 200 },
+        expected_identity_updated: { type: "boolean" }
+      }, observation: { observation_type: "runtime.attestation_failure", allowed_detail_media_types: [],
+        required_correlation_roles: ["execution"] } }
+  };
   const legacyRuntimeExecutionSchema = {
     kind: "schema", export_id: "observation:runtime.execution-legacy-compatibility", contract_version: "0.1.0",
     content: { type: "object", additionalProperties: false,
       required: ["external_execution_id", "event_id", "event_sequence", "lifecycle", "logical_operation_id",
         "revision_id", "payload_reference_present", "legacy_envelope_digest", "legacy_authentication_key_id",
-        "legacy_authentication_signed_at", "legacy_authentication_signature_digest", "translator_id",
+        "legacy_authentication_signed_at", "legacy_authentication_signature_digest", "legacy_envelope_bytes",
+        "legacy_authentication_bytes", "translator_id",
         "translator_version", "translator_artifact_digest", "translator_rules_digest"],
       properties: {
         external_execution_id: { type: "string", minLength: 1, maxLength: 200 },
@@ -175,6 +194,8 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
         legacy_authentication_key_id: { type: "string", minLength: 1, maxLength: 160 },
         legacy_authentication_signed_at: { type: "string", minLength: 1, maxLength: 40 },
         legacy_authentication_signature_digest: { type: "string", minLength: 71, maxLength: 71 },
+        legacy_envelope_bytes: { type: "string", minLength: 2, maxLength: 16384 },
+        legacy_authentication_bytes: { type: "string", minLength: 2, maxLength: 2048 },
         translator_id: { type: "string", enum: ["alphonse.legacy_runtime.canonical"] },
         translator_version: { type: "string", enum: ["0.1.0"] },
         translator_artifact_digest: { type: "string", minLength: 71, maxLength: 71 },
@@ -228,6 +249,7 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       tokenizedSourceDeliverySchema,
       ingressSourceDeliverySchema,
       runtimeExecutionSchema,
+      runtimeAttestationFailureSchema,
       legacyRuntimeExecutionSchema,
       destinationRequestSchema,
       destinationEffectSchema,
@@ -361,6 +383,7 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
     tokenized_schema_export: tokenizedSourceDeliverySchema,
     ingress_schema_export: ingressSourceDeliverySchema,
     runtime_schema_export: runtimeExecutionSchema,
+    runtime_attestation_failure_schema_export: runtimeAttestationFailureSchema,
     legacy_runtime_schema_export: legacyRuntimeExecutionSchema,
     destination_request_schema_export: destinationRequestSchema,
     destination_effect_schema_export: destinationEffectSchema

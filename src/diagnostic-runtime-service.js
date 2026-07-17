@@ -48,6 +48,47 @@ function eventView(row) {
   };
 }
 
+function canonicalCompatibilityEventView(row) {
+  const claims = row.canonical_envelope.claims;
+  const source = JSON.parse(claims.legacy_envelope_bytes);
+  const authentication = JSON.parse(claims.legacy_authentication_bytes);
+  return {
+    receipt_id: row.receipt_id,
+    event_id: source.event_id,
+    event_sequence: String(source.event_sequence),
+    lifecycle_claim: source.lifecycle_claim,
+    correlation_id: source.correlation_id,
+    occurred_at: source.occurred_at,
+    received_at: new Date(row.canonical_received_at).toISOString(),
+    delivery_delay_ms: String(Math.max(0,
+      Date.parse(row.canonical_received_at) - Date.parse(source.occurred_at))),
+    out_of_order: false,
+    payload: source.payload,
+    envelope_digest: claims.legacy_envelope_digest,
+    authentication,
+    compatibility: {
+      canonical_observation_receipt_id: row.canonical_observation_receipt_id,
+      canonical_observation_receipt_digest: row.canonical_receipt_digest,
+      translator_id: claims.translator_id,
+      translator_version: claims.translator_version,
+      translator_artifact_digest: claims.translator_artifact_digest,
+      translator_rules_digest: claims.translator_rules_digest,
+      fact_source: "canonical_observation_receipt"
+    }
+  };
+}
+
+function recomputeArrivalOrder(events) {
+  let highest = -1n;
+  for (const event of [...events].sort((left, right) =>
+    String(left.received_at).localeCompare(String(right.received_at)))) {
+    const sequence = BigInt(event.event_sequence);
+    event.out_of_order = sequence < highest;
+    if (sequence > highest) highest = sequence;
+  }
+  return events;
+}
+
 export function projectExternalActivityTrace(events) {
   const ordered = [...events].sort((left, right) => {
     const sequence = BigInt(left.event_sequence) - BigInt(right.event_sequence);
@@ -133,12 +174,17 @@ export function createDiagnosticRuntimeService(database, installationId, adapter
       throw new KernelError(404, "EXTERNAL_ACTIVITY_TRACE_NOT_FOUND", "External Activity Trace does not exist.");
     }
     const eventResult = await client.query(
-      `SELECT * FROM diagnostic_runtime_event_receipts
-       WHERE installation_id=$1 AND trace_id=$2 ORDER BY event_sequence,received_at,receipt_id`,
+      `SELECT l.*,c.envelope AS canonical_envelope,c.received_at AS canonical_received_at,
+              c.receipt_digest AS canonical_receipt_digest
+       FROM diagnostic_runtime_event_receipts l
+       LEFT JOIN diagnostic_observation_receipts c
+         ON c.installation_id=l.installation_id AND c.receipt_id=l.canonical_observation_receipt_id
+       WHERE l.installation_id=$1 AND l.trace_id=$2 ORDER BY l.event_sequence,l.received_at,l.receipt_id`,
       [installationId, traceId]
     );
     const trace = traceResult.rows[0];
-    const events = eventResult.rows.map(eventView);
+    const events = recomputeArrivalOrder(eventResult.rows.map((row) => row.canonical_envelope
+      ? canonicalCompatibilityEventView(row) : eventView(row)));
     return {
       trace_id: trace.trace_id,
       workflow_id: trace.workflow_id,

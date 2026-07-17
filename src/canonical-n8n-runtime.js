@@ -17,6 +17,12 @@ function metadataDigest(metadata) {
   object(metadata, "n8n node metadata");
   if (metadata.schema_version !== "alphonse.n8n_node_metadata.v0.1"
       || typeof metadata.runtime_version !== "string") throw new Error("n8n node metadata is unsupported");
+  const provenance = object(metadata.provenance, "n8n node metadata provenance");
+  if (!DIGEST.test(provenance.runtime_image_digest ?? "")
+      || !DIGEST.test(provenance.extractor_artifact_digest ?? "")
+      || !String(provenance.runtime_image_reference ?? "").endsWith(provenance.runtime_image_digest)) {
+    throw new Error("n8n node metadata provenance is invalid");
+  }
   return sha256Digest(metadata);
 }
 
@@ -73,32 +79,57 @@ export function normalizeN8nPublishedWorkflow(value, metadata) {
 }
 
 export function createN8nReadinessBinding({ workflow, metadata, revision_id: revisionId,
-  workflow_id: workflowId, runtime_image_digest: runtimeImageDigest, scopes,
-  successful_execution_retention: successfulExecutionRetention, dependencies = [] }) {
+  workflow_id: workflowId, revision_material: revisionMaterial, execution_probe: executionProbe,
+  runtime_identity: runtimeIdentity, dependencies = [] }) {
   if (workflow.active !== true) throw new Error("exact published workflow must be active before readiness");
   if (!UUID.test(revisionId ?? "")) throw new Error("exact Agent Revision ID is required");
   text(workflowId, "Alphonse workflow id");
-  if (!DIGEST.test(runtimeImageDigest ?? "")) throw new Error("pinned runtime image digest is required");
-  if (!Array.isArray(scopes) || !scopes.includes("workflow:read") || !scopes.includes("execution:read")) {
-    throw new Error("readiness requires workflow:read and execution:read scopes");
+  object(revisionMaterial, "registered Agent Revision material");
+  if (revisionMaterial.workflow_id !== workflowId) throw new Error("registered Agent Revision workflow mismatch");
+  const identity = object(runtimeIdentity, "live runtime identity");
+  if (identity.source !== "docker_inspect_config_image"
+      || !DIGEST.test(identity.image_digest ?? "")
+      || !String(identity.image_reference ?? "").endsWith(identity.image_digest)
+      || identity.runtime_version !== metadata.runtime_version) {
+    throw new Error("live runtime image identity is invalid");
   }
-  if (successfulExecutionRetention !== true) throw new Error("successful execution retention is required");
+  if (identity.image_digest !== metadata.provenance.runtime_image_digest
+      || revisionMaterial.runtime?.image_digest !== identity.image_digest
+      || revisionMaterial.runtime?.runtime_version !== metadata.runtime_version) {
+    throw new Error("runtime image, metadata, and registered Agent Revision do not match");
+  }
+  const probe = object(executionProbe, "retained execution probe");
+  if (probe.status !== "success" || !probe.stoppedAt || !probe.data?.resultData?.runData) {
+    throw new Error("successful retained execution detail probe is required");
+  }
   const normalized = normalizeN8nPublishedWorkflow(workflow, metadata);
+  const revisionWorkflow = object(revisionMaterial.workflow_content?.primary_workflow,
+    "registered Agent Revision primary workflow");
+  const normalizedRevision = normalizeN8nPublishedWorkflow({ ...revisionWorkflow,
+    id: workflow.id, versionId: workflow.versionId, active: true }, metadata);
+  if (normalizedRevision.normalized_workflow_digest !== normalized.normalized_workflow_digest) {
+    throw new Error("published workflow does not match registered Agent Revision material");
+  }
   const binding = {
     schema_version: "alphonse.n8n_runtime_binding.v0.1",
     workflow_id: workflowId, revision_id: revisionId,
     provider_workflow_id: normalized.provider_workflow_id,
     provider_workflow_version_id: normalized.provider_workflow_version_id,
     normalized_workflow_digest: normalized.normalized_workflow_digest,
-    runtime_image_digest: runtimeImageDigest,
+    runtime_image_digest: identity.image_digest,
+    runtime_identity_digest: sha256Digest(identity),
     runtime_version: metadata.runtime_version,
     node_metadata_digest: normalized.node_metadata_digest,
+    revision_material_digest: sha256Digest(revisionMaterial),
+    execution_probe_digest: sha256Digest({ id: String(probe.id), workflowId: String(probe.workflowId),
+      status: probe.status, stoppedAt: probe.stoppedAt, resultData: probe.data.resultData }),
     normalizer_artifact_digest: sha256Digest({ module: "canonical-n8n-runtime", version: "0.1.0" }),
     normalizer_rules_digest: sha256Digest({ schema: metadata.schema_version,
       ignored_node_fields: metadata.ui_only_node_fields, fail_closed_unknown_fields: true }),
     dependency_digests: dependencies.map((item) => text(item, "dependency digest")).sort(),
-    readiness: { published_workflow_read: true, execution_read: true, include_data_required: true,
-      successful_execution_retention: true, scopes: [...scopes].sort() }
+    readiness: { published_workflow_read: true, execution_detail_read: true, include_data_verified: true,
+      successful_execution_retention_verified: true, live_runtime_identity_verified: true,
+      node_metadata_provenance_verified: true, registered_revision_material_verified: true }
   };
   return { ...binding, binding_digest: sha256Digest(binding) };
 }

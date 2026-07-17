@@ -35,6 +35,8 @@ test("legacy translation preserves signed claims and exposes unavailable attesta
   assert.equal(translated.envelope.claims.external_execution_id, "execution-9");
   assert.equal(translated.envelope.claims.legacy_envelope_digest, verified.envelope_digest);
   assert.equal(translated.envelope.claims.payload_reference_present, true);
+  assert.deepEqual(JSON.parse(translated.envelope.claims.legacy_envelope_bytes), verified.envelope);
+  assert.deepEqual(JSON.parse(translated.envelope.claims.legacy_authentication_bytes), verified.authentication);
   assert.equal("payload_digest" in translated.envelope.claims, false);
   assert.equal("provider_workflow_version_id" in translated.envelope.claims, false);
   assert.equal("normalized_workflow_digest" in translated.envelope.claims, false);

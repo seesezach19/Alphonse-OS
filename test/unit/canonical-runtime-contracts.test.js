@@ -20,6 +20,33 @@ function workflow() {
   };
 }
 
+function revisionMaterial(value = workflow()) {
+  return {
+    workflow_id: "workflow:lead",
+    workflow_content: { primary_workflow: value, dependencies: [] },
+    runtime: { runtime_id: "n8n", runtime_version: metadata.runtime_version,
+      image_digest: metadata.provenance.runtime_image_digest },
+    nodes: [], model: {}, configuration: {}, adapter: {}
+  };
+}
+
+function executionProbe() {
+  return { id: "3", workflowId: "ReadinessProbe01", status: "success",
+    stoppedAt: "2026-07-16T11:59:59.000Z",
+    data: { workflowData: { id: "ReadinessProbe01", nodes: [{}] }, resultData: { runData: { Probe: [{}] } } } };
+}
+
+function runtimeIdentity() {
+  return { source: "docker_inspect_config_image",
+    image_reference: metadata.provenance.runtime_image_reference,
+    image_digest: metadata.provenance.runtime_image_digest, runtime_version: metadata.runtime_version };
+}
+
+function readinessInput(value = workflow()) {
+  return { workflow: value, metadata, revision_id: crypto.randomUUID(), workflow_id: "workflow:lead",
+    revision_material: revisionMaterial(value), execution_probe: executionProbe(), runtime_identity: runtimeIdentity() };
+}
+
 test("published workflow normalization is metadata-driven and ignores UI placement", () => {
   const first = normalizeN8nPublishedWorkflow(workflow(), metadata);
   const moved = workflow();
@@ -29,25 +56,24 @@ test("published workflow normalization is metadata-driven and ignores UI placeme
   assert.equal(first.provider_workflow_version_id, "provider-version-1");
 });
 
-test("readiness fails closed for unknown nodes, drafts, missing retention, or insufficient scopes", () => {
-  assert.throws(() => createN8nReadinessBinding({ workflow: { ...workflow(), active: false }, metadata,
-    revision_id: crypto.randomUUID(), workflow_id: "workflow:lead", runtime_image_digest: `sha256:${"1".repeat(64)}`,
-    scopes: ["workflow:read", "execution:read"], successful_execution_retention: true }), /published/);
+test("readiness fails closed for drafts, unproved retention, runtime drift, or revision drift", () => {
+  assert.throws(() => createN8nReadinessBinding(readinessInput({ ...workflow(), active: false })), /published/);
   const unknown = workflow();
   unknown.nodes[0].type = "community.unknown";
   assert.throws(() => normalizeN8nPublishedWorkflow(unknown, metadata), /unsupported node semantics/);
-  assert.throws(() => createN8nReadinessBinding({ workflow: workflow(), metadata,
-    revision_id: crypto.randomUUID(), workflow_id: "workflow:lead", runtime_image_digest: `sha256:${"1".repeat(64)}`,
-    scopes: ["workflow:read"], successful_execution_retention: true }), /execution:read/);
-  assert.throws(() => createN8nReadinessBinding({ workflow: workflow(), metadata,
-    revision_id: crypto.randomUUID(), workflow_id: "workflow:lead", runtime_image_digest: `sha256:${"1".repeat(64)}`,
-    scopes: ["workflow:read", "execution:read"], successful_execution_retention: false }), /retention/);
+  assert.throws(() => createN8nReadinessBinding({ ...readinessInput(), execution_probe: { status: "success" } }),
+    /retained execution detail probe/);
+  assert.throws(() => createN8nReadinessBinding({ ...readinessInput(), runtime_identity: {
+    ...runtimeIdentity(), image_reference: `n8nio/n8n@sha256:${"1".repeat(64)}`,
+    image_digest: `sha256:${"1".repeat(64)}` } }), /do not match/);
+  const changedRevision = revisionMaterial();
+  changedRevision.workflow_content.primary_workflow.nodes[0].parameters.path = "other";
+  assert.throws(() => createN8nReadinessBinding({ ...readinessInput(), revision_material: changedRevision }),
+    /does not match registered Agent Revision/);
 });
 
 test("execution observation may confirm or contradict but never replace expected identity", () => {
-  const binding = createN8nReadinessBinding({ workflow: workflow(), metadata,
-    revision_id: crypto.randomUUID(), workflow_id: "workflow:lead", runtime_image_digest: `sha256:${"1".repeat(64)}`,
-    scopes: ["workflow:read", "execution:read"], successful_execution_retention: true });
+  const binding = createN8nReadinessBinding(readinessInput());
   const execution = { id: "7", workflowId: workflow().id, workflowVersionId: "provider-version-1", status: "success",
     startedAt: "2026-07-16T12:00:00.000Z", stoppedAt: "2026-07-16T12:00:01.000Z",
     data: { workflowData: workflow(), resultData: { runData: { Receive: [{ data: { main: [[{ json: {

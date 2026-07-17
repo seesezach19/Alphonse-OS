@@ -1,0 +1,37 @@
+{
+  "id": "CanonicalReadinessProbe01",
+  "name": "Canonical Readiness Probe",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "id": "canonical-readiness-webhook",
+      "name": "Readiness Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "canonical-readiness-probe",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "canonical-readiness-probe",
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "canonical-readiness-result",
+      "name": "Return Execution Identity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 0],
+      "parameters": {
+        "jsCode": "return [{ json: { execution_id: $execution.id, retained_probe: true } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Readiness Webhook": {
+      "main": [[{ "node": "Return Execution Identity", "type": "main", "index": 0 }]]
+    }
+  }
+}

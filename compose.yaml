@@ -281,6 +281,7 @@ services:
     command: ["node", "src/mock-crm-db-bootstrap.js"]
     environment:
       ADMIN_DATABASE_URL: postgresql://alphonse:local-development-only@postgres:5432/alphonse_kernel
+      MOCK_CRM_MIGRATION_DATABASE_PASSWORD: local-mock-crm-migration-only
       MOCK_CRM_DATABASE_PASSWORD: local-mock-crm-only
       CRM_GATEWAY_DATABASE_PASSWORD: local-crm-gateway-only
     depends_on:
@@ -291,7 +292,7 @@ services:
     build: { context: . }
     command: ["node", "src/mock-crm-migrate.js"]
     environment:
-      MOCK_CRM_DATABASE_URL: postgresql://alphonse_mock_crm:local-mock-crm-only@postgres:5432/alphonse_mock_crm
+      MOCK_CRM_DATABASE_URL: postgresql://alphonse_mock_crm_migrator:local-mock-crm-migration-only@postgres:5432/alphonse_mock_crm
     depends_on:
       mock-crm-bootstrap: { condition: service_completed_successfully }
 
@@ -377,11 +378,13 @@ services:
       N8N_PROVIDER_WORKFLOW_ID: CanonicalLeadIngress01
       ALPHONSE_WORKFLOW_ID: workflow:agency-lab:lead-ingestion
       ALPHONSE_REVISION_ID: ${CANONICAL_AGENT_REVISION_ID}
-      N8N_RUNTIME_IMAGE_DIGEST: sha256:761374d4eb841b0a22771d6bd68f0e8d827b4979ae4e490045517b13fc1259dd
+      ALPHONSE_REPORTING_GRANT_ID: ${N8N_REPORTING_GRANT_ID}
+      KERNEL_API_URL: http://kernel:3000
+      KERNEL_READ_TOKEN: ${KERNEL_OWNER_TOKEN:-local-development-bootstrap-token}
+      N8N_READINESS_EXECUTION_ID: ${N8N_READINESS_EXECUTION_ID}
+      N8N_RUNTIME_IDENTITY: ${N8N_RUNTIME_IDENTITY}
       N8N_NODE_METADATA_PATH: /node-metadata/n8n-2.25.7.json
       N8N_BINDING_PATH: /var/lib/alphonse-n8n-binding/binding.json
-      N8N_READ_ONLY_SCOPES: workflow:read,execution:read
-      N8N_SUCCESS_EXECUTION_RETENTION: "true"
     volumes:
       - ./packages/n8n-operational-package/node-metadata:/node-metadata:ro
       - n8n-runtime-binding:/var/lib/alphonse-n8n-binding
@@ -402,6 +405,7 @@ services:
       N8N_OBSERVER_STATE_PATH: /var/lib/alphonse-n8n-observer/state.json
       N8N_DIAGNOSTIC_URL: http://kernel:3000/diagnostic/v0/observations
       N8N_OBSERVATION_SCHEMA: ${N8N_OBSERVATION_SCHEMA}
+      N8N_ATTESTATION_FAILURE_SCHEMA: ${N8N_ATTESTATION_FAILURE_SCHEMA}
       N8N_OBSERVATION_ADAPTER_BINDING: ${N8N_OBSERVATION_ADAPTER_BINDING}
       N8N_OBSERVER_PRINCIPAL_ID: observer:n8n-runtime
       N8N_OBSERVATION_GRANT_ID: ${N8N_OBSERVATION_GRANT_ID}

@@ -92,13 +92,30 @@ export function createGrantAuthorityService(database, installationId, environmen
       installationId, environmentId, command, requestDigest: commandDigest(command),
       apply: async (client, { acceptedAt }) => {
         const state = await client.query(
-          `SELECT desired_state FROM kernel_authority_grant_states
-           WHERE installation_id=$1 AND environment_id=$2 AND grant_id=$3 FOR UPDATE`,
+          `SELECT s.desired_state,g.grant_document FROM kernel_authority_grant_states s
+           JOIN kernel_authority_grants g ON g.installation_id=s.installation_id
+             AND g.environment_id=s.environment_id AND g.grant_id=s.grant_id
+           WHERE s.installation_id=$1 AND s.environment_id=$2 AND s.grant_id=$3 FOR UPDATE OF s`,
           [installationId, environmentId, grantId]
         );
         if (!state.rows[0]) throw new KernelError(404, "AUTHORITY_GRANT_NOT_FOUND", "Authority Grant does not exist.");
         if (state.rows[0].desired_state !== "inactive") {
           throw new KernelError(409, "GRANT_READINESS_STATE_INVALID", "Readiness can be recorded only before desired state publication.");
+        }
+        const requiredBinding = state.rows[0].grant_document?.runtime_binding_digest;
+        if (requiredBinding && readinessReceipt.runtime_binding_digest !== requiredBinding) {
+          throw new KernelError(409, "GRANT_READINESS_BINDING_MISMATCH",
+            "Readiness receipt does not bind the exact required runtime binding digest.");
+        }
+        const requirement = state.rows[0].grant_document?.readiness_requirement;
+        if (requirement?.type === "n8n_runtime_binding"
+            && (readinessReceipt.type !== "n8n_runtime_binding"
+              || readinessReceipt.grant_id !== grantId
+              || readinessReceipt.workflow_id !== requirement.workflow_id
+              || readinessReceipt.revision_id !== requirement.revision_id
+              || !/^sha256:[0-9a-f]{64}$/u.test(readinessReceipt.runtime_binding_digest ?? ""))) {
+          throw new KernelError(409, "GRANT_READINESS_BINDING_MISMATCH",
+            "Readiness receipt does not bind this grant to its exact n8n runtime requirement.");
         }
         await client.query(
           `INSERT INTO kernel_authority_grant_readiness_receipts

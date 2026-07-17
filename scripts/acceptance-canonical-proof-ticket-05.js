@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import pg from "pg";
 
 import { buildN8nRevisionMaterial } from "../packages/n8n-operational-package/src/index.js";
 import { sha256Digest } from "../src/canonical-json.js";
@@ -37,8 +38,19 @@ function run(command, args, options = {}) {
 const compose = (...args) => run("docker", ["compose", "--profile", "canonical-tokenization",
   "--profile", "canonical-ingress", "--profile", "canonical-destination", "--profile", "canonical-runtime", ...args]);
 async function request(base, route, options = {}) {
-  const response = await fetch(`${base}${route}`, { ...options,
-    headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
+  let response;
+  let transportError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      response = await fetch(`${base}${route}`, { ...options,
+        headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
+      break;
+    } catch (error) {
+      transportError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+  }
+  if (!response) throw transportError;
   const text = await response.text();
   let body;
   try { body = JSON.parse(text); } catch { body = { raw: text.slice(0, 500) }; }
@@ -52,15 +64,19 @@ const post = (route, body, headers = ownerHeaders) => request(baseUrl, route,
   { method: "POST", headers, body: JSON.stringify(body) });
 const command = (operationId, input) => ({ command_id: randomUUID(), operation_id: operationId, input });
 
-async function activateGrant({ grantType, receiverServiceId, grantDocument, receiverUrl }) {
-  const grantId = randomUUID();
+async function registerGrant({ grantType, receiverServiceId, grantDocument, grantId = randomUUID() }) {
   const registered = await post("/kernel/v0/grant-authority/grants", command("kernel.authority_grant.register", {
     grant_id: grantId, grant_type: grantType, receiver_service_id: receiverServiceId, grant_document: grantDocument
   }));
   assert.equal(registered.response.status, 201, JSON.stringify(registered.body));
+  return grantId;
+}
+
+async function activateRegisteredGrant({ grantId, receiverServiceId, receiverUrl, readinessReceipt = null }) {
+  const receipt = readinessReceipt ?? { status: "ready", receiver_service_id: receiverServiceId };
   const ready = await post("/kernel/v0/grant-authority/readiness-receipts", command(
     "kernel.authority_grant.readiness.record", { grant_id: grantId, readiness_receipt_id: randomUUID(),
-      readiness_status: "ready", readiness_receipt: { status: "ready", receiver_service_id: receiverServiceId } }
+      readiness_status: "ready", readiness_receipt: receipt }
   ));
   assert.equal(ready.response.status, 201, JSON.stringify(ready.body));
   const publication = await post("/kernel/v0/grant-authority/snapshots", command(
@@ -76,6 +92,11 @@ async function activateGrant({ grantType, receiverServiceId, grantDocument, rece
   }, receiptHeaders);
   assert.equal(effective.response.status, 201, JSON.stringify(effective.body));
   return grantId;
+}
+
+async function activateGrant(options) {
+  const grantId = await registerGrant(options);
+  return activateRegisteredGrant({ ...options, grantId });
 }
 
 async function eventually(check, label, timeout = 30_000) {
@@ -152,6 +173,7 @@ try {
   let extended = null;
   if (through07) {
     const runtimeSchema = await activateSchema(deployment, deployment.runtime_schema_export);
+    const runtimeFailureSchema = await activateSchema(deployment, deployment.runtime_attestation_failure_schema_export);
     const requestSchema = await activateSchema(deployment, deployment.destination_request_schema_export);
     const effectSchema = await activateSchema(deployment, deployment.destination_effect_schema_export);
     const workflowJson = JSON.parse(await readFile(new URL(
@@ -204,7 +226,7 @@ try {
         key_id: "observer-crm-ledger-key-v1",
         limits: { max_envelope_bytes: 16384, max_detail_bytes: 0, max_sequence_advance: 1000 }
       } });
-    extended = { runtimeSchema, requestSchema, effectSchema,
+    extended = { runtimeSchema, runtimeFailureSchema, requestSchema, effectSchema,
       revisionId: revision.body.agent_revision.revision_id, crmTokenGrantId,
       requestAdapter, ledgerAdapter, requestGrantId, ledgerGrantId };
   }
@@ -231,6 +253,9 @@ try {
   compose("run", "--rm", "--no-deps", "canonical-n8n", "import:workflow",
     "--input=/proof-workflows/canonical-lead-ingress.json");
   compose("run", "--rm", "--no-deps", "canonical-n8n", "publish:workflow", "--id=CanonicalLeadIngress01");
+  compose("run", "--rm", "--no-deps", "canonical-n8n", "import:workflow",
+    "--input=/proof-workflows/canonical-readiness-probe.json");
+  compose("run", "--rm", "--no-deps", "canonical-n8n", "publish:workflow", "--id=CanonicalReadinessProbe01");
   compose("up", "--build", "--wait", "canonical-n8n", "customer-ingress-bootstrap",
     "customer-ingress-migrate", "customer-ingress-api", "customer-ingress-forwarder", "customer-ingress-reporter");
 
@@ -247,23 +272,57 @@ try {
       body: JSON.stringify({ label: "Canonical runtime observer", expiresAt: null,
         scopes: ["execution:read", "workflow:read"] }) });
     assert.equal(key.response.status, 200, JSON.stringify(key.body));
+    const runtimeAdapter = { adapter_binding_id: "adapter:n8n-runtime", version: "0.1.0",
+      digest: `sha256:${"c".repeat(64)}` };
+    const runtimeGrantId = randomUUID();
+    await registerGrant({ grantId: runtimeGrantId, grantType: "observation_reporting",
+      receiverServiceId: "diagnostic-plane", grantDocument: {
+        principal_id: "observer:n8n-runtime", installation_id: tokenBase.installation_id,
+        environment_id: tokenBase.environment_id, adapter_binding: runtimeAdapter,
+        allowed_schema_tuples: [extended.runtimeSchema, extended.runtimeFailureSchema],
+        workflow_ids: ["workflow:agency-lab:lead-ingestion"],
+        integration_ids: [], stream_id: "stream:n8n-runtime", ...validity, key_id: "observer-n8n-key-v1",
+        readiness_requirement: { type: "n8n_runtime_binding",
+          workflow_id: "workflow:agency-lab:lead-ingestion", revision_id: extended.revisionId },
+        limits: { max_envelope_bytes: 16384, max_detail_bytes: 0, max_sequence_advance: 1000 }
+      } });
     environment.CANONICAL_N8N_API_KEY = responseData(key.body).rawApiKey;
+    const probe = await eventually(async () => {
+      const result = await n8nRequest("/webhook/canonical-readiness-probe", { method: "POST", body: "{}" });
+      return result.response.status === 200 && responseData(result.body).execution_id ? result : null;
+    }, "retained n8n readiness execution", 60_000);
+    const probeExecutionId = String(responseData(probe.body).execution_id);
+    await eventually(async () => {
+      const result = await n8nRequest(`/api/v1/executions/${encodeURIComponent(probeExecutionId)}?includeData=true`,
+        { headers: { "x-n8n-api-key": environment.CANONICAL_N8N_API_KEY } });
+      const execution = result.body;
+      if (result.response.status === 200 && execution.status === "success" && execution.stoppedAt
+          && execution.data?.resultData?.runData) return execution;
+      return null;
+    }, "retained successful n8n execution detail", 60_000);
+    const containerId = compose("ps", "-q", "canonical-n8n").trim();
+    const imageReference = run("docker", ["inspect", "--format", "{{.Config.Image}}", containerId]).trim();
+    const imageDigest = imageReference.includes("@") ? imageReference.split("@").at(-1) : "";
+    assert.match(imageDigest, /^sha256:[0-9a-f]{64}$/u);
+    const runtimeVersion = run("docker", ["exec", containerId, "n8n", "--version"]).trim();
+    assert.equal(runtimeVersion, "2.25.7");
+    Object.assign(environment, { N8N_READINESS_EXECUTION_ID: probeExecutionId,
+      N8N_RUNTIME_IDENTITY: JSON.stringify({ source: "docker_inspect_config_image",
+        image_reference: imageReference, image_digest: imageDigest, runtime_version: runtimeVersion }),
+      N8N_REPORTING_GRANT_ID: runtimeGrantId });
     compose("run", "--rm", "--no-deps", "canonical-observer-volume-init");
     const readinessOutput = compose("run", "--rm", "--no-deps", "n8n-runtime-readiness");
     assert.match(readinessOutput, /pre_execution_published_workflow_read/);
     assert.match(readinessOutput, /"execution_derived_expected_identity":false/);
-    const runtimeAdapter = { adapter_binding_id: "adapter:n8n-runtime", version: "0.1.0",
-      digest: `sha256:${"c".repeat(64)}` };
-    const runtimeGrantId = await activateGrant({ grantType: "observation_reporting",
-      receiverServiceId: "diagnostic-plane", receiverUrl: baseUrl, grantDocument: {
-        principal_id: "observer:n8n-runtime", installation_id: tokenBase.installation_id,
-        environment_id: tokenBase.environment_id, adapter_binding: runtimeAdapter,
-        allowed_schema_tuples: [extended.runtimeSchema], workflow_ids: ["workflow:agency-lab:lead-ingestion"],
-        integration_ids: [], stream_id: "stream:n8n-runtime", ...validity, key_id: "observer-n8n-key-v1",
-        limits: { max_envelope_bytes: 16384, max_detail_bytes: 0, max_sequence_advance: 1000 }
-      } });
+    const readiness = JSON.parse(readinessOutput.trim().split(/\r?\n/u).at(-1));
+    assert.equal(readiness.reporting_grant_id, runtimeGrantId);
+    await activateRegisteredGrant({ grantId: runtimeGrantId, receiverServiceId: "diagnostic-plane",
+      receiverUrl: baseUrl, readinessReceipt: { type: "n8n_runtime_binding", grant_id: runtimeGrantId,
+        workflow_id: readiness.workflow_id, revision_id: readiness.revision_id,
+        runtime_binding_digest: readiness.binding_digest } });
     Object.assign(environment, { N8N_OBSERVATION_GRANT_ID: runtimeGrantId,
       N8N_OBSERVATION_SCHEMA: JSON.stringify(extended.runtimeSchema),
+      N8N_ATTESTATION_FAILURE_SCHEMA: JSON.stringify(extended.runtimeFailureSchema),
       N8N_OBSERVATION_ADAPTER_BINDING: JSON.stringify(runtimeAdapter) });
     extended.runtimeGrantId = runtimeGrantId;
     compose("up", "--build", "--wait", "mock-crm-bootstrap", "mock-crm-migrate", "mock-crm",
@@ -371,6 +430,32 @@ try {
       assert.equal(receipt.body.observation_receipt.coverage.coverage_status, "complete_through_high_water");
       assert.deepEqual(receipt.body.observation_receipt.coverage.missing_ranges, []);
     }
+    const firstRequest = requests.requests[0];
+    const firstDelivery = recovered.deliveries.find((item) => item.delivery_id === firstRequest.delivery_id);
+    const changedKeyReplay = await request("http://127.0.0.1:43700", "/v0/crm/leads", {
+      method: "POST", headers: { authorization: "Bearer local-n8n-crm-route-token",
+        "x-alphonse-logical-operation-id": firstRequest.logical_operation_id,
+        "x-alphonse-delivery-id": firstRequest.delivery_id,
+        "x-alphonse-forwarding-id": firstDelivery.forwarding_id,
+        "x-alphonse-source-delivery-key": "adversarial-changed-idempotency-key" },
+      body: JSON.stringify({ company: "must-not-forward" })
+    });
+    assert.equal(changedKeyReplay.response.status, 409, JSON.stringify(changedKeyReplay.body));
+    assert.equal(changedKeyReplay.body.error, "CRM_REQUEST_REPLAY_MATERIAL_CONFLICT");
+    const runtimeDatabase = new pg.Client({ connectionString:
+      "postgresql://alphonse_mock_crm:local-mock-crm-only@127.0.0.1:45505/alphonse_mock_crm" });
+    await runtimeDatabase.connect();
+    try {
+      const owners = await runtimeDatabase.query(
+        "SELECT tablename,tableowner FROM pg_tables WHERE schemaname='public' AND tablename IN ('crm_gateway_requests','mock_crm_commits') ORDER BY tablename");
+      assert.deepEqual(owners.rows, [
+        { tablename: "crm_gateway_requests", tableowner: "alphonse_crm_gateway" },
+        { tablename: "mock_crm_commits", tableowner: "alphonse_mock_crm" }
+      ]);
+      await assert.rejects(runtimeDatabase.query(
+        "UPDATE crm_gateway_requests SET forwarding_state='retryable_failed' WHERE forwarding_id=$1",
+      [firstDelivery.forwarding_id]), /permission denied/u);
+    } finally { await runtimeDatabase.end(); }
     for (const item of runtime.receipts) {
       const receipt = await kernel(`/diagnostic/v0/observation-receipts/${item.receipt_id}`);
       assert.equal(receipt.body.observation_receipt.principal_id, "observer:n8n-runtime");
@@ -427,7 +512,10 @@ try {
     proven: ["journal_before_forward", "stable_opaque_logical_operation", "distinct_delivery_attempts",
       "independent_forward_and_report_loops", "n8n_context_propagation", "diagnostic_outage_decoupled",
       "tokenization_receipts_cited", "stimulus_has_no_reporting_authority", "accepted_report_replay_recovery",
-      "restart_idempotency", "raw_payload_scrubbed", "visible_backlog_and_loss_state"],
+      "restart_idempotency", "raw_payload_scrubbed", "visible_backlog_and_loss_state",
+      ...(through07 ? ["live_runtime_identity_verified", "retained_execution_detail_verified",
+        "registered_revision_material_verified", "runtime_binding_grant_readiness_bound",
+        "changed_key_replay_failed_closed", "destination_cannot_write_request_journal"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,

@@ -10,6 +10,7 @@ const config = {
   apiKey: process.env.N8N_API_KEY, bindingPath: process.env.N8N_BINDING_PATH,
   metadataPath: process.env.N8N_NODE_METADATA_PATH, statePath: process.env.N8N_OBSERVER_STATE_PATH,
   diagnosticUrl: process.env.N8N_DIAGNOSTIC_URL, schema: process.env.N8N_OBSERVATION_SCHEMA,
+  failureSchema: process.env.N8N_ATTESTATION_FAILURE_SCHEMA,
   adapter: process.env.N8N_OBSERVATION_ADAPTER_BINDING, principalId: process.env.N8N_OBSERVER_PRINCIPAL_ID,
   grantId: process.env.N8N_OBSERVATION_GRANT_ID, keyId: process.env.N8N_OBSERVATION_KEY_ID,
   secret: process.env.N8N_OBSERVATION_SECRET, installationId: process.env.KERNEL_INSTALLATION_ID,
@@ -41,13 +42,37 @@ async function n8n(route) {
   return body.id === undefined ? body.data ?? body : body;
 }
 async function submit(execution, sequence) {
+  const capturedAt = new Date().toISOString();
   const observed = observeBoundN8nExecution(execution, binding, metadata);
   if (observed.status !== "matched") {
-    if (!state.mismatches.some((item) => item.execution_id === String(execution.id))) {
-      state.mismatches.push({ execution_id: String(execution.id), ...observed,
-        detected_at: new Date().toISOString(), expected_identity_updated: false });
-      await persist();
-    }
+    const envelope = {
+      schema_version: "0.1.0", observation_id: deterministicUuid({ namespace: "observation:n8n-attestation-failure",
+        stream_id: config.streamId, execution_id: String(execution.id) }),
+      observation_type: "runtime.attestation_failure", schema: JSON.parse(config.failureSchema),
+      principal_id: config.principalId, grant_id: config.grantId, key_id: config.keyId,
+      installation_id: config.installationId, environment_id: config.environmentId,
+      adapter_binding: JSON.parse(config.adapter), stream_id: config.streamId, sequence: String(sequence),
+      workflow_id: binding.workflow_id, integration_id: null,
+      occurred_at: execution.stoppedAt ?? capturedAt, observed_at: capturedAt,
+      claims: { execution_id: `n8n-${String(execution.id)}`, attestation_status: observed.status,
+        expected_normalized_workflow_digest: observed.expected_normalized_workflow_digest,
+        observed_normalized_workflow_digest: observed.observed_normalized_workflow_digest,
+        expected_provider_workflow_version_id: observed.expected_provider_workflow_version_id,
+        observed_provider_workflow_version_id: observed.observed_provider_workflow_version_id,
+        binding_digest: observed.binding_digest, expected_identity_updated: false },
+      limitations: ["runtime_revision_identity_contradicted"],
+      redaction: { policy_id: "redaction:n8n-attestation-failure-claims",
+        policy_digest: `sha256:${"6".repeat(64)}` }, detail: null, provenance_dependencies: []
+    };
+    const signed = createSignedObservation(envelope, { keyId: config.keyId, secret: config.secret });
+    const response = await fetch(config.diagnosticUrl, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ envelope_bytes: signed.bytes, authentication: signed.authentication }) });
+    const body = await response.json();
+    if (![200, 201].includes(response.status)) throw new Error(JSON.stringify(body.error ?? { code: `HTTP_${response.status}` }));
+    if (!state.mismatches.some((item) => item.execution_id === String(execution.id))) state.mismatches.push({
+      execution_id: String(execution.id), ...observed, detected_at: capturedAt, expected_identity_updated: false,
+      observation_receipt_id: body.observation_receipt.receipt_id });
+    state.next_sequence = sequence + 1;
     state.pending_execution_ids = state.pending_execution_ids.filter((id) => id !== String(execution.id));
     await persist();
     return;
@@ -61,7 +86,7 @@ async function submit(execution, sequence) {
     installation_id: config.installationId, environment_id: config.environmentId,
     adapter_binding: JSON.parse(config.adapter), stream_id: config.streamId, sequence: String(sequence),
     workflow_id: binding.workflow_id, integration_id: null,
-    occurred_at: observed.claims.stopped_at, observed_at: observed.claims.stopped_at,
+    occurred_at: observed.claims.stopped_at, observed_at: capturedAt,
     claims: observed.claims, limitations: [],
     redaction: { policy_id: "redaction:n8n-runtime-claims-only", policy_digest: `sha256:${"7".repeat(64)}` },
     detail: null, provenance_dependencies: []
