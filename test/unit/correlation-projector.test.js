@@ -4,6 +4,7 @@ import test from "node:test";
 import { sha256Digest } from "../../src/canonical-json.js";
 import {
   buildCorrelationProjection,
+  buildCorrelationProjectorInput,
   CORRELATION_PROJECTOR_ARTIFACT_DIGEST,
   CORRELATION_RULES_DIGEST
 } from "../../src/correlation-projector.js";
@@ -98,8 +99,15 @@ function fixture() {
 }
 
 function project(material = fixture(), overrides = {}) {
-  return buildCorrelationProjection({ registration, logicalOperationId: operationId, cutoff: "8",
-    ...material, conflicts: [], rejections: [], ...overrides });
+  return buildCorrelationProjection(buildCorrelationProjectorInput({
+    registration,
+    logicalOperationId: operationId,
+    cutoff: "8",
+    ...material,
+    conflicts: [],
+    rejections: [],
+    ...overrides
+  }));
 }
 
 test("correlation projector creates one inspectable operation with exact typed and tokenized paths", () => {
@@ -122,6 +130,7 @@ test("correlation projector creates one inspectable operation with exact typed a
   assert.equal(result.semantic_projection.dependencies.projector.artifact_digest,
     CORRELATION_PROJECTOR_ARTIFACT_DIGEST);
   assert.equal(result.semantic_projection.dependencies.projector.rules_digest, CORRELATION_RULES_DIGEST);
+  assert.equal(result.semantic_projection.dependencies.projector_input_digest, result.projector_input_digest);
   assert.equal(result.semantic_projection.authority.defect_established, false);
 });
 

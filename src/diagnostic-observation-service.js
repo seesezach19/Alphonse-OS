@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import {
+  buildConflictOutcomeDocument,
+  buildRejectionOutcomeDocument,
+  outcomeDocumentMaterial
+} from "./diagnostic-intake-outcome-contracts.js";
 import { KernelError } from "./errors.js";
 import {
   authorizeObservation,
@@ -129,7 +134,7 @@ export function createDiagnosticObservationService({
     } };
   }
 
-  async function preserveRejection(bytes, envelope, authentication, error, now) {
+  async function preserveRejection(bytes, envelope, authentication, authenticationVerified, parseStatus, error, now) {
     if (!(error instanceof KernelError) || error.status >= 500) return;
     const client = await pool.connect();
     try {
@@ -137,33 +142,45 @@ export function createDiagnosticObservationService({
       const committedAt = new Date(now).toISOString();
       const position = await allocatePosition(client, committedAt);
       const rejectionId = randomUUID();
-      const document = {
-        rejection_id: rejectionId,
-        intake_position: position,
-        authenticated_principal_id: authentication?.principal_id ?? null,
-        authenticated_grant_id: authentication?.grant_id ?? null,
-        claimed_schema: envelope?.schema ?? null,
-        body_digest: rawDigest(bytes),
-        body_size_bytes: bytes.length,
-        reason_code: error.code,
-        received_at: committedAt
-      };
-      const outcomeDigest = sha256Digest(document);
+      const document = buildRejectionOutcomeDocument({
+        rejectionId,
+        installationId,
+        environmentId,
+        intakePosition: position,
+        authenticationVerified,
+        authentication,
+        envelope,
+        parseStatus,
+        bodyDigest: rawDigest(bytes),
+        bodySizeBytes: bytes.length,
+        reasonCode: error.code,
+        receivedAt: committedAt
+      });
+      const material = outcomeDocumentMaterial(document);
+      const schema = document.claimed_schema.status === "valid_tuple" ? document.claimed_schema : null;
       await client.query(
         `INSERT INTO diagnostic_observation_rejections
           (rejection_id,installation_id,intake_position,authenticated_principal_id,authenticated_grant_id,
            claimed_schema_id,claimed_schema_version,claimed_schema_digest,body_digest,body_size_bytes,reason_code,received_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [rejectionId, installationId, position, authentication?.principal_id ?? null,
-          authentication?.grant_id ?? null, envelope?.schema?.schema_id ?? null,
-          envelope?.schema?.schema_version ?? null, envelope?.schema?.schema_digest ?? null,
+        [rejectionId, installationId, position, document.authentication.principal_id,
+          document.authentication.grant_id, schema?.schema_id ?? null,
+          schema?.schema_version ?? null, schema?.schema_digest ?? null,
           document.body_digest, document.body_size_bytes, error.code, committedAt]
       );
       await client.query(
         `INSERT INTO diagnostic_intake_outcomes
           (installation_id,intake_position,outcome_type,outcome_id,outcome_digest,committed_at)
          VALUES ($1,$2,'rejected',$3,$4,$5)`,
-        [installationId, position, rejectionId, outcomeDigest, committedAt]
+        [installationId, position, rejectionId, material.document_digest, committedAt]
+      );
+      await client.query(
+        `INSERT INTO diagnostic_intake_outcome_documents
+          (installation_id,intake_position,outcome_type,outcome_id,document_format,document,
+           canonical_document_bytes,document_digest,material_origin,preserved_at)
+         VALUES ($1,$2,'rejected',$3,$4,$5,$6,$7,'native_v0.2',$8)`,
+        [installationId, position, rejectionId, document.schema_version, document,
+          material.canonical_document_bytes, material.document_digest, committedAt]
       );
       await client.query("COMMIT");
       error.details = { ...error.details, rejection_id: rejectionId, intake_position: position };
@@ -177,14 +194,25 @@ export function createDiagnosticObservationService({
 
   async function receiveObservation({ envelope_bytes: envelopeBytes, authentication, detail_base64: detailBase64 = null },
     now = new Date()) {
-    const rawEnvelopeBytes = Buffer.from(envelopeBytes ?? "", "utf8");
+    const envelopeText = typeof envelopeBytes === "string" ? envelopeBytes : "";
+    const rawEnvelopeBytes = Buffer.from(envelopeText, "utf8");
     let envelope = null;
     let authenticationVerified = false;
+    let parseStatus = rawEnvelopeBytes.length > 1024 * 1024 ? "unparsed_oversize" : "unparsed_invalid_json";
     try {
-      try { envelope = JSON.parse(envelopeBytes); } catch {}
+      if (parseStatus !== "unparsed_oversize") {
+        try {
+          envelope = JSON.parse(envelopeText);
+          parseStatus = "parsed";
+        } catch {}
+      }
+      if (parseStatus === "unparsed_oversize") {
+        throw new KernelError(413, "OBSERVATION_ENVELOPE_TOO_LARGE",
+          "Observation envelope exceeds the transport limit.");
+      }
       const key = observerKeys[authentication?.key_id];
       if (!key) throw new KernelError(401, "OBSERVATION_KEY_UNKNOWN", "Observation key is not configured.");
-      const verified = verifySignedObservation(envelopeBytes, authentication, {
+      const verified = verifySignedObservation(envelopeText, authentication, {
         keyId: authentication.key_id,
         secret: key,
         now,
@@ -294,16 +322,20 @@ export function createDiagnosticObservationService({
             ...(row.grant_id === envelope.grant_id && row.stream_id === envelope.stream_id
               && String(row.stream_sequence) === envelope.sequence ? ["stream_sequence"] : [])
           ]))].sort();
-          const conflictDocument = {
-            intake_position: position,
-            received_observation_id: envelope.observation_id,
-            received_envelope_digest: verified.envelope_digest,
-            conflict_types: conflictTypes,
-            accepted_receipt_ids: candidates.rows.map((row) => row.receipt_id).sort(),
-            detected_at: committedAt
-          };
-          const conflictDigest = sha256Digest(conflictDocument);
           const conflictId = randomUUID();
+          const conflictDocument = buildConflictOutcomeDocument({
+            conflictId,
+            installationId,
+            environmentId,
+            intakePosition: position,
+            envelope,
+            envelopeDigest: verified.envelope_digest,
+            authentication,
+            conflictTypes,
+            acceptedReceiptIds: candidates.rows.map((row) => row.receipt_id).sort(),
+            detectedAt: committedAt
+          });
+          const conflictMaterial = outcomeDocumentMaterial(conflictDocument);
           await client.query(
             `INSERT INTO diagnostic_observation_conflicts
               (conflict_id,installation_id,intake_position,received_observation_id,received_grant_id,
@@ -312,13 +344,21 @@ export function createDiagnosticObservationService({
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
             [conflictId, installationId, position, envelope.observation_id, envelope.grant_id,
               envelope.stream_id, envelope.sequence, verified.envelope_digest, JSON.stringify(conflictTypes),
-              JSON.stringify(conflictDocument.accepted_receipt_ids), committedAt, conflictDigest]
+              JSON.stringify(conflictDocument.accepted_receipt_ids), committedAt, conflictMaterial.document_digest]
           );
           await client.query(
             `INSERT INTO diagnostic_intake_outcomes
               (installation_id,intake_position,outcome_type,outcome_id,outcome_digest,committed_at)
              VALUES ($1,$2,'conflict',$3,$4,$5)`,
-            [installationId, position, conflictId, conflictDigest, committedAt]
+            [installationId, position, conflictId, conflictMaterial.document_digest, committedAt]
+          );
+          await client.query(
+            `INSERT INTO diagnostic_intake_outcome_documents
+              (installation_id,intake_position,outcome_type,outcome_id,document_format,document,
+               canonical_document_bytes,document_digest,material_origin,preserved_at)
+             VALUES ($1,$2,'conflict',$3,$4,$5,$6,$7,'native_v0.2',$8)`,
+            [installationId, position, conflictId, conflictDocument.schema_version, conflictDocument,
+              conflictMaterial.canonical_document_bytes, conflictMaterial.document_digest, committedAt]
           );
           await client.query("COMMIT");
           throw new KernelError(409, "OBSERVATION_IDENTITY_CONFLICT",
@@ -466,8 +506,8 @@ export function createDiagnosticObservationService({
       }
     } catch (error) {
       if (error.code !== "OBSERVATION_IDENTITY_CONFLICT") {
-        await preserveRejection(rawEnvelopeBytes, envelope,
-          authenticationVerified ? authentication : null, error, now);
+        await preserveRejection(rawEnvelopeBytes, envelope, authentication,
+          authenticationVerified, parseStatus, error, now);
       }
       throw error;
     }

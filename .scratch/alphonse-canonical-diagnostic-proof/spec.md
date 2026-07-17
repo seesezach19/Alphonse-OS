@@ -202,6 +202,8 @@ three structured diagnoses to identify the supported scope mismatch without unsu
 108. As a Customer Owner, I want controller exclusion claims limited to a trusted-host model, so that container manifests are not overstated as hostile-host proof.
 109. As an Operations Engineer, I want cumulative retention formulas, so that individually valid intervals cannot produce an invalid total horizon.
 110. As a Platform Maintainer, I want every authoritative ADR referenced by the spec, so that implementation does not miss later corrections.
+111. As a Customer Owner, I want agent judgment compressed into temporal evidence-linked claims without granting
+     authority, so that changing-world intelligence remains useful, inspectable, and honest about uncertainty.
 
 ## Implementation Decisions
 
@@ -232,6 +234,22 @@ three structured diagnoses to identify the supported scope mismatch without unsu
   does not copy observation or evidence bytes.
 - Assignment creation describes available work and grants no execution, model disclosure, credential, or resource
   authority.
+
+### Epistemic And Intelligent Processing Boundary
+
+- Use D0 for closed deterministic computation, D1 for deterministic computation over a frozen retrieved snapshot,
+  A1 for bounded agent interpretation over frozen evidence, and A2 for separately governed open-world investigation.
+  `NOT_ESTABLISHED` is a claim-support outcome, not a processing profile.
+- Preserve one minimal Claim Envelope over existing immutable records rather than creating a second evidence store.
+  It binds a typed proposition, production profile, evidence and prior-claim references, verification results,
+  asserted and effective support, evidence status, temporal scope, limitations, supersession, and authority decision.
+- Agent confidence and sign-off are attributed interpretation metadata. Software alone computes effective assurance
+  and permitted consequence from admissibility, completeness, freshness, source independence, risk, scope, and
+  approvals.
+- Keep event or valid time, observation or retrieval time, system acceptance time, assessment time, and freshness or
+  expiry distinct. New evidence creates immutable superseding revisions rather than rewriting historical evidence.
+- Govern changing-world retrieval through bounded connectors that preserve exact source identity, bytes or digest,
+  retrieval time, and freshness. Diagnostic workers do not gain general network or execution authority.
 
 ### Acceptance Principals
 
@@ -883,4 +901,4 @@ three structured diagnoses to identify the supported scope mismatch without unsu
   bounded, and recoverable.
 - The first implementation artifact is the failing Test 1 black-box harness. Every later implementation slice closes
   one reason that fixed test cannot yet reach an unclaimed assignment.
-- ADRs 0062 through 0105 and the project domain glossary are authoritative for terminology and hard boundaries.
+- ADRs 0062 through 0106 and the project domain glossary are authoritative for terminology and hard boundaries.

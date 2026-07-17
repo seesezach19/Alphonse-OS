@@ -504,8 +504,22 @@ try {
       assert.equal(registration.registration_id, registrationId);
       assert.equal(registration.revision_id, extended.revisionId);
       assert.equal(registration.projector.projector_id, "alphonse.canonical-correlation-projector");
+      assert.equal(registration.projector.projector_version, "0.2.0");
       assert.match(registration.projector.artifact_digest, /^sha256:[0-9a-f]{64}$/u);
       assert.match(registration.projector.rules_digest, /^sha256:[0-9a-f]{64}$/u);
+      assert.equal(registration.projector.input_schema_version,
+        "alphonse.correlation-projector-input.v0.2");
+      assert.equal(registration.projector.projection_schema_version,
+        "alphonse.correlation-projection.v0.2");
+      assert.equal(registration.projector.artifact_manifest.schema_version,
+        "alphonse.correlation-projector-artifact-manifest.v0.2");
+      const projectorFiles = registration.projector.artifact_manifest.module_closure
+        .map((entry) => entry.path);
+      for (const required of ["src/diagnostic-correlation-service.js", "src/correlation-projector.js",
+        "src/correlation-input-integrity.js", "src/diagnostic-intake-outcome-contracts.js",
+        "src/canonical-json.js", "src/observation-contracts.js"]) {
+        assert.ok(projectorFiles.includes(required), required);
+      }
       assert.ok(registration.contract_dependency_digests.includes(deployment.package_artifact_digest));
 
       const diagnostic = new pg.Client({ connectionString:
@@ -537,8 +551,15 @@ try {
       assert.equal(projection.committed_intake_cutoff,
         prefixAfterRestart.body.intake_prefix.committed_through);
       assert.equal(projection.revision_number, "1");
+      assert.equal(projection.projector_input_schema_version,
+        "alphonse.correlation-projector-input.v0.2");
+      assert.match(projection.projector_input_digest, /^sha256:[0-9a-f]{64}$/u);
       assert.match(projection.semantic_digest, /^sha256:[0-9a-f]{64}$/u);
       assert.match(projection.record_digest, /^sha256:[0-9a-f]{64}$/u);
+      assert.equal(projection.semantic_projection.schema_version,
+        "alphonse.correlation-projection.v0.2");
+      assert.equal(projection.semantic_projection.dependencies.projector_input_digest,
+        projection.projector_input_digest);
       assert.equal(projection.semantic_projection.manifests.intake_outcomes.length,
         Number(projection.committed_intake_cutoff));
       assert.equal(projection.semantic_projection.manifests.receipts.length, 8);
@@ -580,6 +601,46 @@ try {
       const read = await kernel(`/diagnostic/v0/correlation-projections/${projection.projection_id}`);
       assert.equal(read.response.status, 200, JSON.stringify(read.body));
       assert.equal(read.body.correlation_projection.record_digest, projection.record_digest);
+
+      const privileged = new pg.Client({ connectionString:
+        "postgresql://alphonse:local-development-only@127.0.0.1:45505/alphonse_diagnostic" });
+      await privileged.connect();
+      try {
+        await privileged.query(
+          "ALTER TABLE diagnostic_correlation_projections DISABLE TRIGGER diagnostic_correlation_projections_immutable"
+        );
+        await privileged.query(
+          "UPDATE diagnostic_correlation_projections SET semantic_projection=$2::jsonb WHERE projection_id=$1",
+          [projection.projection_id, JSON.stringify({ ...projection.semantic_projection, privileged_tamper: true })]
+        );
+        await privileged.query(
+          "ALTER TABLE diagnostic_correlation_projections ENABLE TRIGGER diagnostic_correlation_projections_immutable"
+        );
+        const corruptReplay = await post("/diagnostic/v0/correlation-projections", {
+          registration_id: registrationId,
+          logical_operation_id: recovered.deliveries[0].logical_operation_id
+        });
+        assert.equal(corruptReplay.response.status, 500, JSON.stringify(corruptReplay.body));
+        assert.equal(corruptReplay.body.error.code, "CORRELATION_PROJECTION_INTEGRITY_VIOLATION");
+        const nondeterminismCount = await privileged.query(
+          "SELECT COUNT(*)::text AS count FROM diagnostic_correlation_projection_conflicts WHERE accepted_projection_id=$1",
+          [projection.projection_id]
+        );
+        assert.equal(nondeterminismCount.rows[0].count, "0",
+          "stored corruption must not create a nondeterminism record");
+      } finally {
+        await privileged.query(
+          "ALTER TABLE diagnostic_correlation_projections DISABLE TRIGGER diagnostic_correlation_projections_immutable"
+        ).catch(() => {});
+        await privileged.query(
+          "UPDATE diagnostic_correlation_projections SET semantic_projection=$2::jsonb WHERE projection_id=$1",
+          [projection.projection_id, JSON.stringify(projection.semantic_projection)]
+        ).catch(() => {});
+        await privileged.query(
+          "ALTER TABLE diagnostic_correlation_projections ENABLE TRIGGER diagnostic_correlation_projections_immutable"
+        ).catch(() => {});
+        await privileged.end();
+      }
 
       const immutable = new pg.Client({ connectionString:
         "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
@@ -623,7 +684,9 @@ try {
       ...(through08 ? ["stable_committed_cutoff_lock", "complete_intake_manifest_frozen",
         "exact_projection_dependencies_frozen", "canonical_graph_replay_digest",
         "typed_claim_locations_preserved", "scoped_token_equality_and_inequality",
-        "immutable_projection_record"] : [])],
+        "canonical_envelope_authority_verified", "signed_token_provenance_reverified",
+        "transitive_projector_artifact_frozen", "normalized_projector_input_frozen",
+        "stored_corruption_not_nondeterminism", "immutable_projection_record"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,

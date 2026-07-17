@@ -1,14 +1,16 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import {
+  CORRELATION_PROJECTOR_ARTIFACT_MANIFEST,
+  CORRELATION_PROJECTOR_TRANSITIVE_ARTIFACT_DIGEST
+} from "./correlation-projector-artifact.js";
 import { projectStreamCoverage } from "./observation-contracts.js";
 
 export const CORRELATION_PROJECTOR_ID = "alphonse.canonical-correlation-projector";
-export const CORRELATION_PROJECTOR_VERSION = "0.1.0";
-export const CORRELATION_PROJECTOR_ARTIFACT_DIGEST = `sha256:${createHash("sha256")
-  .update(readFileSync(fileURLToPath(import.meta.url))).digest("hex")}`;
+export const CORRELATION_PROJECTOR_VERSION = "0.2.0";
+export const CORRELATION_PROJECTOR_INPUT_SCHEMA_VERSION = "alphonse.correlation-projector-input.v0.2";
+export const CORRELATION_PROJECTION_SCHEMA_VERSION = "alphonse.correlation-projection.v0.2";
+export const CORRELATION_PROJECTOR_ARTIFACT_DIGEST = CORRELATION_PROJECTOR_TRANSITIVE_ARTIFACT_DIGEST;
+export { CORRELATION_PROJECTOR_ARTIFACT_MANIFEST };
 
 export const CORRELATION_RULES = Object.freeze({
   schema_version: "alphonse.correlation-rules.v0.1",
@@ -166,7 +168,27 @@ function integrationMatches(observation, integrationId) {
     : observation.integration_id === integrationId;
 }
 
-export function buildCorrelationProjection({
+function registrationInput(registration) {
+  return {
+    registration_id: registration.registration_id,
+    registration_digest: registration.registration_digest,
+    installation_id: registration.installation_id,
+    environment_id: registration.environment_id,
+    workflow_id: registration.workflow_id,
+    revision_id: registration.revision_id,
+    integration_id: registration.integration_id,
+    contract_dependency_digests: [...registration.contract_dependency_digests].sort(compareText)
+  };
+}
+
+function canonicalObservations(observations) {
+  return canonicalList(observations.map((observation) => ({
+    ...observation,
+    dependencies: canonicalList(observation.dependencies ?? [])
+  })));
+}
+
+export function buildCorrelationProjectorInput({
   registration,
   logicalOperationId,
   cutoff,
@@ -178,6 +200,36 @@ export function buildCorrelationProjection({
   conflicts = [],
   rejections = []
 }) {
+  return {
+    schema_version: CORRELATION_PROJECTOR_INPUT_SCHEMA_VERSION,
+    registration: registrationInput(registration),
+    logical_operation_id: logicalOperationId,
+    committed_intake_cutoff: String(cutoff),
+    intake_outcomes: canonicalList(intakeOutcomes),
+    receipt_manifest: canonicalList(receiptManifest),
+    schema_manifest: canonicalList(schemaManifest),
+    tokenization_manifest: canonicalList(tokenizationManifest),
+    observations: canonicalObservations(observations),
+    conflicts: canonicalList(conflicts),
+    rejections: canonicalList(rejections)
+  };
+}
+
+export function buildCorrelationProjection(projectorInput) {
+  if (projectorInput?.schema_version !== CORRELATION_PROJECTOR_INPUT_SCHEMA_VERSION) {
+    throw new TypeError(`projectorInput.schema_version must be ${CORRELATION_PROJECTOR_INPUT_SCHEMA_VERSION}.`);
+  }
+  const registration = projectorInput.registration;
+  const logicalOperationId = projectorInput.logical_operation_id;
+  const cutoff = projectorInput.committed_intake_cutoff;
+  const intakeOutcomes = projectorInput.intake_outcomes;
+  const receiptManifest = projectorInput.receipt_manifest;
+  const schemaManifest = projectorInput.schema_manifest;
+  const tokenizationManifest = projectorInput.tokenization_manifest;
+  const observations = projectorInput.observations;
+  const conflicts = projectorInput.conflicts;
+  const rejections = projectorInput.rejections;
+  const projectorInputDigest = sha256Digest(projectorInput);
   const unresolved = [];
   const acceptedTypes = new Set(CORRELATION_RULES.accepted_observation_types);
   const operationCandidates = observations.filter((observation) =>
@@ -365,7 +417,7 @@ export function buildCorrelationProjection({
     [type, selected.filter((observation) => observation.observation_type === type).length]));
 
   const semanticProjection = {
-    schema_version: "alphonse.correlation-projection.v0.1",
+    schema_version: CORRELATION_PROJECTION_SCHEMA_VERSION,
     scope: {
       installation_id: registration.installation_id,
       environment_id: registration.environment_id,
@@ -379,6 +431,8 @@ export function buildCorrelationProjection({
       capture_basis: "diagnostic_intake_prefix_finalization_row_lock"
     },
     dependencies: {
+      projector_input_schema_version: CORRELATION_PROJECTOR_INPUT_SCHEMA_VERSION,
+      projector_input_digest: projectorInputDigest,
       receipt_set_manifest_digest: sha256Digest(canonicalList(receiptManifest)),
       intake_outcome_manifest_digest: sha256Digest(canonicalList(intakeOutcomes)),
       schema_manifest_digest: sha256Digest(canonicalList(schemaManifest)),
@@ -418,5 +472,9 @@ export function buildCorrelationProjection({
       repair_prescribed: false
     }
   };
-  return { semantic_projection: semanticProjection, semantic_digest: sha256Digest(semanticProjection) };
+  return {
+    projector_input_digest: projectorInputDigest,
+    semantic_projection: semanticProjection,
+    semantic_digest: sha256Digest(semanticProjection)
+  };
 }

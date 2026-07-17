@@ -4,7 +4,7 @@
 diagnostic effects, evaluate the bounded duplicate invariant, and open one attributable Diagnostic Case without
 leaking the expected diagnosis.
 
-**Blocked by:** 08 - Project one operation across all observer streams.
+**Blocked by:** 08H4 - Prove correlation hardening adversarially.
 
 **Status:** ready-for-agent
 
@@ -21,3 +21,6 @@ leaking the expected diagnosis.
 - [ ] Create a `violated` Behavior Evaluation Record showing two committed effects against threshold one.
 - [ ] Deterministically create one Diagnostic Trigger and case without claiming root cause, repair authority, or
       Kernel Effect authority.
+- [ ] Project authenticated observations, committed-effect interpretations, invariant results, and unresolved
+      conclusions through a minimal temporal Claim Envelope that cites existing immutable evidence rather than
+      copying it into a second truth store.

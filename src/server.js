@@ -329,6 +329,7 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     database: diagnosticDatabase,
     installationId,
     environmentId,
+    tokenizationVerifier: diagnosticTokenizationProofService,
     async resolveDeployment(deploymentId) {
       const deployment = await deploymentService.getDeployment(deploymentId);
       const packageVersion = await packageService.getPackageVersion(deployment.package_version_id);
