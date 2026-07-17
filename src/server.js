@@ -31,6 +31,7 @@ import { createGrantAuthorityService } from "./grant-authority-service.js";
 import { createDiagnosticGrantApplicationService } from "./diagnostic-grant-application-service.js";
 import { createDiagnosticObservationService } from "./diagnostic-observation-service.js";
 import { createDiagnosticTokenizationProofService } from "./diagnostic-tokenization-proof-service.js";
+import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
 import { createPackageService } from "./package-service.js";
 import { createPackageTrustService } from "./package-trust-service.js";
@@ -112,6 +113,9 @@ const diagnosticGrantApplicationSecret = process.env.DIAGNOSTIC_GRANT_APPLICATIO
 const grantAuthorityFeedToken = process.env.GRANT_AUTHORITY_FEED_TOKEN;
 const grantApplicationReceiptServiceToken = process.env.GRANT_APPLICATION_RECEIPT_SERVICE_TOKEN;
 const diagnosticObserverKeys = JSON.parse(process.env.DIAGNOSTIC_OBSERVER_KEYS ?? "{}");
+const diagnosticRuntimeCompatibilityConfig = process.env.DIAGNOSTIC_RUNTIME_COMPATIBILITY_CONFIG
+  ? JSON.parse(process.env.DIAGNOSTIC_RUNTIME_COMPATIBILITY_CONFIG)
+  : null;
 const tokenizationGrantApplicationKeyId = process.env.TOKENIZATION_GRANT_APPLICATION_SIGNING_KEY_ID;
 const tokenizationGrantApplicationSecret = process.env.TOKENIZATION_GRANT_APPLICATION_SIGNING_SECRET;
 const tokenizationServiceKeyId = process.env.TOKENIZATION_SERVICE_SIGNING_KEY_ID;
@@ -154,12 +158,26 @@ if (diagnosticDatabaseUrl) {
   await diagnosticDatabase.bootstrapNode(installationId);
   diagnosticArtifactStore = createContentAddressedArtifactStore(diagnosticArtifactRoot);
   diagnosticService = createDiagnosticService(diagnosticDatabase, diagnosticArtifactStore, installationId);
+  const canonicalCompatibility = diagnosticRuntimeCompatibilityConfig
+    ? createLegacyRuntimeCompatibility({
+      ...diagnosticRuntimeCompatibilityConfig,
+      installationId,
+      environmentId,
+      secret: diagnosticObserverKeys[diagnosticRuntimeCompatibilityConfig.keyId]
+    }, async (input) => {
+      if (!diagnosticObservationService) {
+        throw new KernelError(503, "CANONICAL_OBSERVATION_INTAKE_UNAVAILABLE",
+          "Canonical observation intake is not configured.");
+      }
+      return diagnosticObservationService.receiveObservation(input);
+    })
+    : null;
   diagnosticRuntimeService = createDiagnosticRuntimeService(diagnosticDatabase, installationId, {
     adapter_id: diagnosticRuntimeAdapterId,
     adapter_version: diagnosticRuntimeAdapterVersion,
     key_id: diagnosticRuntimeAdapterKeyId,
     secret: diagnosticRuntimeAdapterSecret
-  }, { timestampToleranceSeconds: diagnosticRuntimeTimestampToleranceSeconds });
+  }, { timestampToleranceSeconds: diagnosticRuntimeTimestampToleranceSeconds, canonicalCompatibility });
   const unavailableDetailClient = {
     async retrieveExecutionDetail() {
       throw new KernelError(503, "RUNTIME_DETAIL_UNAVAILABLE", "Runtime detail adapter is not configured.");

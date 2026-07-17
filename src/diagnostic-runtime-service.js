@@ -37,7 +37,14 @@ function eventView(row) {
       key_id: row.authentication_key_id,
       signed_at: row.authentication_signed_at,
       signature: row.authentication_signature
-    }
+    },
+    compatibility: row.canonical_observation_receipt_id ? {
+      canonical_observation_receipt_id: row.canonical_observation_receipt_id,
+      translator_id: row.compatibility_translator_id,
+      translator_version: row.compatibility_translator_version,
+      translator_artifact_digest: row.compatibility_translator_artifact_digest,
+      translator_rules_digest: row.compatibility_translator_rules_digest
+    } : null
   };
 }
 
@@ -103,7 +110,8 @@ function conflictView(row) {
 }
 
 export function createDiagnosticRuntimeService(database, installationId, adapterBinding, {
-  timestampToleranceSeconds = 300
+  timestampToleranceSeconds = 300,
+  canonicalCompatibility = null
 } = {}) {
   const { pool } = database;
   if (!adapterBinding?.adapter_id || !adapterBinding?.adapter_version || !adapterBinding?.key_id
@@ -138,7 +146,9 @@ export function createDiagnosticRuntimeService(database, installationId, adapter
       adapter: { adapter_id: trace.adapter_id, adapter_version: trace.adapter_version },
       external_execution_id: trace.external_execution_id,
       created_at: trace.created_at,
-      classification: "untrusted_external_observation",
+      classification: events.length > 0 && events.every((event) => event.compatibility)
+        ? "canonical_observation_compatibility_projection"
+        : "untrusted_external_observation",
       immutable: true,
       authority: { ...AUTHORITY },
       event_count: String(events.length),
@@ -164,6 +174,9 @@ export function createDiagnosticRuntimeService(database, installationId, adapter
       now,
       toleranceSeconds: timestampToleranceSeconds
     });
+    const compatibility = canonicalCompatibility
+      ? await canonicalCompatibility.receive(verified, now)
+      : null;
     const envelope = verified.envelope;
     const client = await pool.connect();
     let committed = false;
@@ -304,6 +317,14 @@ export function createDiagnosticRuntimeService(database, installationId, adapter
           external_lifecycle_claim: envelope.lifecycle_claim,
           classification: "untrusted_external_observation",
           authority: { ...AUTHORITY },
+          compatibility: compatibility ? {
+            canonical_observation_receipt_id: compatibility.canonical_receipt.receipt_id,
+            canonical_observation_receipt_digest: compatibility.canonical_receipt.receipt_digest,
+            translator_id: compatibility.translator.translator_id,
+            translator_version: compatibility.translator.translator_version,
+            translator_artifact_digest: compatibility.translator.translator_artifact_digest,
+            translator_rules_digest: compatibility.translator.translator_rules_digest
+          } : null,
           transition
         };
         const commandId = `runtime-event:${envelope.event_id}`;
@@ -338,13 +359,20 @@ export function createDiagnosticRuntimeService(database, installationId, adapter
             (receipt_id,installation_id,trace_id,event_id,idempotency_key,event_sequence,lifecycle_claim,
              correlation_id,occurred_at,received_at,delivery_delay_ms,out_of_order,payload_digest,payload_reference,
              envelope,envelope_digest,authentication_key_id,authentication_signed_at,authentication_signature,
-             transition_id,receipt)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+             transition_id,receipt,canonical_observation_receipt_id,compatibility_translator_id,
+             compatibility_translator_version,compatibility_translator_artifact_digest,
+             compatibility_translator_rules_digest)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
           [receiptId, installationId, trace.trace_id, envelope.event_id, envelope.idempotency_key,
             envelope.event_sequence, envelope.lifecycle_claim, envelope.correlation_id, envelope.occurred_at,
             receivedAt, deliveryDelay, outOfOrder, envelope.payload.digest, envelope.payload.reference,
             envelope, verified.envelope_digest, verified.authentication.key_id, verified.authentication.signed_at,
-            verified.authentication.signature, transitionId, receipt]
+            verified.authentication.signature, transitionId, receipt,
+            compatibility?.canonical_receipt.receipt_id ?? null,
+            compatibility?.translator.translator_id ?? null,
+            compatibility?.translator.translator_version ?? null,
+            compatibility?.translator.translator_artifact_digest ?? null,
+            compatibility?.translator.translator_rules_digest ?? null]
         );
         await client.query(
           `UPDATE diagnostic_nodes SET revision=revision+1,next_sequence=next_sequence+1,updated_at=$2

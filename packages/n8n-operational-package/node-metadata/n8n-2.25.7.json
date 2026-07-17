@@ -1,0 +1,36 @@
+{
+  "schema_version": "alphonse.n8n_node_metadata.v0.1",
+  "runtime_version": "2.25.7",
+  "workflow_defaults": {
+    "settings": { "executionOrder": "v1" }
+  },
+  "ui_only_node_fields": ["position"],
+  "supported_nodes": {
+    "n8n-nodes-base.webhook@2": {
+      "parameter_defaults": {
+        "multipleMethods": false,
+        "authentication": "none",
+        "responseMode": "onReceived",
+        "contentTypeNotice": "",
+        "options": {}
+      }
+    },
+    "n8n-nodes-base.code@2": {
+      "parameter_defaults": { "language": "javaScript", "mode": "runOnceForAllItems", "notice": "" }
+    },
+    "n8n-nodes-base.httpRequest@4.2": {
+      "parameter_defaults": {
+        "curlImport": "",
+        "method": "GET",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "specifyHeaders": "keypair",
+        "sendBody": false,
+        "options": {},
+        "infoMessage": ""
+      }
+    }
+  }
+}
