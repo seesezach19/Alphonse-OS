@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { buildN8nRevisionMaterial } from "../packages/n8n-operational-package/src/index.js";
 import { sha256Digest } from "../src/canonical-json.js";
 import { createCanonicalProofDeployment } from "./canonical-proof-deployment-fixture.js";
 
@@ -23,6 +24,7 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
+const through07 = process.argv.includes("--through-07");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, env: options.env ?? environment,
@@ -33,11 +35,14 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 const compose = (...args) => run("docker", ["compose", "--profile", "canonical-tokenization",
-  "--profile", "canonical-ingress", ...args]);
+  "--profile", "canonical-ingress", "--profile", "canonical-destination", "--profile", "canonical-runtime", ...args]);
 async function request(base, route, options = {}) {
   const response = await fetch(`${base}${route}`, { ...options,
     headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
-  return { response, body: await response.json() };
+  const text = await response.text();
+  let body;
+  try { body = JSON.parse(text); } catch { body = { raw: text.slice(0, 500) }; }
+  return { response, body };
 }
 const kernel = (route, options = {}) => request(baseUrl, route, {
   ...options, headers: { ...ownerHeaders, ...(options.headers ?? {}) }
@@ -88,6 +93,17 @@ async function ingressStatus() {
   assert.equal(result.response.status, 200, JSON.stringify(result.body));
   return result.body;
 }
+const responseData = (body) => body?.data ?? body;
+const n8nRequest = (route, options = {}) => request("http://127.0.0.1:45685", route, options);
+
+async function activateSchema(deployment, schemaExport) {
+  const result = await post("/diagnostic/v0/observation-schema-activations", {
+    deployment_id: deployment.deployment_id, schema_export_id: schemaExport.export_id
+  });
+  assert.equal(result.response.status, 201, JSON.stringify(result.body));
+  return { schema_id: schemaExport.export_id, schema_version: schemaExport.contract_version,
+    schema_digest: sha256Digest(schemaExport.content) };
+}
 
 compose("down", "--volumes", "--remove-orphans");
 try {
@@ -133,6 +149,66 @@ try {
       limits: { max_envelope_bytes: 16384, max_detail_bytes: 0, max_sequence_advance: 1000 }
     } });
 
+  let extended = null;
+  if (through07) {
+    const runtimeSchema = await activateSchema(deployment, deployment.runtime_schema_export);
+    const requestSchema = await activateSchema(deployment, deployment.destination_request_schema_export);
+    const effectSchema = await activateSchema(deployment, deployment.destination_effect_schema_export);
+    const workflowJson = JSON.parse(await readFile(new URL(
+      "../packages/n8n-operational-package/workflows/canonical-lead-ingress.json", import.meta.url), "utf8"));
+    const reporterJson = JSON.parse(await readFile(new URL(
+      "../packages/n8n-operational-package/workflows/alphonse-event-reporter.json", import.meta.url), "utf8"));
+    const packageManifest = JSON.parse(await readFile(new URL(
+      "../packages/n8n-operational-package/operational-package.json", import.meta.url), "utf8"));
+    const workflow = await post("/diagnostic/v0/agent-workflows", {
+      command_id: randomUUID(), operation_id: "diagnostic.agent_workflow.register", input: {
+        workflow_id: "workflow:agency-lab:lead-ingestion", display_name: "Agency Lead Ingestion",
+        objective: "Create one CRM request per received lead delivery.",
+        external_ref: { system: "n8n", workflow_key: workflowJson.id, environment: "customer-local" }
+      }
+    });
+    assert.equal(workflow.response.status, 201, JSON.stringify(workflow.body));
+    const material = buildN8nRevisionMaterial({ packageManifest, workflow: workflowJson, reporter: reporterJson });
+    material.configuration = { external_effects: true, destination: "mock_crm",
+      configuration_fingerprint: sha256Digest({ external_effects: true, destination: "mock_crm" }) };
+    const revision = await post("/diagnostic/v0/agent-revisions", {
+      command_id: randomUUID(), operation_id: "diagnostic.agent_revision.register",
+      input: { workflow_id: "workflow:agency-lab:lead-ingestion", ...material }
+    });
+    assert.equal(revision.response.status, 201, JSON.stringify(revision.body));
+
+    const crmTokenGrantId = await activateGrant({ grantType: "tokenization_use",
+      receiverServiceId: "tokenization-service", receiverUrl: tokenizationUrl,
+      grantDocument: { ...tokenBase, requester_principal_id: "observer:crm-request",
+        field_role: "destination.idempotency_key", claim_field: "idempotency_key_equality_token",
+        namespace: "lead-idempotency" } });
+    const requestAdapter = { adapter_binding_id: "adapter:mock-crm-request", version: "0.1.0",
+      digest: `sha256:${"a".repeat(64)}` };
+    const ledgerAdapter = { adapter_binding_id: "adapter:mock-crm-ledger", version: "0.1.0",
+      digest: `sha256:${"b".repeat(64)}` };
+    const requestGrantId = await activateGrant({ grantType: "observation_reporting",
+      receiverServiceId: "diagnostic-plane", receiverUrl: baseUrl, grantDocument: {
+        principal_id: "observer:crm-request", installation_id: tokenBase.installation_id,
+        environment_id: tokenBase.environment_id, adapter_binding: requestAdapter,
+        allowed_schema_tuples: [requestSchema], workflow_ids: ["workflow:agency-lab:lead-ingestion"],
+        integration_ids: ["integration:mock-crm"], stream_id: "stream:crm-request", ...validity,
+        key_id: "observer-crm-request-key-v1",
+        limits: { max_envelope_bytes: 16384, max_detail_bytes: 0, max_sequence_advance: 1000 }
+      } });
+    const ledgerGrantId = await activateGrant({ grantType: "observation_reporting",
+      receiverServiceId: "diagnostic-plane", receiverUrl: baseUrl, grantDocument: {
+        principal_id: "observer:crm-ledger", installation_id: tokenBase.installation_id,
+        environment_id: tokenBase.environment_id, adapter_binding: ledgerAdapter,
+        allowed_schema_tuples: [effectSchema], workflow_ids: ["workflow:agency-lab:lead-ingestion"],
+        integration_ids: ["integration:mock-crm"], stream_id: "stream:crm-ledger", ...validity,
+        key_id: "observer-crm-ledger-key-v1",
+        limits: { max_envelope_bytes: 16384, max_detail_bytes: 0, max_sequence_advance: 1000 }
+      } });
+    extended = { runtimeSchema, requestSchema, effectSchema,
+      revisionId: revision.body.agent_revision.revision_id, crmTokenGrantId,
+      requestAdapter, ledgerAdapter, requestGrantId, ledgerGrantId };
+  }
+
   Object.assign(environment, {
     INGRESS_SOURCE_TOKENIZATION_GRANT_ID: sourceGrantId,
     INGRESS_DELIVERY_TOKENIZATION_GRANT_ID: deliveryGrantId,
@@ -141,12 +217,58 @@ try {
     INGRESS_OBSERVATION_ADAPTER_BINDING: JSON.stringify(adapterBinding),
     INGRESS_DIAGNOSTIC_URL: "http://127.0.0.1:9/diagnostic/v0/observations"
   });
+  if (extended) Object.assign(environment, {
+    CANONICAL_AGENT_REVISION_ID: extended.revisionId,
+    CRM_IDEMPOTENCY_TOKENIZATION_GRANT_ID: extended.crmTokenGrantId,
+    CRM_REQUEST_OBSERVATION_GRANT_ID: extended.requestGrantId,
+    CRM_REQUEST_OBSERVATION_SCHEMA: JSON.stringify(extended.requestSchema),
+    CRM_REQUEST_ADAPTER_BINDING: JSON.stringify(extended.requestAdapter),
+    CRM_LEDGER_OBSERVATION_GRANT_ID: extended.ledgerGrantId,
+    CRM_EFFECT_OBSERVATION_SCHEMA: JSON.stringify(extended.effectSchema),
+    CRM_LEDGER_ADAPTER_BINDING: JSON.stringify(extended.ledgerAdapter)
+  });
 
   compose("run", "--rm", "--no-deps", "canonical-n8n", "import:workflow",
     "--input=/proof-workflows/canonical-lead-ingress.json");
   compose("run", "--rm", "--no-deps", "canonical-n8n", "publish:workflow", "--id=CanonicalLeadIngress01");
   compose("up", "--build", "--wait", "canonical-n8n", "customer-ingress-bootstrap",
     "customer-ingress-migrate", "customer-ingress-api", "customer-ingress-forwarder", "customer-ingress-reporter");
+
+  if (extended) {
+    const owner = await eventually(async () => {
+      const result = await n8nRequest("/rest/owner/setup", { method: "POST",
+        body: JSON.stringify({ email: "canonical-proof@example.test", firstName: "Canonical", lastName: "Proof",
+          password: "LocalCanonicalProofPassword123!" }) });
+      return result.response.status === 200 ? result : null;
+    }, "n8n REST readiness", 60_000);
+    assert.equal(owner.response.status, 200, JSON.stringify(owner.body));
+    const cookie = owner.response.headers.getSetCookie().map((value) => value.split(";", 1)[0]).join("; ");
+    const key = await n8nRequest("/rest/api-keys", { method: "POST", headers: { cookie },
+      body: JSON.stringify({ label: "Canonical runtime observer", expiresAt: null,
+        scopes: ["execution:read", "workflow:read"] }) });
+    assert.equal(key.response.status, 200, JSON.stringify(key.body));
+    environment.CANONICAL_N8N_API_KEY = responseData(key.body).rawApiKey;
+    compose("run", "--rm", "--no-deps", "canonical-observer-volume-init");
+    const readinessOutput = compose("run", "--rm", "--no-deps", "n8n-runtime-readiness");
+    assert.match(readinessOutput, /pre_execution_published_workflow_read/);
+    assert.match(readinessOutput, /"execution_derived_expected_identity":false/);
+    const runtimeAdapter = { adapter_binding_id: "adapter:n8n-runtime", version: "0.1.0",
+      digest: `sha256:${"c".repeat(64)}` };
+    const runtimeGrantId = await activateGrant({ grantType: "observation_reporting",
+      receiverServiceId: "diagnostic-plane", receiverUrl: baseUrl, grantDocument: {
+        principal_id: "observer:n8n-runtime", installation_id: tokenBase.installation_id,
+        environment_id: tokenBase.environment_id, adapter_binding: runtimeAdapter,
+        allowed_schema_tuples: [extended.runtimeSchema], workflow_ids: ["workflow:agency-lab:lead-ingestion"],
+        integration_ids: [], stream_id: "stream:n8n-runtime", ...validity, key_id: "observer-n8n-key-v1",
+        limits: { max_envelope_bytes: 16384, max_detail_bytes: 0, max_sequence_advance: 1000 }
+      } });
+    Object.assign(environment, { N8N_OBSERVATION_GRANT_ID: runtimeGrantId,
+      N8N_OBSERVATION_SCHEMA: JSON.stringify(extended.runtimeSchema),
+      N8N_OBSERVATION_ADAPTER_BINDING: JSON.stringify(runtimeAdapter) });
+    extended.runtimeGrantId = runtimeGrantId;
+    compose("up", "--build", "--wait", "mock-crm-bootstrap", "mock-crm-migrate", "mock-crm",
+      "crm-request-observer", "crm-ledger-observer", "n8n-runtime-observer");
+  }
 
   const fixture = JSON.parse(await readFile(new URL(
     "../packages/n8n-operational-package/fixtures/lead-duplicate-webhook.json", import.meta.url), "utf8"));
@@ -217,6 +339,73 @@ try {
       "authenticated_under_observer_specific_grant");
   }
 
+  let extendedResult = null;
+  if (extended) {
+    const runtime = await eventually(async () => {
+      const value = await request("http://127.0.0.1:43650", "/healthz");
+      if (value.body.reported_count !== 2) throw new Error(JSON.stringify(value.body));
+      return value.body;
+    }, "two bound runtime observations", 60_000);
+    assert.equal(runtime.mismatch_count, 0);
+    assert.equal(runtime.expected_identity_source, "pre_execution_published_workflow_read");
+    const requests = await eventually(async () => {
+      const value = await request("http://127.0.0.1:43700", "/internal/v0/status");
+      if (value.body.reported_count !== 2) throw new Error(JSON.stringify(value.body));
+      return value.body;
+    }, "two CRM request observations", 60_000);
+    const ledger = await eventually(async () => {
+      const value = await request("http://127.0.0.1:43702", "/healthz");
+      if (value.body.reported_count !== 2) throw new Error(JSON.stringify(value.body));
+      return value.body;
+    }, "two CRM ledger observations", 60_000);
+    assert.equal(new Set(requests.requests.map((item) => item.logical_operation_id)).size, 1);
+    assert.equal(new Set(requests.requests.map((item) => item.idempotency_key_equality_token)).size, 2);
+    for (const crmRequest of requests.requests) {
+      const source = recovered.deliveries.find((item) => item.delivery_id === crmRequest.delivery_id);
+      assert.ok(source, "CRM request must cite one observed delivery.");
+      assert.equal(crmRequest.idempotency_key_equality_token, source.delivery_identity_equality_token);
+      assert.equal(crmRequest.transport_status, 201);
+      const receipt = await kernel(`/diagnostic/v0/observation-receipts/${crmRequest.observation_receipt_id}`);
+      assert.equal(receipt.body.observation_receipt.principal_id, "observer:crm-request");
+      assert.equal(receipt.body.observation_receipt.observation_type, "destination.request");
+      assert.equal(receipt.body.observation_receipt.coverage.coverage_status, "complete_through_high_water");
+      assert.deepEqual(receipt.body.observation_receipt.coverage.missing_ranges, []);
+    }
+    for (const item of runtime.receipts) {
+      const receipt = await kernel(`/diagnostic/v0/observation-receipts/${item.receipt_id}`);
+      assert.equal(receipt.body.observation_receipt.principal_id, "observer:n8n-runtime");
+      assert.equal(receipt.body.observation_receipt.observation_type, "runtime.execution");
+      assert.equal(receipt.body.observation_receipt.coverage.coverage_status, "complete_through_high_water");
+    }
+    for (const item of ledger.reported_commits) {
+      const receipt = await kernel(`/diagnostic/v0/observation-receipts/${item.receipt_id}`);
+      assert.equal(receipt.body.observation_receipt.principal_id, "observer:crm-ledger");
+      assert.equal(receipt.body.observation_receipt.observation_type, "destination.effect");
+      assert.equal(receipt.body.observation_receipt.external_truth_established, false);
+      assert.equal(receipt.body.observation_receipt.coverage.coverage_status, "complete_through_high_water");
+    }
+    const configured = JSON.parse(compose("config", "--format", "json")).services;
+    assert.equal(configured["crm-request-observer"].environment.MOCK_CRM_LEDGER_TOKEN, undefined);
+    assert.equal(configured["crm-ledger-observer"].environment.MOCK_CRM_WRITE_TOKEN, undefined);
+    assert.equal(configured["canonical-n8n"].environment.N8N_API_KEY, undefined);
+    const prefixBeforeRestart = await kernel("/diagnostic/v0/intake-prefix");
+    compose("restart", "n8n-runtime-observer", "crm-request-observer", "crm-ledger-observer");
+    await eventually(async () => {
+      const [runtimeStatus, requestStatus, ledgerStatus] = await Promise.all([
+        request("http://127.0.0.1:43650", "/healthz"),
+        request("http://127.0.0.1:43700", "/internal/v0/status"),
+        request("http://127.0.0.1:43702", "/healthz")
+      ]);
+      return runtimeStatus.body.reported_count === 2
+        && requestStatus.body.reported_count === 2
+        && ledgerStatus.body.reported_count === 2;
+    }, "observer restart without duplicate receipts");
+    const prefixAfterRestart = await kernel("/diagnostic/v0/intake-prefix");
+    assert.equal(prefixAfterRestart.body.intake_prefix.committed_through,
+      prefixBeforeRestart.body.intake_prefix.committed_through);
+    extendedResult = { runtime, requests, ledger };
+  }
+
   compose("restart", "customer-ingress-api", "customer-ingress-forwarder", "customer-ingress-reporter");
   const replayResponse = await eventually(async () => {
     const value = await request(ingressUrl, "/agency-lab/lead-ingress", {
@@ -232,19 +421,24 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: "canonical-diagnostic-proof-05", status: "passed",
-    completed_capability: "journaled_duplicate_ingress_observation",
+    schema_version: "0.1.0", ticket: through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
+    status: "passed", completed_capability: through07
+      ? "bound_runtime_and_separate_crm_observation" : "journaled_duplicate_ingress_observation",
     proven: ["journal_before_forward", "stable_opaque_logical_operation", "distinct_delivery_attempts",
       "independent_forward_and_report_loops", "n8n_context_propagation", "diagnostic_outage_decoupled",
       "tokenization_receipts_cited", "stimulus_has_no_reporting_authority", "accepted_report_replay_recovery",
       "restart_idempotency", "raw_payload_scrubbed", "visible_backlog_and_loss_state"],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
+    runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
+    crm_request_observation_count: extendedResult?.requests.reported_count ?? 0,
+    crm_effect_observation_count: extendedResult?.ledger.reported_count ?? 0,
     model_requests: 0, worker_run_created: false
   }, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`\n--- Ticket 05 service logs ---\n${compose("logs", "--no-color",
-    "customer-ingress-api", "customer-ingress-forwarder", "customer-ingress-reporter", "canonical-n8n")}\n`);
+    "customer-ingress-api", "customer-ingress-forwarder", "customer-ingress-reporter", "canonical-n8n",
+    "n8n-runtime-observer", "crm-request-observer", "crm-ledger-observer", "mock-crm", "kernel", "data-plane")}\n`);
   throw error;
 } finally {
   compose("down", "--volumes", "--remove-orphans");

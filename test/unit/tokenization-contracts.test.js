@@ -56,8 +56,11 @@ test("equality tokens preserve exact byte equality and domain separation", () =>
   assert.equal(first, createEqualityToken(Buffer.from("delivery-001"), base, rootSecret));
   assert.notEqual(first, createEqualityToken(Buffer.from("delivery-001 "), base, rootSecret));
   assert.notEqual(first, createEqualityToken(Buffer.from("Delivery-001"), base, rootSecret));
-  assert.notEqual(first, createEqualityToken(Buffer.from("delivery-001"), {
+  assert.equal(first, createEqualityToken(Buffer.from("delivery-001"), {
     ...base, field_role: "destination.idempotency_key"
+  }, rootSecret));
+  assert.notEqual(first, createEqualityToken(Buffer.from("delivery-001"), {
+    ...base, namespace: "different-comparison-purpose"
   }, rootSecret));
 });
 

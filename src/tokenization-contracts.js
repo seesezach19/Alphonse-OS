@@ -87,7 +87,7 @@ export function createEqualityToken(inputBytes, context, rootSecret) {
   const bytes = Buffer.isBuffer(inputBytes) ? inputBytes : Buffer.from(inputBytes);
   if (typeof rootSecret !== "string" || rootSecret.length < 32) throw new Error("Tokenization root secret is required.");
   const domainFields = [context.installation_id, context.environment_id, context.integration_id,
-    context.field_role, context.namespace, context.algorithm_version];
+    context.namespace, context.algorithm_version];
   domainFields.forEach((value, index) => boundedString(value, `tokenization domain field ${index}`));
   const preimage = Buffer.concat([
     lengthPrefix(Buffer.from("ALPHONSE_EXACT_EQUALITY_TOKEN_V1", "utf8")),

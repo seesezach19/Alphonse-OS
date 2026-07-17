@@ -28,7 +28,10 @@ export function createCustomerIngressJournalService(database, {
       throw new KernelError(502, "INGRESS_TOKENIZATION_INCOMPLETE", "Exact tokenization proofs are required.");
     }
     const receivedAt = new Date(now).toISOString();
-    const encrypted = createEncryptedIngressPayload(input.payload, payloadSecret);
+    const encrypted = createEncryptedIngressPayload({
+      business_payload: input.payload,
+      forwarding_context: { source_delivery_id: input.source_delivery_id }
+    }, payloadSecret);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");

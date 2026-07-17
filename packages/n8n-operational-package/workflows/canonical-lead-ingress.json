@@ -19,19 +19,60 @@
       }
     },
     {
-      "id": "canonical-preserve-context",
-      "name": "Preserve Propagated Context",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "canonical-create-crm-lead",
+      "name": "Create CRM Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [280, 0],
       "parameters": {
-        "jsCode": "return [{ json: { accepted: true, body: $json.body, propagated_context: { logical_operation_id: $json.headers['x-alphonse-logical-operation-id'], delivery_id: $json.headers['x-alphonse-delivery-id'], forwarding_id: $json.headers['x-alphonse-forwarding-id'] } } }];"
+        "method": "POST",
+        "url": "http://crm-request-observer:3700/v0/crm/leads",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer local-n8n-crm-route-token" },
+            { "name": "X-Alphonse-Logical-Operation-Id", "value": "={{ $json.headers['x-alphonse-logical-operation-id'] }}" },
+            { "name": "X-Alphonse-Delivery-Id", "value": "={{ $json.headers['x-alphonse-delivery-id'] }}" },
+            { "name": "X-Alphonse-Forwarding-Id", "value": "={{ $json.headers['x-alphonse-forwarding-id'] }}" },
+            { "name": "X-Alphonse-Source-Delivery-Key", "value": "={{ $json.headers['x-alphonse-source-delivery-key'] }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "canonical-report-execution-identity",
+      "name": "Report Execution Identity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "http://n8n-runtime-observer:3650/internal/v0/executions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer local-n8n-runtime-signal-token" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ execution_id: $execution.id }) }}",
+        "options": {}
       }
     }
   ],
   "connections": {
     "Receive Lead Delivery": {
-      "main": [[{ "node": "Preserve Propagated Context", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Create CRM Lead", "type": "main", "index": 0 }]]
+    },
+    "Create CRM Lead": {
+      "main": [[{ "node": "Report Execution Identity", "type": "main", "index": 0 }]]
     }
   }
 }

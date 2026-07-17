@@ -32,8 +32,9 @@ async function forward(row) {
       "content-type": "application/json",
       "x-alphonse-logical-operation-id": row.logical_operation_id,
       "x-alphonse-delivery-id": `delivery_${row.delivery_id}`,
-      "x-alphonse-forwarding-id": row.forwarding_id
-    }, body: JSON.stringify(payload)
+      "x-alphonse-forwarding-id": row.forwarding_id,
+      "x-alphonse-source-delivery-key": payload.forwarding_context.source_delivery_id
+    }, body: JSON.stringify(payload.business_payload)
   });
   const bytes = Buffer.from(await response.arrayBuffer());
   if (!response.ok) throw new Error(`FORWARD_HTTP_${response.status}`);

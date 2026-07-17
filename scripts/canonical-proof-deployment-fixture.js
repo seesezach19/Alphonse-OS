@@ -141,6 +141,81 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       }
     }
   };
+  const runtimeExecutionSchema = {
+    kind: "schema", export_id: "observation:runtime.execution-bound", contract_version: "0.1.0",
+    content: { type: "object", additionalProperties: false,
+      required: ["execution_id", "logical_operation_id", "delivery_id", "provider_workflow_id",
+        "provider_workflow_version_id", "revision_id", "normalized_workflow_digest", "binding_digest",
+        "lifecycle", "started_at", "stopped_at"],
+      properties: Object.fromEntries(["execution_id", "logical_operation_id", "delivery_id",
+        "provider_workflow_id", "provider_workflow_version_id", "revision_id", "normalized_workflow_digest",
+        "binding_digest", "lifecycle", "started_at", "stopped_at"].map((field) =>
+        [field, field === "lifecycle" ? { type: "string", enum: ["succeeded"] }
+          : { type: "string", minLength: 1, maxLength: 200 }])),
+      observation: { observation_type: "runtime.execution", allowed_detail_media_types: [],
+        required_correlation_roles: ["logical_operation", "delivery"] } }
+  };
+  const legacyRuntimeExecutionSchema = {
+    kind: "schema", export_id: "observation:runtime.execution-legacy-compatibility", contract_version: "0.1.0",
+    content: { type: "object", additionalProperties: false,
+      required: ["external_execution_id", "event_id", "event_sequence", "lifecycle", "logical_operation_id",
+        "revision_id", "payload_reference_present", "legacy_envelope_digest", "legacy_authentication_key_id",
+        "legacy_authentication_signed_at", "legacy_authentication_signature_digest", "translator_id",
+        "translator_version", "translator_artifact_digest", "translator_rules_digest"],
+      properties: {
+        external_execution_id: { type: "string", minLength: 1, maxLength: 200 },
+        event_id: { type: "string", minLength: 1, maxLength: 140 },
+        event_sequence: { type: "string", minLength: 1, maxLength: 32 },
+        lifecycle: { type: "string", enum: ["accepted", "running", "succeeded", "failed", "cancelled"] },
+        logical_operation_id: { type: "string", minLength: 1, maxLength: 200 },
+        revision_id: { type: "string", minLength: 36, maxLength: 36 },
+        payload_digest: { type: "string", minLength: 71, maxLength: 71 },
+        payload_reference_present: { type: "boolean" },
+        legacy_envelope_digest: { type: "string", minLength: 71, maxLength: 71 },
+        legacy_authentication_key_id: { type: "string", minLength: 1, maxLength: 160 },
+        legacy_authentication_signed_at: { type: "string", minLength: 1, maxLength: 40 },
+        legacy_authentication_signature_digest: { type: "string", minLength: 71, maxLength: 71 },
+        translator_id: { type: "string", enum: ["alphonse.legacy_runtime.canonical"] },
+        translator_version: { type: "string", enum: ["0.1.0"] },
+        translator_artifact_digest: { type: "string", minLength: 71, maxLength: 71 },
+        translator_rules_digest: { type: "string", minLength: 71, maxLength: 71 }
+      }, observation: { observation_type: "runtime.execution", allowed_detail_media_types: [],
+        required_correlation_roles: ["logical_operation"] } }
+  };
+  const destinationRequestSchema = {
+    kind: "schema", export_id: "observation:destination.request-crm", contract_version: "0.1.0",
+    content: { type: "object", additionalProperties: false,
+      required: ["request_id", "logical_operation_id", "delivery_id", "operation", "transport_status",
+        "transport_outcome", "idempotency_key_equality_token"],
+      properties: {
+        request_id: { type: "string", minLength: 1, maxLength: 200 },
+        logical_operation_id: { type: "string", minLength: 1, maxLength: 200 },
+        delivery_id: { type: "string", minLength: 1, maxLength: 200 },
+        operation: { type: "string", enum: ["create_lead"] },
+        transport_status: { type: "integer" },
+        transport_outcome: { type: "string", enum: ["acknowledged", "rejected"] },
+        idempotency_key_equality_token: { type: "string", minLength: 1, maxLength: 200 }
+      }, observation: { observation_type: "destination.request", allowed_detail_media_types: [],
+        required_correlation_roles: ["logical_operation", "delivery", "request"] } }
+  };
+  const destinationEffectSchema = {
+    kind: "schema", export_id: "observation:destination.effect-crm-ledger", contract_version: "0.1.0",
+    content: { type: "object", additionalProperties: false,
+      required: ["commit_id", "resource_id", "request_id", "logical_operation_id", "delivery_id",
+        "operation", "effect_feed", "committed_at", "external_claim"],
+      properties: {
+        commit_id: { type: "string", minLength: 1, maxLength: 200 },
+        resource_id: { type: "string", minLength: 1, maxLength: 200 },
+        request_id: { type: "string", minLength: 1, maxLength: 200 },
+        logical_operation_id: { type: "string", minLength: 1, maxLength: 200 },
+        delivery_id: { type: "string", minLength: 1, maxLength: 200 },
+        operation: { type: "string", enum: ["create_lead"] },
+        effect_feed: { type: "string", enum: ["mock_crm_append_only_ledger"] },
+        committed_at: { type: "string", minLength: 1, maxLength: 40 },
+        external_claim: { type: "boolean" }
+      }, observation: { observation_type: "destination.effect", allowed_detail_media_types: [],
+        required_correlation_roles: ["logical_operation", "delivery", "request", "resource"] } }
+  };
   const candidate = {
     schema_version: "alphonse.package_candidate.v0.1",
     identity: { package_id: "com.alphonse.canonical-proof", version: "0.1.0",
@@ -152,6 +227,10 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       sourceDeliverySchema,
       tokenizedSourceDeliverySchema,
       ingressSourceDeliverySchema,
+      runtimeExecutionSchema,
+      legacyRuntimeExecutionSchema,
+      destinationRequestSchema,
+      destinationEffectSchema,
       { kind: "schema", export_id: "configuration", contract_version: "1.0.0", content: {
         type: "object", required: ["enabled"], properties: { enabled: { type: "boolean" } }
       } },
@@ -280,6 +359,10 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
     package_artifact_digest: packageVersion.artifact_digest,
     schema_export: sourceDeliverySchema,
     tokenized_schema_export: tokenizedSourceDeliverySchema,
-    ingress_schema_export: ingressSourceDeliverySchema
+    ingress_schema_export: ingressSourceDeliverySchema,
+    runtime_schema_export: runtimeExecutionSchema,
+    legacy_runtime_schema_export: legacyRuntimeExecutionSchema,
+    destination_request_schema_export: destinationRequestSchema,
+    destination_effect_schema_export: destinationEffectSchema
   };
 }

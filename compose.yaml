@@ -75,7 +75,7 @@ services:
       DIAGNOSTIC_GRANT_APPLICATION_SIGNING_SECRET: local-diagnostic-grant-application-secret-with-sufficient-length-v1
       GRANT_AUTHORITY_FEED_TOKEN: local-grant-authority-feed-token
       GRANT_APPLICATION_RECEIPT_SERVICE_TOKEN: local-grant-application-receipt-token
-      DIAGNOSTIC_OBSERVER_KEYS: '{"observer-webhook-key-v1":"observer-webhook-secret-with-sufficient-length-v1","observer-runtime-key-v1":"observer-runtime-secret-with-sufficient-length-v1","observer-crm-key-v1":"observer-crm-secret-with-sufficient-length-v1"}'
+      DIAGNOSTIC_OBSERVER_KEYS: '{"observer-webhook-key-v1":"observer-webhook-secret-with-sufficient-length-v1","observer-runtime-key-v1":"observer-runtime-secret-with-sufficient-length-v1","observer-crm-key-v1":"observer-crm-secret-with-sufficient-length-v1","observer-n8n-key-v1":"observer-n8n-secret-with-sufficient-length-v1","observer-crm-request-key-v1":"observer-crm-request-secret-with-sufficient-length-v1","observer-crm-ledger-key-v1":"observer-crm-ledger-secret-with-sufficient-length-v1"}'
       TOKENIZATION_GRANT_APPLICATION_SIGNING_KEY_ID: local-tokenization-grant-application-key-v1
       TOKENIZATION_GRANT_APPLICATION_SIGNING_SECRET: local-tokenization-grant-application-secret-with-sufficient-length-v1
       TOKENIZATION_SERVICE_SIGNING_KEY_ID: local-tokenization-service-ed25519-v1
@@ -264,6 +264,160 @@ services:
     depends_on:
       customer-ingress-migrate:
         condition: service_completed_successfully
+
+  canonical-observer-volume-init:
+    profiles: ["canonical-destination", "canonical-runtime"]
+    build: { context: . }
+    user: "0:0"
+    command: ["node", "src/canonical-volume-init.js", "/binding", "/runtime-state", "/ledger-state"]
+    volumes:
+      - n8n-runtime-binding:/binding
+      - n8n-runtime-observer-state:/runtime-state
+      - crm-ledger-observer-state:/ledger-state
+
+  mock-crm-bootstrap:
+    profiles: ["canonical-destination"]
+    build: { context: . }
+    command: ["node", "src/mock-crm-db-bootstrap.js"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql://alphonse:local-development-only@postgres:5432/alphonse_kernel
+      MOCK_CRM_DATABASE_PASSWORD: local-mock-crm-only
+      CRM_GATEWAY_DATABASE_PASSWORD: local-crm-gateway-only
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  mock-crm-migrate:
+    profiles: ["canonical-destination"]
+    build: { context: . }
+    command: ["node", "src/mock-crm-migrate.js"]
+    environment:
+      MOCK_CRM_DATABASE_URL: postgresql://alphonse_mock_crm:local-mock-crm-only@postgres:5432/alphonse_mock_crm
+    depends_on:
+      mock-crm-bootstrap: { condition: service_completed_successfully }
+
+  mock-crm:
+    profiles: ["canonical-destination"]
+    build: { context: . }
+    command: ["node", "src/mock-crm-server.js"]
+    environment:
+      MOCK_CRM_PORT: 3701
+      MOCK_CRM_DATABASE_URL: postgresql://alphonse_mock_crm:local-mock-crm-only@postgres:5432/alphonse_mock_crm
+      MOCK_CRM_WRITE_TOKEN: local-mock-crm-write-token
+      MOCK_CRM_LEDGER_TOKEN: local-mock-crm-ledger-read-token
+    ports: ["127.0.0.1:${MOCK_CRM_PORT:-43701}:3701"]
+    depends_on:
+      mock-crm-migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3701/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  crm-request-observer:
+    profiles: ["canonical-destination"]
+    build: { context: . }
+    command: ["node", "src/crm-request-observer-server.js"]
+    environment:
+      CRM_GATEWAY_PORT: 3700
+      CRM_GATEWAY_DATABASE_URL: postgresql://alphonse_crm_gateway:local-crm-gateway-only@postgres:5432/alphonse_mock_crm
+      CRM_GATEWAY_ROUTE_TOKEN: local-n8n-crm-route-token
+      CRM_GATEWAY_PAYLOAD_SECRET: local-crm-gateway-payload-secret-v1
+      MOCK_CRM_URL: http://mock-crm:3701
+      MOCK_CRM_WRITE_TOKEN: local-mock-crm-write-token
+      TOKENIZATION_URL: http://tokenization-service:3500
+      TOKENIZATION_REQUESTER_TOKEN: local-crm-tokenization-requester-token
+      CRM_IDEMPOTENCY_TOKENIZATION_GRANT_ID: ${CRM_IDEMPOTENCY_TOKENIZATION_GRANT_ID}
+      CRM_REQUEST_DIAGNOSTIC_URL: http://kernel:3000/diagnostic/v0/observations
+      CRM_REQUEST_OBSERVATION_SCHEMA: ${CRM_REQUEST_OBSERVATION_SCHEMA}
+      CRM_REQUEST_ADAPTER_BINDING: ${CRM_REQUEST_ADAPTER_BINDING}
+      CRM_REQUEST_PRINCIPAL_ID: observer:crm-request
+      CRM_REQUEST_OBSERVATION_GRANT_ID: ${CRM_REQUEST_OBSERVATION_GRANT_ID}
+      CRM_REQUEST_OBSERVATION_KEY_ID: observer-crm-request-key-v1
+      CRM_REQUEST_OBSERVATION_SECRET: observer-crm-request-secret-with-sufficient-length-v1
+      CRM_REQUEST_STREAM_ID: stream:crm-request
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
+    ports: ["127.0.0.1:${CRM_REQUEST_OBSERVER_PORT:-43700}:3700"]
+    depends_on:
+      mock-crm: { condition: service_healthy }
+      tokenization-service: { condition: service_healthy }
+
+  crm-ledger-observer:
+    profiles: ["canonical-destination"]
+    build: { context: . }
+    command: ["node", "src/crm-ledger-observer.js"]
+    environment:
+      CRM_LEDGER_OBSERVER_PORT: 3702
+      MOCK_CRM_URL: http://mock-crm:3701
+      MOCK_CRM_LEDGER_TOKEN: local-mock-crm-ledger-read-token
+      CRM_LEDGER_OBSERVER_STATE_PATH: /var/lib/alphonse-crm-ledger/state.json
+      CRM_LEDGER_DIAGNOSTIC_URL: http://kernel:3000/diagnostic/v0/observations
+      CRM_EFFECT_OBSERVATION_SCHEMA: ${CRM_EFFECT_OBSERVATION_SCHEMA}
+      CRM_LEDGER_ADAPTER_BINDING: ${CRM_LEDGER_ADAPTER_BINDING}
+      CRM_LEDGER_PRINCIPAL_ID: observer:crm-ledger
+      CRM_LEDGER_OBSERVATION_GRANT_ID: ${CRM_LEDGER_OBSERVATION_GRANT_ID}
+      CRM_LEDGER_OBSERVATION_KEY_ID: observer-crm-ledger-key-v1
+      CRM_LEDGER_OBSERVATION_SECRET: observer-crm-ledger-secret-with-sufficient-length-v1
+      CRM_LEDGER_STREAM_ID: stream:crm-ledger
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
+    ports: ["127.0.0.1:${CRM_LEDGER_OBSERVER_PORT:-43702}:3702"]
+    volumes: ["crm-ledger-observer-state:/var/lib/alphonse-crm-ledger"]
+    depends_on:
+      mock-crm: { condition: service_healthy }
+      canonical-observer-volume-init: { condition: service_completed_successfully }
+
+  n8n-runtime-readiness:
+    profiles: ["canonical-runtime"]
+    build: { context: . }
+    command: ["node", "src/canonical-n8n-readiness.js"]
+    environment:
+      N8N_API_URL: http://canonical-n8n:5678
+      N8N_API_KEY: ${CANONICAL_N8N_API_KEY}
+      N8N_PROVIDER_WORKFLOW_ID: CanonicalLeadIngress01
+      ALPHONSE_WORKFLOW_ID: workflow:agency-lab:lead-ingestion
+      ALPHONSE_REVISION_ID: ${CANONICAL_AGENT_REVISION_ID}
+      N8N_RUNTIME_IMAGE_DIGEST: sha256:761374d4eb841b0a22771d6bd68f0e8d827b4979ae4e490045517b13fc1259dd
+      N8N_NODE_METADATA_PATH: /node-metadata/n8n-2.25.7.json
+      N8N_BINDING_PATH: /var/lib/alphonse-n8n-binding/binding.json
+      N8N_READ_ONLY_SCOPES: workflow:read,execution:read
+      N8N_SUCCESS_EXECUTION_RETENTION: "true"
+    volumes:
+      - ./packages/n8n-operational-package/node-metadata:/node-metadata:ro
+      - n8n-runtime-binding:/var/lib/alphonse-n8n-binding
+    depends_on:
+      canonical-n8n: { condition: service_healthy }
+      canonical-observer-volume-init: { condition: service_completed_successfully }
+
+  n8n-runtime-observer:
+    profiles: ["canonical-runtime"]
+    build: { context: . }
+    command: ["node", "src/canonical-n8n-observer.js"]
+    environment:
+      N8N_OBSERVER_PORT: 3650
+      N8N_API_URL: http://canonical-n8n:5678
+      N8N_API_KEY: ${CANONICAL_N8N_API_KEY}
+      N8N_BINDING_PATH: /var/lib/alphonse-n8n-binding/binding.json
+      N8N_NODE_METADATA_PATH: /node-metadata/n8n-2.25.7.json
+      N8N_OBSERVER_STATE_PATH: /var/lib/alphonse-n8n-observer/state.json
+      N8N_DIAGNOSTIC_URL: http://kernel:3000/diagnostic/v0/observations
+      N8N_OBSERVATION_SCHEMA: ${N8N_OBSERVATION_SCHEMA}
+      N8N_OBSERVATION_ADAPTER_BINDING: ${N8N_OBSERVATION_ADAPTER_BINDING}
+      N8N_OBSERVER_PRINCIPAL_ID: observer:n8n-runtime
+      N8N_OBSERVATION_GRANT_ID: ${N8N_OBSERVATION_GRANT_ID}
+      N8N_OBSERVATION_KEY_ID: observer-n8n-key-v1
+      N8N_OBSERVATION_SECRET: observer-n8n-secret-with-sufficient-length-v1
+      N8N_OBSERVATION_STREAM_ID: stream:n8n-runtime
+      N8N_OBSERVER_SIGNAL_TOKEN: local-n8n-runtime-signal-token
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
+    ports: ["127.0.0.1:${N8N_OBSERVER_PORT:-43650}:3650"]
+    volumes:
+      - ./packages/n8n-operational-package/node-metadata:/node-metadata:ro
+      - n8n-runtime-binding:/var/lib/alphonse-n8n-binding:ro
+      - n8n-runtime-observer-state:/var/lib/alphonse-n8n-observer
+    depends_on:
+      n8n-runtime-readiness: { condition: service_completed_successfully }
 
   kernel-production:
     profiles: ["portable-trust"]
@@ -618,3 +772,6 @@ volumes:
   promotion-production-data:
   coordinator-data:
   canonical-n8n-data:
+  n8n-runtime-binding:
+  n8n-runtime-observer-state:
+  crm-ledger-observer-state:
