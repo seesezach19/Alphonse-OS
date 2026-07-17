@@ -3,7 +3,7 @@
 ## Scope
 
 V0.1 is a customer-controlled local Docker release. It includes Kernel, Butler, the reference Data Plane, reference
-runtime/adapter components, registry and coordinator source, and migrations through `021_support_coordination.sql`.
+runtime/adapter components, registry and coordinator source, and migrations through `022_grant_authority_application.sql`.
 The one-command installation starts the local customer control plane and reference inventory integration. Registry and
 hosted coordinator deployment require separate customer key enrollment. AWS deployment is not included.
 

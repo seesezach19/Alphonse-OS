@@ -36,7 +36,8 @@
     "018_upgrade_policy_and_repair_verification.sql",
     "019_upgrade_verification_reattestation.sql",
     "020_environment_restore.sql",
-    "021_support_coordination.sql"
+    "021_support_coordination.sql",
+    "022_grant_authority_application.sql"
   ],
   "qualification": [
     "unit",
