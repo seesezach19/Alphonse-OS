@@ -25,7 +25,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through07 = process.argv.includes("--through-07");
+const through08 = process.argv.includes("--through-08");
+const through07 = through08 || process.argv.includes("--through-07");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, env: options.env ?? environment,
@@ -488,7 +489,109 @@ try {
     const prefixAfterRestart = await kernel("/diagnostic/v0/intake-prefix");
     assert.equal(prefixAfterRestart.body.intake_prefix.committed_through,
       prefixBeforeRestart.body.intake_prefix.committed_through);
-    extendedResult = { runtime, requests, ledger };
+    let correlation = null;
+    if (through08) {
+      const registrationId = randomUUID();
+      const registered = await post("/diagnostic/v0/correlation-registrations", {
+        registration_id: registrationId,
+        deployment_id: deployment.deployment_id,
+        workflow_id: "workflow:agency-lab:lead-ingestion",
+        revision_id: extended.revisionId,
+        integration_id: "integration:mock-crm"
+      });
+      assert.equal(registered.response.status, 201, JSON.stringify(registered.body));
+      const registration = registered.body.correlation_registration;
+      assert.equal(registration.registration_id, registrationId);
+      assert.equal(registration.revision_id, extended.revisionId);
+      assert.equal(registration.projector.projector_id, "alphonse.canonical-correlation-projector");
+      assert.match(registration.projector.artifact_digest, /^sha256:[0-9a-f]{64}$/u);
+      assert.match(registration.projector.rules_digest, /^sha256:[0-9a-f]{64}$/u);
+      assert.ok(registration.contract_dependency_digests.includes(deployment.package_artifact_digest));
+
+      const diagnostic = new pg.Client({ connectionString:
+        "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+      await diagnostic.connect();
+      let projectionSettled = false;
+      let projected;
+      try {
+        await diagnostic.query("BEGIN");
+        await diagnostic.query(
+          "SELECT next_position FROM diagnostic_intake_prefixes WHERE installation_id=$1 FOR UPDATE",
+          [tokenBase.installation_id]
+        );
+        const pendingProjection = post("/diagnostic/v0/correlation-projections", {
+          registration_id: registrationId,
+          logical_operation_id: recovered.deliveries[0].logical_operation_id
+        }).then((value) => { projectionSettled = true; return value; });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        assert.equal(projectionSettled, false,
+          "projection cutoff capture must wait on the intake finalization lock");
+        await diagnostic.query("ROLLBACK");
+        projected = await pendingProjection;
+      } finally {
+        await diagnostic.query("ROLLBACK").catch(() => {});
+        await diagnostic.end();
+      }
+      assert.equal(projected.response.status, 201, JSON.stringify(projected.body));
+      const projection = projected.body.correlation_projection;
+      assert.equal(projection.committed_intake_cutoff,
+        prefixAfterRestart.body.intake_prefix.committed_through);
+      assert.equal(projection.revision_number, "1");
+      assert.match(projection.semantic_digest, /^sha256:[0-9a-f]{64}$/u);
+      assert.match(projection.record_digest, /^sha256:[0-9a-f]{64}$/u);
+      assert.equal(projection.semantic_projection.manifests.intake_outcomes.length,
+        Number(projection.committed_intake_cutoff));
+      assert.equal(projection.semantic_projection.manifests.receipts.length, 8);
+      assert.equal(projection.semantic_projection.manifests.schemas.length, 4);
+      assert.equal(projection.semantic_projection.manifests.tokenization_provenance.length, 6);
+      assert.deepEqual(projection.semantic_projection.graph.counts_by_type, {
+        "destination.effect": 2,
+        "destination.request": 2,
+        "runtime.execution": 2,
+        "source.delivery": 2
+      });
+      assert.equal(projection.semantic_projection.graph.nodes.length, 9);
+      assert.equal(projection.semantic_projection.graph.unresolved_relationships.length, 0,
+        JSON.stringify(projection.semantic_projection.graph.unresolved_relationships));
+      const relationships = projection.semantic_projection.graph.edges.map((edge) => edge.relationship);
+      assert.equal(relationships.filter((value) => value === "logical_operation_contains_delivery").length, 2);
+      assert.equal(relationships.filter((value) => value === "delivery_reported_execution").length, 2);
+      assert.equal(relationships.filter((value) => value === "delivery_reported_request").length, 2);
+      assert.equal(relationships.filter((value) => value === "delivery_identity_equals_request_key").length, 2);
+      assert.equal(relationships.filter((value) => value === "request_keys_are_distinct").length, 1);
+      assert.equal(relationships.filter((value) => value === "request_reported_ledger_claim").length, 2);
+      assert.ok(projection.semantic_projection.graph.edges.every((edge) =>
+        edge.supporting_claim_locations.length > 0));
+      assert.ok(projection.semantic_projection.coverage.streams.every((stream) =>
+        stream.coverage_status === "complete_through_high_water" && stream.missing_ranges.length === 0));
+      assert.equal(projection.semantic_projection.coverage.conflicts.length, 0);
+      assert.equal(projection.semantic_projection.coverage.rejections.length, 0);
+      assert.equal(projection.semantic_projection.authority.defect_established, false);
+      assert.equal("projection_id" in projection.semantic_projection, false);
+      assert.equal("created_at" in projection.semantic_projection, false);
+
+      const replay = await post("/diagnostic/v0/correlation-projections", {
+        registration_id: registrationId,
+        logical_operation_id: recovered.deliveries[0].logical_operation_id
+      });
+      assert.equal(replay.response.status, 200, JSON.stringify(replay.body));
+      assert.equal(replay.body.correlation_projection.projection_id, projection.projection_id);
+      assert.equal(replay.body.correlation_projection.semantic_digest, projection.semantic_digest);
+      const read = await kernel(`/diagnostic/v0/correlation-projections/${projection.projection_id}`);
+      assert.equal(read.response.status, 200, JSON.stringify(read.body));
+      assert.equal(read.body.correlation_projection.record_digest, projection.record_digest);
+
+      const immutable = new pg.Client({ connectionString:
+        "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+      await immutable.connect();
+      try {
+        await assert.rejects(immutable.query(
+          "UPDATE diagnostic_correlation_projections SET requested_by='tampered' WHERE projection_id=$1",
+          [projection.projection_id]), /immutable records cannot be updated/u);
+      } finally { await immutable.end(); }
+      correlation = { registration, projection };
+    }
+    extendedResult = { runtime, requests, ledger, correlation };
   }
 
   compose("restart", "customer-ingress-api", "customer-ingress-forwarder", "customer-ingress-reporter");
@@ -506,21 +609,28 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through07
-      ? "bound_runtime_and_separate_crm_observation" : "journaled_duplicate_ingress_observation",
+    schema_version: "0.1.0", ticket: through08 ? "canonical-diagnostic-proof-08"
+      : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
+    status: "passed", completed_capability: through08 ? "immutable_cross_stream_correlation_projection"
+      : through07 ? "bound_runtime_and_separate_crm_observation" : "journaled_duplicate_ingress_observation",
     proven: ["journal_before_forward", "stable_opaque_logical_operation", "distinct_delivery_attempts",
       "independent_forward_and_report_loops", "n8n_context_propagation", "diagnostic_outage_decoupled",
       "tokenization_receipts_cited", "stimulus_has_no_reporting_authority", "accepted_report_replay_recovery",
       "restart_idempotency", "raw_payload_scrubbed", "visible_backlog_and_loss_state",
       ...(through07 ? ["live_runtime_identity_verified", "retained_execution_detail_verified",
         "registered_revision_material_verified", "runtime_binding_grant_readiness_bound",
-        "changed_key_replay_failed_closed", "destination_cannot_write_request_journal"] : [])],
+        "changed_key_replay_failed_closed", "destination_cannot_write_request_journal"] : []),
+      ...(through08 ? ["stable_committed_cutoff_lock", "complete_intake_manifest_frozen",
+        "exact_projection_dependencies_frozen", "canonical_graph_replay_digest",
+        "typed_claim_locations_preserved", "scoped_token_equality_and_inequality",
+        "immutable_projection_record"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
     crm_request_observation_count: extendedResult?.requests.reported_count ?? 0,
     crm_effect_observation_count: extendedResult?.ledger.reported_count ?? 0,
+    correlation_projection_count: extendedResult?.correlation ? 1 : 0,
+    correlation_semantic_digest: extendedResult?.correlation?.projection.semantic_digest ?? null,
     model_requests: 0, worker_run_created: false
   }, null, 2)}\n`);
 } catch (error) {

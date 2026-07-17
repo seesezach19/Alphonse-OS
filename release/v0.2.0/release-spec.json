@@ -64,7 +64,8 @@
     "010_grant_authority_projection.sql",
     "011_canonical_observation_intake.sql",
     "012_tokenization_result_provenance.sql",
-    "013_legacy_runtime_canonical_projection.sql"
+    "013_legacy_runtime_canonical_projection.sql",
+    "014_correlation_projections.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

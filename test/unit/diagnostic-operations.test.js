@@ -22,6 +22,10 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.runtime_event.receive",
     "diagnostic.external_activity_trace.get",
     "diagnostic.runtime_event_conflict.get",
+    "diagnostic.correlation_registration.register",
+    "diagnostic.correlation_registration.get",
+    "diagnostic.correlation_projection.create",
+    "diagnostic.correlation_projection.get",
     "diagnostic.case.report_failure",
     "diagnostic.failure_specification.confirm",
     "diagnostic.reproduction.create",
@@ -146,6 +150,17 @@ test("Runtime Event discovery exposes exact provider-neutral observation semanti
   assert.equal(descriptor.input_schema.additionalProperties, false);
   assert.doesNotMatch(JSON.stringify(descriptor), /n8n/i);
   assert.ok(descriptor.outcomes.includes("event_conflict_preserved"));
+});
+
+test("correlation discovery keeps registration, deterministic projection, and reads explicit", () => {
+  const registration = getDiagnosticOperationDescriptor("diagnostic.correlation_registration.register");
+  assert.equal(registration.effect_class, "immutable_diagnostic_contract_registration");
+  assert.equal(registration.input_schema.additionalProperties, false);
+  const projection = getDiagnosticOperationDescriptor("diagnostic.correlation_projection.create");
+  assert.equal(projection.effect_class, "deterministic_diagnostic_projection");
+  assert.equal(projection.input_schema.additionalProperties, false);
+  assert.ok(projection.outcomes.includes("correlation_nondeterminism_conflict_preserved"));
+  assert.doesNotMatch(JSON.stringify([registration, projection]), /email|company_name|model_similarity/i);
 });
 
 test("revision registration binds every behavior-bearing fingerprint without mutable labels", () => {

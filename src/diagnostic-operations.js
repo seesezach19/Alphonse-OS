@@ -391,6 +391,84 @@ const descriptors = [
     issues: ["RUNTIME_EVENT_CONFLICT_NOT_FOUND"],
     nextOperations: ["diagnostic.external_activity_trace.get"]
   }),
+  {
+    operation_id: "diagnostic.correlation_registration.register",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Bind one exact deployed scope, revision, contract dependency set, and deterministic projector.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner_requester",
+    effect_class: "immutable_diagnostic_contract_registration",
+    idempotency: "registration_identity_and_canonical_registration_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/correlation-registrations" },
+    input_schema: {
+      type: "object",
+      required: ["registration_id", "deployment_id", "workflow_id", "revision_id", "integration_id"],
+      additionalProperties: false,
+      properties: {
+        registration_id: { type: "string", format: "uuid" },
+        deployment_id: { type: "string", format: "uuid" },
+        workflow_id: { type: "string", minLength: 1, maxLength: 160 },
+        revision_id: { type: "string", format: "uuid" },
+        integration_id: { type: "string", minLength: 1, maxLength: 160 }
+      }
+    },
+    output_schema: { type: "object", required: ["correlation_registration"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_customer_owner",
+      "deployment_exists", "exact_agent_revision_exists"],
+    outcomes: ["correlation_registration_created", "correlation_registration_replayed"],
+    issues: ["AUTHENTICATION_REQUIRED", "CORRELATION_INPUT_INVALID",
+      "CORRELATION_REVISION_SCOPE_MISMATCH", "CORRELATION_REGISTRATION_IDENTITY_CONFLICT"],
+    emitted_events: [],
+    next_operations: ["diagnostic.correlation_registration.get", "diagnostic.correlation_projection.create"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.correlation_registration.get",
+    summary: "Inspect one immutable correlation scope and its exact projector and contract dependencies.",
+    path: "/diagnostic/v0/correlation-registrations/{registration_id}",
+    idName: "registration_id",
+    resultKey: "correlation_registration",
+    issues: ["CORRELATION_REGISTRATION_NOT_FOUND"],
+    nextOperations: ["diagnostic.correlation_projection.create"]
+  }),
+  {
+    operation_id: "diagnostic.correlation_projection.create",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Project one immutable cross-stream graph at a stable committed intake cutoff without guessed joins.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner_requester",
+    effect_class: "deterministic_diagnostic_projection",
+    idempotency: "registration_operation_and_stable_committed_cutoff_with_semantic_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/correlation-projections" },
+    input_schema: {
+      type: "object",
+      required: ["registration_id", "logical_operation_id"],
+      additionalProperties: false,
+      properties: {
+        registration_id: { type: "string", format: "uuid" },
+        logical_operation_id: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    output_schema: { type: "object", required: ["correlation_projection"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_customer_owner",
+      "correlation_registration_exists", "committed_intake_prefix_nonempty"],
+    outcomes: ["correlation_projection_created", "correlation_projection_replayed",
+      "correlation_nondeterminism_conflict_preserved"],
+    issues: ["AUTHENTICATION_REQUIRED", "CORRELATION_INPUT_INVALID",
+      "CORRELATION_REGISTRATION_NOT_FOUND", "DIAGNOSTIC_COMMITTED_PREFIX_INCOMPLETE",
+      "CORRELATION_PROJECTION_NONDETERMINISM"],
+    emitted_events: [],
+    next_operations: ["diagnostic.correlation_projection.get"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.correlation_projection.get",
+    summary: "Inspect one immutable deterministic correlation graph and its frozen dependency manifests.",
+    path: "/diagnostic/v0/correlation-projections/{projection_id}",
+    idName: "projection_id",
+    resultKey: "correlation_projection",
+    issues: ["CORRELATION_PROJECTION_NOT_FOUND"]
+  }),
   commandDescriptor({
     operationId: "diagnostic.case.report_failure",
     summary: "Open one authority-free Diagnostic Case from an explicit authenticated failure report.",

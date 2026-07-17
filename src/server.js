@@ -31,6 +31,7 @@ import { createGrantAuthorityService } from "./grant-authority-service.js";
 import { createDiagnosticGrantApplicationService } from "./diagnostic-grant-application-service.js";
 import { createDiagnosticObservationService } from "./diagnostic-observation-service.js";
 import { createDiagnosticTokenizationProofService } from "./diagnostic-tokenization-proof-service.js";
+import { createDiagnosticCorrelationService } from "./diagnostic-correlation-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
 import { createPackageService } from "./package-service.js";
@@ -148,6 +149,7 @@ let diagnosticArtifactStore = null;
 let diagnosticGrantApplicationService = null;
 let diagnosticObservationService = null;
 let diagnosticTokenizationProofService = null;
+let diagnosticCorrelationService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -323,6 +325,22 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
       };
     }
   });
+  diagnosticCorrelationService = createDiagnosticCorrelationService({
+    database: diagnosticDatabase,
+    installationId,
+    environmentId,
+    async resolveDeployment(deploymentId) {
+      const deployment = await deploymentService.getDeployment(deploymentId);
+      const packageVersion = await packageService.getPackageVersion(deployment.package_version_id);
+      return {
+        deployment_id: deployment.deployment_id,
+        package_version_id: packageVersion.package_version_id,
+        package_artifact_digest: packageVersion.artifact_digest,
+        package_manifest_digest: packageVersion.manifest_digest,
+        package_dependency_digest: packageVersion.dependency_digest
+      };
+    }
+  });
 }
 const upgradeService = createUpgradeService(database, identityIntent, packageService, deploymentService,
   installationId, environmentId, dataPlaneReceiptSecret);
@@ -490,6 +508,14 @@ function requireDiagnosticTokenizationProof() {
   return diagnosticTokenizationProofService;
 }
 
+function requireDiagnosticCorrelation() {
+  if (!diagnosticCorrelationService) {
+    throw new KernelError(503, "CORRELATION_PROJECTION_UNAVAILABLE",
+      "Deterministic correlation projection is not configured.");
+  }
+  return diagnosticCorrelationService;
+}
+
 function observationAuthentication(request, body) {
   return body.authentication ?? {
     principal_id: request.headers["x-observation-principal-id"],
@@ -596,7 +622,8 @@ async function route(request, response) {
       grant_authority: grantAuthorityService ? "healthy" : "not_configured",
       diagnostic_grant_receiver: diagnosticGrantApplicationService ? "healthy" : "not_configured",
       canonical_observation_intake: diagnosticObservationService ? "healthy" : "not_configured",
-      tokenization_proof_registry: diagnosticTokenizationProofService ? "healthy" : "not_configured"
+      tokenization_proof_registry: diagnosticTokenizationProofService ? "healthy" : "not_configured",
+      correlation_projection: diagnosticCorrelationService ? "healthy" : "not_configured"
     });
   }
 
@@ -706,6 +733,34 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { observation_receipt: await service.getReceipt(
       pathId(url.pathname, "/diagnostic/v0/observation-receipts/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/correlation-registrations") {
+    const service = requireDiagnosticCorrelation();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.correlation_registration.register");
+    const body = await readJson(request, 64 * 1024);
+    return sendCommandResult(response, await service.register(body, actor.id));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/correlation-registrations\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticCorrelation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { correlation_registration: await service.getRegistration(
+      pathId(url.pathname, "/diagnostic/v0/correlation-registrations/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/correlation-projections") {
+    const service = requireDiagnosticCorrelation();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.correlation_projection.create");
+    const body = await readJson(request, 64 * 1024);
+    return sendCommandResult(response, await service.createProjection(body, actor.id));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/correlation-projections\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticCorrelation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { correlation_projection: await service.getProjection(
+      pathId(url.pathname, "/diagnostic/v0/correlation-projections/")) });
   }
 
   if (request.method === "GET" && url.pathname === "/diagnostic/v0/bootstrap") {
