@@ -7,6 +7,7 @@ RUN npm ci --omit=dev
 
 COPY migrations ./migrations
 COPY diagnostic-migrations ./diagnostic-migrations
+COPY ingress-migrations ./ingress-migrations
 COPY src ./src
 
 RUN mkdir -p /var/lib/alphonse-diagnostics && chown node:node /var/lib/alphonse-diagnostics

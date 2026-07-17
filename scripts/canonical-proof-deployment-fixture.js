@@ -114,6 +114,33 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       }
     }
   };
+  const ingressSourceDeliverySchema = {
+    kind: "schema",
+    export_id: "observation:source.delivery-ingress",
+    contract_version: "0.1.0",
+    content: {
+      type: "object",
+      additionalProperties: false,
+      required: ["delivery_id", "logical_operation_id", "source_identity_token",
+        "delivery_identity_equality_token", "correlation_basis", "mapping_receipt_id",
+        "mapping_journal_sequence", "mapping_journal_record_digest"],
+      properties: {
+        delivery_id: { type: "string", minLength: 1, maxLength: 160 },
+        logical_operation_id: { type: "string", minLength: 1, maxLength: 160 },
+        source_identity_token: { type: "string", minLength: 1, maxLength: 160 },
+        delivery_identity_equality_token: { type: "string", minLength: 1, maxLength: 160 },
+        correlation_basis: { type: "string", enum: ["stable_source_identity_mapping"] },
+        mapping_receipt_id: { type: "string", minLength: 1, maxLength: 160 },
+        mapping_journal_sequence: { type: "string", minLength: 1, maxLength: 32 },
+        mapping_journal_record_digest: { type: "string", minLength: 1, maxLength: 160 }
+      },
+      observation: {
+        observation_type: "source.delivery",
+        allowed_detail_media_types: [],
+        required_correlation_roles: ["logical_operation"]
+      }
+    }
+  };
   const candidate = {
     schema_version: "alphonse.package_candidate.v0.1",
     identity: { package_id: "com.alphonse.canonical-proof", version: "0.1.0",
@@ -124,6 +151,7 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
     exports: [
       sourceDeliverySchema,
       tokenizedSourceDeliverySchema,
+      ingressSourceDeliverySchema,
       { kind: "schema", export_id: "configuration", contract_version: "1.0.0", content: {
         type: "object", required: ["enabled"], properties: { enabled: { type: "boolean" } }
       } },
@@ -251,6 +279,7 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
     package_version_id: packageVersion.package_version_id,
     package_artifact_digest: packageVersion.artifact_digest,
     schema_export: sourceDeliverySchema,
-    tokenized_schema_export: tokenizedSourceDeliverySchema
+    tokenized_schema_export: tokenizedSourceDeliverySchema,
+    ingress_schema_export: ingressSourceDeliverySchema
   };
 }

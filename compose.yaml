@@ -134,6 +134,137 @@ services:
       timeout: 3s
       retries: 20
 
+  customer-ingress-bootstrap:
+    profiles: ["canonical-ingress"]
+    build:
+      context: .
+    command: ["node", "src/customer-ingress-db-bootstrap.js"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql://alphonse:local-development-only@postgres:5432/alphonse_kernel
+      INGRESS_DATABASE_NAME: alphonse_ingress
+      INGRESS_DATABASE_ROLE: alphonse_ingress
+      INGRESS_DATABASE_PASSWORD: local-ingress-only
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  customer-ingress-migrate:
+    profiles: ["canonical-ingress"]
+    build:
+      context: .
+    command: ["node", "src/customer-ingress-migrate.js"]
+    environment:
+      INGRESS_DATABASE_URL: postgresql://alphonse_ingress:local-ingress-only@postgres:5432/alphonse_ingress
+    depends_on:
+      customer-ingress-bootstrap:
+        condition: service_completed_successfully
+
+  canonical-n8n:
+    profiles: ["canonical-ingress"]
+    image: n8nio/n8n@sha256:761374d4eb841b0a22771d6bd68f0e8d827b4979ae4e490045517b13fc1259dd
+    environment:
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_HOST: canonical-n8n
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_ENCRYPTION_KEY: local-canonical-proof-n8n-encryption-key-v1
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+    ports:
+      - "127.0.0.1:${CANONICAL_N8N_PORT:-45678}:5678"
+    volumes:
+      - canonical-n8n-data:/home/node/.n8n
+      - ./packages/n8n-operational-package/workflows:/proof-workflows:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5678/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  customer-ingress-api:
+    profiles: ["canonical-ingress"]
+    build:
+      context: .
+    command: ["node", "src/customer-ingress-server.js"]
+    environment:
+      INGRESS_PORT: 3600
+      INGRESS_DATABASE_URL: postgresql://alphonse_ingress:local-ingress-only@postgres:5432/alphonse_ingress
+      INGRESS_STIMULUS_TOKEN: ${INGRESS_STIMULUS_TOKEN:-local-route-scoped-stimulus-token}
+      INGRESS_OPERATOR_TOKEN: ${INGRESS_OPERATOR_TOKEN:-local-read-only-ingress-operator-token}
+      TOKENIZATION_URL: http://tokenization-service:3500
+      TOKENIZATION_REQUESTER_TOKEN: local-webhook-tokenization-requester-token
+      TOKENIZATION_REQUESTER_PRINCIPAL_ID: observer:webhook-ingress
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
+      INGRESS_INTEGRATION_ID: integration:mock-crm
+      INGRESS_SOURCE_TOKENIZATION_GRANT_ID: ${INGRESS_SOURCE_TOKENIZATION_GRANT_ID}
+      INGRESS_DELIVERY_TOKENIZATION_GRANT_ID: ${INGRESS_DELIVERY_TOKENIZATION_GRANT_ID}
+      INGRESS_SOURCE_BINDING_ID: source-binding:agency-lead-form
+      INGRESS_PAYLOAD_SECRET: local-ingress-payload-encryption-secret-v1
+      INGRESS_MAPPING_SECRET: local-ingress-mapping-receipt-secret-v1
+      INGRESS_RETENTION_CAPACITY_BYTES: 10485760
+    ports:
+      - "127.0.0.1:${INGRESS_PORT:-45600}:3600"
+    depends_on:
+      customer-ingress-migrate:
+        condition: service_completed_successfully
+      tokenization-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3600/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  customer-ingress-forwarder:
+    profiles: ["canonical-ingress"]
+    build:
+      context: .
+    command: ["node", "src/customer-ingress-worker.js"]
+    environment:
+      INGRESS_WORKER_MODE: forwarder
+      INGRESS_WORKER_HEALTH_PORT: 3601
+      INGRESS_DATABASE_URL: postgresql://alphonse_ingress:local-ingress-only@postgres:5432/alphonse_ingress
+      INGRESS_SOURCE_BINDING_ID: source-binding:agency-lead-form
+      INGRESS_PAYLOAD_SECRET: local-ingress-payload-encryption-secret-v1
+      INGRESS_MAPPING_SECRET: local-ingress-mapping-receipt-secret-v1
+      INGRESS_FORWARD_URL: http://canonical-n8n:5678/webhook/agency-lab-lead-ingress
+    depends_on:
+      customer-ingress-migrate:
+        condition: service_completed_successfully
+      canonical-n8n:
+        condition: service_healthy
+
+  customer-ingress-reporter:
+    profiles: ["canonical-ingress"]
+    build:
+      context: .
+    command: ["node", "src/customer-ingress-worker.js"]
+    environment:
+      INGRESS_WORKER_MODE: reporter
+      INGRESS_WORKER_HEALTH_PORT: 3602
+      INGRESS_DATABASE_URL: postgresql://alphonse_ingress:local-ingress-only@postgres:5432/alphonse_ingress
+      INGRESS_SOURCE_BINDING_ID: source-binding:agency-lead-form
+      INGRESS_PAYLOAD_SECRET: local-ingress-payload-encryption-secret-v1
+      INGRESS_MAPPING_SECRET: local-ingress-mapping-receipt-secret-v1
+      INGRESS_DIAGNOSTIC_URL: ${INGRESS_DIAGNOSTIC_URL:-http://127.0.0.1:9/diagnostic/v0/observations}
+      INGRESS_OBSERVER_PRINCIPAL_ID: observer:webhook-ingress
+      INGRESS_OBSERVATION_GRANT_ID: ${INGRESS_OBSERVATION_GRANT_ID}
+      INGRESS_OBSERVATION_KEY_ID: observer-webhook-key-v1
+      INGRESS_OBSERVATION_SECRET: observer-webhook-secret-with-sufficient-length-v1
+      INGRESS_OBSERVATION_STREAM_ID: stream:webhook-ingress-journal
+      INGRESS_OBSERVATION_SCHEMA: ${INGRESS_OBSERVATION_SCHEMA}
+      INGRESS_OBSERVATION_ADAPTER_BINDING: ${INGRESS_OBSERVATION_ADAPTER_BINDING}
+      INGRESS_WORKFLOW_ID: workflow:agency-lab:lead-ingestion
+      INGRESS_INTEGRATION_ID: integration:mock-crm
+      KERNEL_INSTALLATION_ID: 00000000-0000-4000-8000-00000000a001
+      KERNEL_ENVIRONMENT_ID: 00000000-0000-4000-8000-000000000001
+      INGRESS_TEST_CONTROLS_ENABLED: ${INGRESS_TEST_CONTROLS_ENABLED:-false}
+      INGRESS_REPORTER_CRASH_AFTER_ACCEPT_ONCE: ${INGRESS_REPORTER_CRASH_AFTER_ACCEPT_ONCE:-false}
+    depends_on:
+      customer-ingress-migrate:
+        condition: service_completed_successfully
+
   kernel-production:
     profiles: ["portable-trust"]
     build:
@@ -486,3 +617,4 @@ volumes:
   promotion-staging-data:
   promotion-production-data:
   coordinator-data:
+  canonical-n8n-data:

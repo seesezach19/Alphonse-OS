@@ -28,6 +28,7 @@
     "test:canonical-proof:ticket-02": "node scripts/acceptance-canonical-proof-ticket-02.js --expect-blocked",
     "test:canonical-proof:ticket-03": "node scripts/acceptance-canonical-proof-ticket-03.js",
     "test:canonical-proof:ticket-04": "node scripts/acceptance-canonical-proof-ticket-04.js",
+    "test:canonical-proof:ticket-05": "node scripts/acceptance-canonical-proof-ticket-05.js",
     "proof:canonical": "node scripts/acceptance-canonical-proof-ticket-02.js",
     "diagnostic:cli": "node src/diagnostic-cli.js",
     "local:up": "docker compose up --build --wait",

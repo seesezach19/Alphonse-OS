@@ -1,0 +1,37 @@
+{
+  "id": "CanonicalLeadIngress01",
+  "name": "Canonical Proof - Lead Ingress",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "id": "canonical-lead-webhook",
+      "name": "Receive Lead Delivery",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "agency-lab-lead-ingress",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agency-lab-lead-ingress",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "canonical-preserve-context",
+      "name": "Preserve Propagated Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 0],
+      "parameters": {
+        "jsCode": "return [{ json: { accepted: true, body: $json.body, propagated_context: { logical_operation_id: $json.headers['x-alphonse-logical-operation-id'], delivery_id: $json.headers['x-alphonse-delivery-id'], forwarding_id: $json.headers['x-alphonse-forwarding-id'] } } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Receive Lead Delivery": {
+      "main": [[{ "node": "Preserve Propagated Context", "type": "main", "index": 0 }]]
+    }
+  }
+}
