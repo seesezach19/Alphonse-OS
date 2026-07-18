@@ -471,6 +471,9 @@ export function createDiagnosticAssignmentService({
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
         `diagnostic-assignment:${installationId}:${received.sourceEvent.transition_id}`
       ]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        `diagnostic-assignment-case:${installationId}:${resolved.evidencePackage.case_id}`
+      ]);
       const material = await loadDelivery(outboxId, client, true);
       if (material.sourceEventDigest !== received.sourceEventDigest
           || material.deliveryDigest !== received.deliveryDigest) {

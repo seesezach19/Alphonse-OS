@@ -4,8 +4,10 @@ import test from "node:test";
 import { sha256Digest } from "../../src/canonical-json.js";
 import { selectCaseRelevantCoverage } from "../../src/diagnostic-case-coverage.js";
 import {
+  assertEvidenceRevisionStageIdentity,
   buildEvidencePackageMaterial,
   classifyEvidenceMaterialChange,
+  decideInitialAssignmentHandoff,
   DIAGNOSTIC_EVIDENCE_MATERIAL_SCHEMA
 } from "../../src/diagnostic-evidence-revision.js";
 
@@ -152,4 +154,65 @@ test("case coverage excludes unrelated streams and unattributable prefix rejecti
   assert.deepEqual(result.conflicts.map((entry) => entry.conflict_id), ["related"]);
   assert.deepEqual(result.rejections, []);
   assert.deepEqual(result.limitations.map((entry) => entry.limitation), ["selected"]);
+});
+
+test("material revision waits for the initial assignment handoff instead of racing a stale assignment", () => {
+  const policyId = "00000000-0000-4000-8000-000000001321";
+  const transitionId = "00000000-0000-4000-8000-000000001322";
+  const assignmentId = "00000000-0000-4000-8000-000000001323";
+  const frozenTransitions = [{ transition_id: transitionId,
+    payload: { assignment_policy_activation_id: policyId } }];
+  assert.deepEqual(decideInitialAssignmentHandoff({
+    assignmentPolicyActivationId: policyId,
+    frozenTransitions,
+    stageRecord: null,
+    affectedAssignments: []
+  }), {
+    ready: false,
+    status: "awaiting_initial_assignment_handoff",
+    source_transition_id: transitionId
+  });
+  assert.deepEqual(decideInitialAssignmentHandoff({
+    assignmentPolicyActivationId: policyId,
+    frozenTransitions,
+    stageRecord: { source_transition_id: transitionId, outcome: "assignment_created",
+      assignment_id: assignmentId },
+    affectedAssignments: [{ assignment_id: assignmentId, state: "unclaimed" }]
+  }), { ready: true, status: "initial_assignment_created" });
+  assert.deepEqual(decideInitialAssignmentHandoff({
+    assignmentPolicyActivationId: policyId,
+    frozenTransitions,
+    stageRecord: { source_transition_id: transitionId, outcome: "terminal_failure",
+      assignment_id: null },
+    affectedAssignments: []
+  }), { ready: true, status: "initial_assignment_terminal_failure" });
+  assert.throws(() => decideInitialAssignmentHandoff({
+    assignmentPolicyActivationId: policyId,
+    frozenTransitions,
+    stageRecord: { source_transition_id: transitionId, outcome: "assignment_created",
+      assignment_id: assignmentId },
+    affectedAssignments: []
+  }), (error) => error.code === "DIAGNOSTIC_ASSIGNMENT_HANDOFF_INTEGRITY_VIOLATION");
+});
+
+test("every evidence revision requires the exact activated stage artifact and rules", () => {
+  const artifactDigest = digest("evidence-stage");
+  const selectionRulesDigest = digest("selection-rules");
+  const artifactManifest = { schema_version: "stage-manifest", files: ["one"] };
+  const activation = {
+    stage_artifact_digest: artifactDigest,
+    stage_artifact_manifest: artifactManifest,
+    selection_rules_digest: selectionRulesDigest
+  };
+  assert.equal(assertEvidenceRevisionStageIdentity(activation, {
+    artifactDigest, artifactManifest, selectionRulesDigest
+  }), activation);
+  for (const changed of [
+    { artifactDigest: digest("changed-stage"), artifactManifest, selectionRulesDigest },
+    { artifactDigest, artifactManifest: { ...artifactManifest, files: ["two"] }, selectionRulesDigest },
+    { artifactDigest, artifactManifest, selectionRulesDigest: digest("changed-rules") }
+  ]) {
+    assert.throws(() => assertEvidenceRevisionStageIdentity(activation, changed),
+      (error) => error.code === "DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MISMATCH");
+  }
 });

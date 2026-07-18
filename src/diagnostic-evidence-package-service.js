@@ -28,6 +28,8 @@ import {
 import {
   buildEvidencePackageMaterial,
   classifyEvidenceMaterialChange,
+  decideInitialAssignmentHandoff,
+  assertEvidenceRevisionStageIdentity,
   DIAGNOSTIC_EVIDENCE_REVISION_ASSESSMENT_SCHEMA,
   DIAGNOSTIC_EVIDENCE_REVISION_RULES_DIGEST,
   DIAGNOSTIC_REEVALUATION_NOTICE_SCHEMA
@@ -595,12 +597,11 @@ export function createDiagnosticEvidencePackageService({
       environmentId,
       evidencePolicyActivationId: trigger.evidence_policy_activation_id
     });
-    if (policyActivation.stage_artifact_digest !== DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_DIGEST
-        || !same(policyActivation.stage_artifact_manifest, DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MANIFEST)
-        || policyActivation.selection_rules_digest !== DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST) {
-      throw new KernelError(409, "DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MISMATCH",
-        "Activated evidence policy differs from the running deterministic packaging stage.");
-    }
+    assertEvidenceRevisionStageIdentity(policyActivation, {
+      artifactDigest: DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_DIGEST,
+      artifactManifest: DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MANIFEST,
+      selectionRulesDigest: DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST
+    });
     const assignmentPolicyActivation = assignmentPolicyActivationId
       ? await getAssignmentPolicyActivation(pool, {
         installationId, environmentId, assignmentPolicyActivationId
@@ -979,11 +980,34 @@ export function createDiagnosticEvidencePackageService({
        WHERE installation_id=$1 AND evidence_package_id=$2`,
       [installationId, monitor.current_evidence_package_id]
     )).rows[0], artifactStore);
+    const newestPackage = (await pool.query(
+      `SELECT evidence_package_id FROM diagnostic_evidence_packages
+       WHERE installation_id=$1 AND environment_id=$2 AND case_id=$3
+       ORDER BY revision_number DESC LIMIT 1`,
+      [installationId, environmentId, caseId]
+    )).rows[0];
     if (!predecessor.package_material || predecessor.package_material_digest
-        !== monitor.current_package_material_digest) {
+        !== monitor.current_package_material_digest
+        || predecessor.case_id !== caseId || predecessor.environment_id !== environmentId
+        || predecessor.evidence_policy_activation_id !== monitor.evidence_policy_activation_id
+        || predecessor.assignment_policy_activation_id !== monitor.assignment_policy_activation_id
+        || newestPackage?.evidence_package_id !== predecessor.evidence_package_id
+        || predecessor.package_material.scope?.logical_operation_id !== monitor.logical_operation_id
+        || predecessor.package_material.scope?.environment_id !== environmentId
+        || BigInt(monitor.last_assessed_cutoff) < BigInt(predecessor.committed_intake_cutoff)) {
       failIntegrity("DIAGNOSTIC_EVIDENCE_REVISION_MONITOR_INTEGRITY_VIOLATION",
-        "Revision monitor does not bind the exact current package material.");
+        "Revision monitor does not bind the exact current case package, scope, activations, and material.");
     }
+    const policyActivation = await getEvidencePolicyActivation(pool, {
+      installationId,
+      environmentId,
+      evidencePolicyActivationId: monitor.evidence_policy_activation_id
+    });
+    assertEvidenceRevisionStageIdentity(policyActivation, {
+      artifactDigest: DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_DIGEST,
+      artifactManifest: DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MANIFEST,
+      selectionRulesDigest: DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST
+    });
     const projectionResult = await correlationReader.createProjection({
       registration_id: monitor.registration_id,
       logical_operation_id: monitor.logical_operation_id
@@ -1000,11 +1024,6 @@ export function createDiagnosticEvidencePackageService({
     const diagnosticCase = reevaluation.diagnostic_case;
     const trigger = diagnosticCase.trigger;
     const interpretationActivation = await effectReader.getActivation(monitor.interpretation_activation_id);
-    const policyActivation = await getEvidencePolicyActivation(pool, {
-      installationId,
-      environmentId,
-      evidencePolicyActivationId: monitor.evidence_policy_activation_id
-    });
     const observationEvidence = await verifiedObservationEvidence(projection);
     const selection = selectDiagnosticEvidence({
       correlationProjection: projection.semantic_projection,
@@ -1180,6 +1199,21 @@ export function createDiagnosticEvidencePackageService({
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
         [`diagnostic-evidence-revision:${installationId}:${caseId}`]);
       const monitor = await loadRevisionMonitor(caseId, client, true);
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [`diagnostic-assignment-case:${installationId}:${caseId}`]);
+      const assignmentPolicy = monitor.assignment_policy_activation_id
+        ? await getAssignmentPolicyActivation(client, {
+          installationId, environmentId,
+          assignmentPolicyActivationId: monitor.assignment_policy_activation_id
+        }) : null;
+      if (assignmentPolicy
+          && (assignmentPolicy.deployment_id !== candidate.policyActivation.deployment_id
+            || assignmentPolicy.package_version_id !== candidate.policyActivation.package_version_id
+            || assignmentPolicy.package_artifact_digest
+              !== candidate.policyActivation.package_artifact_digest)) {
+        throw new KernelError(409, "DIAGNOSTIC_ASSIGNMENT_POLICY_SCOPE_MISMATCH",
+          "Case-pinned Assignment Policy no longer matches the evidence-policy deployment lineage.");
+      }
       const existingAssessment = (await client.query(
         `SELECT * FROM diagnostic_evidence_revision_assessments
          WHERE case_id=$1 AND candidate_cutoff=$2 AND interpretation_activation_id=$3
@@ -1190,17 +1224,50 @@ export function createDiagnosticEvidencePackageService({
         verifyAssessmentRow(existingAssessment);
         if (existingAssessment.candidate_material_digest !== candidate.material.digest
             || existingAssessment.previous_material_digest
-              !== candidate.predecessor.package_material_digest) {
+              !== candidate.predecessor.package_material_digest
+            || existingAssessment.rules_digest !== DIAGNOSTIC_EVIDENCE_REVISION_RULES_DIGEST
+            || existingAssessment.candidate_projection_id !== candidate.projection.projection_id
+            || existingAssessment.candidate_effect_projection_id
+              !== candidate.reevaluation.diagnostic_effect_projection.effect_projection_id
+            || existingAssessment.candidate_evaluation_id
+              !== candidate.reevaluation.behavior_evaluation.evaluation_id
+            || existingAssessment.assessment_document.candidate_projection.correlation_semantic_digest
+              !== candidate.projection.semantic_digest
+            || existingAssessment.assessment_document.candidate_projection.effect_semantic_digest
+              !== candidate.reevaluation.diagnostic_effect_projection.semantic_digest
+            || existingAssessment.assessment_document.candidate_projection.evaluation_semantic_digest
+              !== candidate.reevaluation.behavior_evaluation.semantic_digest
+            || !same(existingAssessment.material_change_classes, candidate.materialChangeClasses)
+            || existingAssessment.outcome !== (materialChanged ? "revision_created" : "nonmaterial")
+            || (existingAssessment.resulting_evidence_package_id ?? null) !== evidencePackageId) {
           failIntegrity("DIAGNOSTIC_EVIDENCE_REVISION_NONDETERMINISM",
-            "The same predecessor, cutoff, and pinned activations produced a different assessment.");
+            "The same predecessor, cutoff, pinned artifacts, rules, and verified inputs produced a different assessment.");
+        }
+        const existingNotice = existingAssessment.resulting_evidence_package_id ? (await client.query(
+          "SELECT * FROM diagnostic_reevaluation_notices WHERE assessment_id=$1",
+          [existingAssessment.assessment_id]
+        )).rows[0] : null;
+        if (materialChanged) {
+          verifyNoticeRow(existingNotice);
+          const historicalState = existingNotice.known_affected_assignments.some((entry) =>
+            entry.state === "unclaimed") ? "unclaimed" : "none";
+          const expectedAction = assignmentPolicy
+            ? resolveLateEvidenceAssignmentAction(assignmentPolicy.policy_document,
+              candidate.materialChangeClasses, historicalState) : "notify_only";
+          if (existingNotice.recommended_action !== expectedAction
+              || existingAssessment.recommended_action !== expectedAction
+              || !same(existingNotice.notice_document.material_change_classes,
+                candidate.materialChangeClasses)) {
+            failIntegrity("DIAGNOSTIC_EVIDENCE_REVISION_NONDETERMINISM",
+              "Existing assessment notice does not match its exact historical policy decision.");
+          }
+        } else if (existingNotice) {
+          failIntegrity("DIAGNOSTIC_EVIDENCE_REVISION_NONDETERMINISM",
+            "A nonmaterial assessment unexpectedly has a reevaluation notice.");
         }
         await client.query("COMMIT");
         const resulting = existingAssessment.resulting_evidence_package_id
           ? await getPackage(existingAssessment.resulting_evidence_package_id) : packageRowView(candidate.predecessor);
-        const notice = existingAssessment.resulting_evidence_package_id ? (await pool.query(
-          "SELECT * FROM diagnostic_reevaluation_notices WHERE assessment_id=$1",
-          [existingAssessment.assessment_id]
-        )).rows[0] : null;
         const verificationBundle = existingAssessment.resulting_evidence_package_id
           && verificationBundleWriter ? await verificationBundleWriter.sealBundle(
             existingAssessment.resulting_evidence_package_id, STAGE_AUTHOR,
@@ -1209,7 +1276,7 @@ export function createDiagnosticEvidencePackageService({
           status: existingAssessment.outcome,
           evidence_package: resulting,
           assessment: assessmentView(existingAssessment),
-          reevaluation_available: notice ? noticeView(verifyNoticeRow(notice)) : null,
+          reevaluation_available: existingNotice ? noticeView(existingNotice) : null,
           independent_verification_bundle:
             verificationBundle?.result.independent_verification_bundle ?? null
         } };
@@ -1234,17 +1301,38 @@ export function createDiagnosticEvidencePackageService({
         state: row.state,
         state_revision: String(row.state_revision)
       }));
+      const frozenTransitions = (await client.query(
+        `SELECT t.* FROM diagnostic_transitions t
+         WHERE t.installation_id=$1 AND t.aggregate_type='diagnostic_case' AND t.aggregate_id=$2
+           AND t.transition_type='diagnostic.evidence_package.frozen'
+         ORDER BY t.diagnostic_sequence`, [installationId, caseId]
+      )).rows;
+      const initialStage = frozenTransitions.length === 1 ? (await client.query(
+        `SELECT * FROM diagnostic_assignment_stage_records WHERE source_transition_id=$1`,
+        [frozenTransitions[0].transition_id]
+      )).rows[0] ?? null : null;
+      const assignmentHandoff = decideInitialAssignmentHandoff({
+        assignmentPolicyActivationId: monitor.assignment_policy_activation_id,
+        frozenTransitions,
+        stageRecord: initialStage,
+        affectedAssignments
+      });
+      if (!assignmentHandoff.ready) {
+        await client.query("COMMIT");
+        return { replayed: true, result: {
+          status: assignmentHandoff.status,
+          evidence_package: packageRowView(candidate.predecessor),
+          assessment: null,
+          reevaluation_available: null,
+          assignment_handoff: assignmentHandoff
+        } };
+      }
       const replaceableRows = affectedRows.filter((row) => row.state === "unclaimed");
       if (replaceableRows.length > 1) {
         failIntegrity("DIAGNOSTIC_ASSIGNMENT_REPLACEMENT_CARDINALITY_VIOLATION",
           "One Diagnostic Case cannot have multiple simultaneously unclaimed assignments.");
       }
       const replaceable = replaceableRows[0] ?? null;
-      const assignmentPolicy = monitor.assignment_policy_activation_id
-        ? await getAssignmentPolicyActivation(client, {
-          installationId, environmentId,
-          assignmentPolicyActivationId: monitor.assignment_policy_activation_id
-        }) : null;
       const recommendedAction = materialChanged && assignmentPolicy
         ? resolveLateEvidenceAssignmentAction(assignmentPolicy.policy_document,
           candidate.materialChangeClasses, replaceable?.state ?? "none") : "notify_only";

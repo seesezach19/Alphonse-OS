@@ -145,7 +145,7 @@ function verifyStageArchive(entry, expectedDigest) {
   "Assignment stage archive omits a required semantic source or migration.");
 }
 
-function verifyNeutralPolicy(policy) {
+export function verifyNeutralPolicy(policy) {
   const baseFields = ["schema_version", "policy_id", "instruction", "output_schema",
     "required_passport_class", "required_worker_capabilities", "prohibitions", "model_requirements",
     "runtime_requirements", "isolation", "mounts", "network", "resources", "assignment_ttl_seconds",

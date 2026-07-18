@@ -11,6 +11,7 @@ import { buildDiagnosticEffectProjection, COUNT_BY_CORRELATION_RULES_DIGEST,
 import { DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST, selectDiagnosticEvidence } from "./selection.js";
 import { buildEvidencePackageMaterial, classifyEvidenceMaterialChange,
   resolveLateEvidenceAssignmentAction, REVISION_RULES_DIGEST } from "./revision.js";
+import { verifyNeutralPolicy } from "./assignment.js";
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
 const BUNDLE_SCHEMA = "alphonse.independent-diagnostic-verification-bundle.v0.1";
@@ -697,6 +698,45 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
     && policy.selection_rules_digest === DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST
     && same(calculateRetentionRequirements(policy.retention_policy), policy.retention_requirements),
   "VERIFIER_EVIDENCE_POLICY_INTEGRITY_VIOLATION", "Evidence policy activation does not verify.");
+  const assignmentPolicy = published.assignment_policy_activation;
+  const assignmentPolicyExport = published.assignment_policy_export;
+  if (assignmentPolicy) {
+    assert(assignmentPolicyExport
+      && sha256Digest(assignmentPolicy.activation_document) === assignmentPolicy.activation_digest
+      && sha256Digest(assignmentPolicy.policy_document) === assignmentPolicy.policy_digest
+      && sha256Digest(assignmentPolicy.policy_document.instruction)
+        === assignmentPolicy.instruction_digest
+      && sha256Digest(assignmentPolicy.policy_document.output_schema)
+        === assignmentPolicy.output_schema_digest
+      && sha256Digest(assignmentPolicy.stage_artifact_manifest)
+        === assignmentPolicy.stage_artifact_digest
+      && assignmentPolicy.activation_document.assignment_policy.export_digest
+        === assignmentPolicy.policy_digest
+      && assignmentPolicy.activation_document.assignment_policy.export_id
+        === assignmentPolicy.policy_export_id
+      && assignmentPolicy.deployment_id === policy.deployment_id
+      && assignmentPolicy.package_version_id === policy.package_version_id
+      && assignmentPolicy.package_artifact_digest === policy.package_artifact_digest
+      && assignmentPolicyExport.deployment_id === assignmentPolicy.deployment_id
+      && assignmentPolicyExport.package_version_id === assignmentPolicy.package_version_id
+      && assignmentPolicyExport.package_artifact_digest === assignmentPolicy.package_artifact_digest
+      && assignmentPolicyExport.export_record.kind === "diagnostic_assignment_policy"
+      && ["0.1.0", "0.2.0"].includes(assignmentPolicyExport.export_record.contract_version)
+      && assignmentPolicyExport.export_record.export_id === assignmentPolicy.policy_export_id
+      && sha256Digest(assignmentPolicyExport.export_record.content) === assignmentPolicy.policy_digest
+      && same(assignmentPolicyExport.export_record.content, assignmentPolicy.policy_document),
+    "VERIFIER_ASSIGNMENT_POLICY_SCOPE_MISMATCH",
+    "Assignment policy is not the exact deployment-local policy bound to evidence selection.");
+    verifyNeutralPolicy(assignmentPolicy.policy_document);
+  } else {
+    assert(assignmentPolicyExport === null,
+      "VERIFIER_ASSIGNMENT_POLICY_SCOPE_MISMATCH",
+      "Assignment policy export exists without one exact activation.");
+  }
+  assert((published.evidence_package.assignment_policy_activation_id ?? null)
+      === (assignmentPolicy?.assignment_policy_activation_id ?? null),
+    "VERIFIER_ASSIGNMENT_POLICY_SCOPE_MISMATCH",
+    "Evidence package does not bind the independently verified Assignment Policy activation.");
 
   const accepted = verifyAcceptedInputs(bundle);
   const outcomes = verifyOutcomeMaterial(bundle, accepted.acceptedReceiptPositions);
@@ -997,22 +1037,7 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
       predecessorPackage.package_material, packageMaterial.document);
     const assessment = published.evidence_revision_assessment;
     const notice = published.reevaluation_notice;
-    const assignmentPolicy = published.assignment_policy_activation;
-    const assignmentPolicyExport = published.assignment_policy_export;
     assert(assessment && notice
-      && (!assignmentPolicy || (assignmentPolicyExport
-        && sha256Digest(assignmentPolicy.activation_document) === assignmentPolicy.activation_digest
-        && sha256Digest(assignmentPolicy.policy_document) === assignmentPolicy.policy_digest
-        && sha256Digest(assignmentPolicy.stage_artifact_manifest)
-          === assignmentPolicy.stage_artifact_digest
-        && assignmentPolicy.activation_document.assignment_policy.export_digest
-          === assignmentPolicy.policy_digest
-        && assignmentPolicyExport.deployment_id === assignmentPolicy.deployment_id
-        && assignmentPolicyExport.package_version_id === assignmentPolicy.package_version_id
-        && assignmentPolicyExport.package_artifact_digest === assignmentPolicy.package_artifact_digest
-        && assignmentPolicyExport.export_record.export_id === assignmentPolicy.policy_export_id
-        && sha256Digest(assignmentPolicyExport.export_record.content) === assignmentPolicy.policy_digest
-        && same(assignmentPolicyExport.export_record.content, assignmentPolicy.policy_document)))
       && packageRow.assignment_policy_activation_id
         === (assignmentPolicy?.assignment_policy_activation_id ?? null)
       && sha256Digest(assessment.candidate_material) === assessment.candidate_material_digest

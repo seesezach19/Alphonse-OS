@@ -37,6 +37,20 @@ export const DIAGNOSTIC_EVIDENCE_REVISION_RULES = Object.freeze({
 export const DIAGNOSTIC_EVIDENCE_REVISION_RULES_DIGEST =
   sha256Digest(DIAGNOSTIC_EVIDENCE_REVISION_RULES);
 
+export function assertEvidenceRevisionStageIdentity(activation, {
+  artifactDigest,
+  artifactManifest,
+  selectionRulesDigest
+}) {
+  if (activation?.stage_artifact_digest !== artifactDigest
+      || canonicalize(activation?.stage_artifact_manifest) !== canonicalize(artifactManifest)
+      || activation?.selection_rules_digest !== selectionRulesDigest) {
+    throw new KernelError(409, "DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MISMATCH",
+      "Case-pinned evidence policy differs from the running deterministic evidence stage.");
+  }
+  return activation;
+}
+
 function same(left, right) {
   return canonicalize(left) === canonicalize(right);
 }
@@ -204,4 +218,42 @@ export function classifyEvidenceMaterialChange(previous, candidate, {
       "Package material changed without an exact closed material-change classification.");
   }
   return [...changes].sort();
+}
+
+export function decideInitialAssignmentHandoff({
+  assignmentPolicyActivationId,
+  frozenTransitions,
+  stageRecord,
+  affectedAssignments
+}) {
+  if (!assignmentPolicyActivationId) return { ready: true, status: "not_assignment_eligible" };
+  if (!Array.isArray(frozenTransitions) || frozenTransitions.length !== 1) {
+    throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_HANDOFF_INTEGRITY_VIOLATION",
+      "An assignment-eligible case must have one exact frozen-package source transition.");
+  }
+  const frozen = frozenTransitions[0];
+  if (frozen.payload?.assignment_policy_activation_id !== assignmentPolicyActivationId) {
+    throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_HANDOFF_INTEGRITY_VIOLATION",
+      "Frozen-package assignment intent does not bind the case-pinned Assignment Policy.");
+  }
+  if (!stageRecord) {
+    return {
+      ready: false,
+      status: "awaiting_initial_assignment_handoff",
+      source_transition_id: frozen.transition_id
+    };
+  }
+  if (stageRecord.source_transition_id !== frozen.transition_id) {
+    throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_HANDOFF_INTEGRITY_VIOLATION",
+      "Initial Assignment stage outcome does not bind the frozen-package source transition.");
+  }
+  if (stageRecord.outcome === "terminal_failure") {
+    return { ready: true, status: "initial_assignment_terminal_failure" };
+  }
+  if (stageRecord.outcome !== "assignment_created" || !stageRecord.assignment_id
+      || !affectedAssignments.some((entry) => entry.assignment_id === stageRecord.assignment_id)) {
+    throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_HANDOFF_INTEGRITY_VIOLATION",
+      "Initial Assignment stage outcome does not resolve to its immutable case assignment.");
+  }
+  return { ready: true, status: "initial_assignment_created" };
 }

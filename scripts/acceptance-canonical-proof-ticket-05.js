@@ -1476,6 +1476,28 @@ try {
               assert.equal(rejectedNotice.status, 1, rejectedNotice.stderr);
               assert.equal(rejectedNotice.report.failure.code,
                 "VERIFIER_EVIDENCE_REVISION_POLICY_MISMATCH");
+              const substitutedAssignmentPolicy = structuredClone(revisionBundle);
+              const substitutedPublished = substitutedAssignmentPolicy.bundle
+                .published_outputs_to_compare;
+              const substitutedActivation = substitutedPublished.assignment_policy_activation;
+              const substitutedExport = substitutedPublished.assignment_policy_export;
+              const substitutedDeploymentId = randomUUID();
+              substitutedActivation.deployment_id = substitutedDeploymentId;
+              substitutedActivation.activation_document.deployment_id = substitutedDeploymentId;
+              substitutedActivation.activation_digest = sha256Digest(
+                substitutedActivation.activation_document);
+              substitutedExport.deployment_id = substitutedDeploymentId;
+              substitutedPublished.reevaluation_notice.notice_document.policy.activation_digest =
+                substitutedActivation.activation_digest;
+              substitutedPublished.reevaluation_notice.notice_digest = sha256Digest(
+                substitutedPublished.reevaluation_notice.notice_document);
+              resealVerificationBundle(substitutedAssignmentPolicy);
+              const rejectedAssignmentPolicy = await runOfflineVerifier({ imageTag: verifierImage,
+                imageDigest: verifierImageDigest, verificationBundle: substitutedAssignmentPolicy,
+                label: "revision-assignment-policy-scope" });
+              assert.equal(rejectedAssignmentPolicy.status, 1, rejectedAssignmentPolicy.stderr);
+              assert.equal(rejectedAssignmentPolicy.report.failure.code,
+                "VERIFIER_ASSIGNMENT_POLICY_SCOPE_MISMATCH");
               const changedPredecessor = structuredClone(revisionBundle);
               changedPredecessor.bundle.independent_inputs.predecessor_verification.artifact
                 .bundle.target.committed_intake_cutoff = "999999";
@@ -1512,7 +1534,7 @@ try {
               } finally { await revisionDb.end(); }
             }
             independentVerification = { verifierImageDigest, report: valid.report,
-              adversarial_cases: through13 ? 15 : through12 ? 13 : 9,
+              adversarial_cases: through13 ? 16 : through12 ? 13 : 9,
               physical_reorder_verified: true };
           }
         }
