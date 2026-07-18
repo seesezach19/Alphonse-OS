@@ -1,0 +1,34 @@
+{
+  "schema_version": "alphonse.codex-etl-smoke.answer-key.v0.1",
+  "case_id": "ETL-CURRENCY-001",
+  "fault_class": "universal_currency_exponent_assumption",
+  "root_cause": "The normalization transform applies exponent 2 to every minor-unit amount instead of resolving the currency-specific exponent from the declared source contract.",
+  "expected": {
+    "diagnosis_class": "currency_scale_contract_mismatch",
+    "workflow_status": "succeeded",
+    "affected_currencies": ["JPY", "KWD"],
+    "unaffected_currencies": ["USD"],
+    "source_representation": "minor_units",
+    "suspected_component": "normalization_transform",
+    "applied_exponent": 2,
+    "expected_exponents": [
+      { "currency": "USD", "exponent": 2 },
+      { "currency": "JPY", "exponent": 0 },
+      { "currency": "KWD", "exponent": 3 }
+    ],
+    "required_citation_pointers": [
+      "/source_observation/received_batch/contract",
+      "/workflow_observation/lifecycle_claim",
+      "/destination_observation/committed_load/payload/currency_totals",
+      "/reconciliation_observation/comparisons"
+    ],
+    "required_investigations": [
+      "inspect_currency_scale_derivation",
+      "replay_currency_scale_matrix"
+    ]
+  },
+  "prohibited_worker_literals": [
+    "universal_currency_exponent_assumption",
+    "applies exponent 2 to every minor-unit amount"
+  ]
+}

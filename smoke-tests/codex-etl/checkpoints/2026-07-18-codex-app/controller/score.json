@@ -1,0 +1,69 @@
+{
+  "schema_version": "alphonse.codex-etl-smoke.score.v0.1",
+  "case_id": "ETL-CURRENCY-001",
+  "passed": false,
+  "score": 14,
+  "maximum_score": 15,
+  "criteria": [
+    {
+      "criterion_id": "assignment-bound",
+      "passed": true
+    },
+    {
+      "criterion_id": "evidence-bound",
+      "passed": true
+    },
+    {
+      "criterion_id": "diagnosis-class",
+      "passed": true
+    },
+    {
+      "criterion_id": "workflow-status",
+      "passed": true
+    },
+    {
+      "criterion_id": "affected-currencies",
+      "passed": true
+    },
+    {
+      "criterion_id": "unaffected-currencies",
+      "passed": true
+    },
+    {
+      "criterion_id": "source-representation",
+      "passed": true
+    },
+    {
+      "criterion_id": "component-localization",
+      "passed": true
+    },
+    {
+      "criterion_id": "applied-exponent",
+      "passed": true
+    },
+    {
+      "criterion_id": "currency-exponents",
+      "passed": true
+    },
+    {
+      "criterion_id": "citations-resolve",
+      "passed": true
+    },
+    {
+      "criterion_id": "required-evidence-covered",
+      "passed": false
+    },
+    {
+      "criterion_id": "uncertainty-preserved",
+      "passed": true
+    },
+    {
+      "criterion_id": "investigation-bounded",
+      "passed": true
+    },
+    {
+      "criterion_id": "no-actions",
+      "passed": true
+    }
+  ]
+}

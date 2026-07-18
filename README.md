@@ -248,6 +248,29 @@ npm run test:v0.2-ticket-12
 
 This attaches a distinct customer-controlled Diagnostic Worker to exact confirmed evidence. Its immutable proposals may be accepted, rejected, or ignored for usefulness, but never change failure truth or gain repair, verification, promotion, or target authority. Provider credentials remain outside Alphonse. See [docs/optional-model-assisted-diagnosis.md](docs/optional-model-assisted-diagnosis.md).
 
+### Codex + n8n blind ETL smoke lab
+
+The host smoke lab runs a real pinned n8n settlement ETL against a disposable local warehouse, proves a successful
+committed load with currency-specific semantic corruption, and packages only bounded evidence for a blind diagnostic
+worker. The workflow source, controller answer key, repository source, and repair authority remain outside the worker
+package.
+
+```powershell
+npm run smoke:codex-etl
+npm run smoke:codex-etl:app -- ../ALPHONSE_CODEX_ETL_BLIND_WORKER
+```
+
+Open only the exported sibling directory in the Codex app and ask Codex to follow `PROMPT.md`. An authenticated host
+Codex CLI can instead run the same package ephemerally with `npm run smoke:codex-etl:codex`. The scorer validates exact
+assignment/evidence binding, structured diagnostic fields, resolvable citations, preserved uncertainty, bounded
+investigation, and zero actions; it does not classify free prose.
+
+The recorded 2026-07-18 Codex app checkpoint correctly diagnosed the hidden currency-scale defect from blind evidence.
+It received 14/15 and formal `passed: false` only because the original hidden rubric required two preferred exact JSON
+Pointers even though all five supplied citations resolved and supported the diagnosis. That result remains unchanged as
+an evaluator-brittleness finding; future rubrics should precommit typed evidence roles and multiple admissible stable
+claim IDs rather than one preferred reasoning path. See [smoke-tests/codex-etl/README.md](smoke-tests/codex-etl/README.md).
+
 V0.2 reproducible headless release:
 
 ```powershell

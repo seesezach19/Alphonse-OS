@@ -1,0 +1,232 @@
+{
+  "schema_version": "alphonse.codex-etl-smoke.evidence.v0.1",
+  "case": {
+    "case_id": "ETL-CURRENCY-001",
+    "title": "Partner settlement totals disagree after a successful ETL load",
+    "objective": "Load exact currency-denominated settlement facts without changing their declared amount meaning."
+  },
+  "source_observation": {
+    "observer": "fixture-intake-journal",
+    "received_batch": {
+      "batch_id": "PARTNER-SETTLEMENT-2026-07-17-A",
+      "source": {
+        "partner_id": "partner:harbor-payments",
+        "export_id": "export:2026-07-17:closing",
+        "generated_at": "2026-07-18T01:15:00.000Z"
+      },
+      "contract": {
+        "name": "partner-settlement-export",
+        "version": "3.1.0",
+        "amount_representation": "minor_units",
+        "currency_metadata": [
+          {
+            "currency": "USD",
+            "minor_unit_exponent": 2
+          },
+          {
+            "currency": "JPY",
+            "minor_unit_exponent": 0
+          },
+          {
+            "currency": "KWD",
+            "minor_unit_exponent": 3
+          }
+        ]
+      },
+      "records": [
+        {
+          "transaction_id": "settle-usd-001",
+          "account_id": "merchant:northwind",
+          "settlement_date": "2026-07-17",
+          "currency": "USD",
+          "amount_minor": 12550
+        },
+        {
+          "transaction_id": "settle-usd-002",
+          "account_id": "merchant:northwind",
+          "settlement_date": "2026-07-17",
+          "currency": "USD",
+          "amount_minor": 7450
+        },
+        {
+          "transaction_id": "settle-jpy-001",
+          "account_id": "merchant:northwind",
+          "settlement_date": "2026-07-17",
+          "currency": "JPY",
+          "amount_minor": 12000
+        },
+        {
+          "transaction_id": "settle-jpy-002",
+          "account_id": "merchant:northwind",
+          "settlement_date": "2026-07-17",
+          "currency": "JPY",
+          "amount_minor": 8000
+        },
+        {
+          "transaction_id": "settle-kwd-001",
+          "account_id": "merchant:northwind",
+          "settlement_date": "2026-07-17",
+          "currency": "KWD",
+          "amount_minor": 13500
+        },
+        {
+          "transaction_id": "settle-kwd-002",
+          "account_id": "merchant:northwind",
+          "settlement_date": "2026-07-17",
+          "currency": "KWD",
+          "amount_minor": 6500
+        }
+      ]
+    },
+    "batch_digest": "sha256:36bb58a973e79d96665b38fc15fc34ea4471a6cd0bdf82ef4e563133360200fc"
+  },
+  "workflow_observation": {
+    "provider": "n8n",
+    "runtime_version": "2.25.7",
+    "workflow_id": "PartnerSettlementEtl01",
+    "workflow_name": "Partner Settlement ETL",
+    "workflow_material_digest": "sha256:d4608153742510c1d5edaaa959c4996754e533045dd0aa125dede1fb1d3ff89a",
+    "external_execution_id": "1",
+    "lifecycle_claim": "succeeded",
+    "webhook_http_status": 200,
+    "webhook_response_digest": "sha256:61b2e2f9ad1f99bb05224e0d871cf18bd7cec87300f9702cc3ce14f473263c08"
+  },
+  "destination_observation": {
+    "observer": "mock-warehouse-ledger",
+    "system": "settlement_warehouse",
+    "committed_load": {
+      "receipt": {
+        "receipt_id": "b2e3c35e-d016-4db3-8267-c57a2a47cdc5",
+        "status": "committed",
+        "batch_id": "PARTNER-SETTLEMENT-2026-07-17-A",
+        "execution_id": "1",
+        "row_count": 6,
+        "payload_digest": "sha256:fed84594d58f63154ed244a48a02e718f1650c598b3c9c053c164c761a7a27ff",
+        "committed_at": "2026-07-18T23:16:07.704Z"
+      },
+      "payload": {
+        "batch_id": "PARTNER-SETTLEMENT-2026-07-17-A",
+        "execution_id": "1",
+        "source_contract_version": "3.1.0",
+        "transform_revision": "settlement-normalizer-v3",
+        "normalized_rows": [
+          {
+            "transaction_id": "settle-usd-001",
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "USD",
+            "amount_major": 125.5
+          },
+          {
+            "transaction_id": "settle-usd-002",
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "USD",
+            "amount_major": 74.5
+          },
+          {
+            "transaction_id": "settle-jpy-001",
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "JPY",
+            "amount_major": 120
+          },
+          {
+            "transaction_id": "settle-jpy-002",
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "JPY",
+            "amount_major": 80
+          },
+          {
+            "transaction_id": "settle-kwd-001",
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "KWD",
+            "amount_major": 135
+          },
+          {
+            "transaction_id": "settle-kwd-002",
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "KWD",
+            "amount_major": 65
+          }
+        ],
+        "currency_totals": [
+          {
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "JPY",
+            "amount_major_total": 200,
+            "transaction_count": 2
+          },
+          {
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "KWD",
+            "amount_major_total": 200,
+            "transaction_count": 2
+          },
+          {
+            "account_id": "merchant:northwind",
+            "settlement_date": "2026-07-17",
+            "currency": "USD",
+            "amount_major_total": 200,
+            "transaction_count": 2
+          }
+        ]
+      }
+    }
+  },
+  "reconciliation_observation": {
+    "rule_id": "settlement-currency-total-reconciliation-v2",
+    "status": "failed",
+    "comparisons": [
+      {
+        "account_id": "merchant:northwind",
+        "settlement_date": "2026-07-17",
+        "currency": "JPY",
+        "source_minor_total": 20000,
+        "contract_exponent": 0,
+        "expected_major_total": 20000,
+        "observed_major_total": 200,
+        "delta_major": -19800,
+        "status": "mismatched"
+      },
+      {
+        "account_id": "merchant:northwind",
+        "settlement_date": "2026-07-17",
+        "currency": "KWD",
+        "source_minor_total": 20000,
+        "contract_exponent": 3,
+        "expected_major_total": 20,
+        "observed_major_total": 200,
+        "delta_major": 180,
+        "status": "mismatched"
+      },
+      {
+        "account_id": "merchant:northwind",
+        "settlement_date": "2026-07-17",
+        "currency": "USD",
+        "source_minor_total": 20000,
+        "contract_exponent": 2,
+        "expected_major_total": 200,
+        "observed_major_total": 200,
+        "delta_major": 0,
+        "status": "matched"
+      }
+    ]
+  },
+  "evidence_limits": [
+    "The worker is not assigned n8n workflow source or node configuration.",
+    "The observations establish the source contract, successful load, committed values, and reconciliation result.",
+    "The exact implementation statement responsible for normalization is not directly observed."
+  ],
+  "authority": {
+    "diagnosis": "permitted",
+    "repair": "not_granted",
+    "workflow_mutation": "not_granted",
+    "external_effects": "not_granted"
+  }
+}

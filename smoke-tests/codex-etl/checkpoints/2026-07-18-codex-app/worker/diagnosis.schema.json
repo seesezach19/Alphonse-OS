@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "assignment_id",
+    "evidence_digest",
+    "diagnosis_class",
+    "confidence",
+    "observed_behavior",
+    "mechanism",
+    "evidence_citations",
+    "uncertainties",
+    "recommended_investigations",
+    "actions_taken"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "alphonse.codex-etl-smoke.diagnosis.v0.1"
+    },
+    "assignment_id": { "type": "string", "format": "uuid" },
+    "evidence_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "diagnosis_class": {
+      "type": "string",
+      "enum": [
+        "currency_scale_contract_mismatch",
+        "aggregation_partition_error",
+        "duplicate_records",
+        "source_data_corruption",
+        "insufficient_evidence"
+      ]
+    },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "observed_behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow_status", "affected_currencies", "unaffected_currencies"],
+      "properties": {
+        "workflow_status": {
+          "type": "string",
+          "enum": ["succeeded", "failed", "unknown"]
+        },
+        "affected_currencies": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z]{3}$" }
+        },
+        "unaffected_currencies": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z]{3}$" }
+        }
+      }
+    },
+    "mechanism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_representation",
+        "suspected_component",
+        "applied_exponent",
+        "expected_exponents"
+      ],
+      "properties": {
+        "source_representation": {
+          "type": "string",
+          "enum": ["minor_units", "major_units", "unknown"]
+        },
+        "suspected_component": {
+          "type": "string",
+          "enum": [
+            "normalization_transform",
+            "aggregation_transform",
+            "warehouse_loader",
+            "source_export",
+            "not_established"
+          ]
+        },
+        "applied_exponent": { "type": ["integer", "null"], "minimum": 0, "maximum": 6 },
+        "expected_exponents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["currency", "exponent"],
+            "properties": {
+              "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+              "exponent": { "type": "integer", "minimum": 0, "maximum": 6 }
+            }
+          }
+        }
+      }
+    },
+    "evidence_citations": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "artifact", "pointer"],
+        "properties": {
+          "claim": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "artifact": { "type": "string", "const": "evidence.json" },
+          "pointer": { "type": "string", "pattern": "^/" }
+        }
+      }
+    },
+    "uncertainties": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    },
+    "recommended_investigations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "inspect_currency_scale_derivation",
+          "replay_currency_scale_matrix",
+          "quarantine_unknown_currency_metadata",
+          "inspect_aggregation_partition_keys",
+          "inspect_warehouse_commit_contract"
+        ]
+      }
+    },
+    "actions_taken": {
+      "type": "array",
+      "maxItems": 0,
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -4,6 +4,7 @@ node_modules/
 .env.*
 !.env.example
 .scratch/diagnosis-analysis.json
+.smoke/
 coverage/
 dist/
 *.log

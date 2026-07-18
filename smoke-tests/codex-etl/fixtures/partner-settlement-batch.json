@@ -1,0 +1,62 @@
+{
+  "batch_id": "PARTNER-SETTLEMENT-2026-07-17-A",
+  "source": {
+    "partner_id": "partner:harbor-payments",
+    "export_id": "export:2026-07-17:closing",
+    "generated_at": "2026-07-18T01:15:00.000Z"
+  },
+  "contract": {
+    "name": "partner-settlement-export",
+    "version": "3.1.0",
+    "amount_representation": "minor_units",
+    "currency_metadata": [
+      { "currency": "USD", "minor_unit_exponent": 2 },
+      { "currency": "JPY", "minor_unit_exponent": 0 },
+      { "currency": "KWD", "minor_unit_exponent": 3 }
+    ]
+  },
+  "records": [
+    {
+      "transaction_id": "settle-usd-001",
+      "account_id": "merchant:northwind",
+      "settlement_date": "2026-07-17",
+      "currency": "USD",
+      "amount_minor": 12550
+    },
+    {
+      "transaction_id": "settle-usd-002",
+      "account_id": "merchant:northwind",
+      "settlement_date": "2026-07-17",
+      "currency": "USD",
+      "amount_minor": 7450
+    },
+    {
+      "transaction_id": "settle-jpy-001",
+      "account_id": "merchant:northwind",
+      "settlement_date": "2026-07-17",
+      "currency": "JPY",
+      "amount_minor": 12000
+    },
+    {
+      "transaction_id": "settle-jpy-002",
+      "account_id": "merchant:northwind",
+      "settlement_date": "2026-07-17",
+      "currency": "JPY",
+      "amount_minor": 8000
+    },
+    {
+      "transaction_id": "settle-kwd-001",
+      "account_id": "merchant:northwind",
+      "settlement_date": "2026-07-17",
+      "currency": "KWD",
+      "amount_minor": 13500
+    },
+    {
+      "transaction_id": "settle-kwd-002",
+      "account_id": "merchant:northwind",
+      "settlement_date": "2026-07-17",
+      "currency": "KWD",
+      "amount_minor": 6500
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": "alphonse.codex-etl-smoke.assignment.v0.1",
+  "assignment_id": "9ed1cc5e-fc82-4805-9129-11736dcc62e6",
+  "case_id": "ETL-CURRENCY-001",
+  "evidence_file": "evidence.json",
+  "evidence_digest": "sha256:1c20580515b4f985fff1cf353bb06ed409d37d56a9a163674a981fad3564c307",
+  "diagnosis_schema_file": "diagnosis.schema.json",
+  "instruction": "Diagnose the assigned ETL discrepancy from evidence only. Preserve uncertainty and take no action.",
+  "authority": {
+    "diagnosis": "permitted",
+    "repair": "not_granted",
+    "workflow_mutation": "not_granted",
+    "external_effects": "not_granted"
+  }
+}

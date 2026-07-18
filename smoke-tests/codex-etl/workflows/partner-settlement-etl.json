@@ -1,0 +1,69 @@
+{
+  "id": "PartnerSettlementEtl01",
+  "name": "Partner Settlement ETL",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "id": "partner-settlement-webhook",
+      "name": "Receive Settlement Batch",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "partner-settlement-etl",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "partner-settlement-etl",
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize-settlement-facts",
+      "name": "Normalize Settlement Facts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 0],
+      "parameters": {
+        "jsCode": "const batch = $json.body;\nif (!batch || !Array.isArray(batch.records) || !batch.contract) throw new Error('Settlement batch is invalid');\nconst normalizedRows = batch.records.map((row) => ({\n  transaction_id: row.transaction_id,\n  account_id: row.account_id,\n  settlement_date: row.settlement_date,\n  currency: row.currency,\n  amount_major: Number((row.amount_minor / 100).toFixed(3))\n}));\nconst totals = new Map();\nfor (const row of normalizedRows) {\n  const key = [row.account_id, row.settlement_date, row.currency].join('|');\n  const current = totals.get(key) ?? { account_id: row.account_id, settlement_date: row.settlement_date, currency: row.currency, amount_major_total: 0, transaction_count: 0 };\n  current.amount_major_total = Number((current.amount_major_total + row.amount_major).toFixed(3));\n  current.transaction_count += 1;\n  totals.set(key, current);\n}\nreturn [{ json: {\n  batch_id: batch.batch_id,\n  execution_id: String($execution.id),\n  source_contract_version: batch.contract.version,\n  transform_revision: 'settlement-normalizer-v3',\n  normalized_rows: normalizedRows,\n  currency_totals: [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency))\n} }];"
+      }
+    },
+    {
+      "id": "load-settlement-facts",
+      "name": "Load Settlement Facts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "http://warehouse:4580/v1/warehouse/settlement-facts",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "return-etl-result",
+      "name": "Return ETL Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 0],
+      "parameters": {
+        "jsCode": "return [{ json: { status: 'succeeded', execution_id: String($execution.id), warehouse_receipt: $json } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Receive Settlement Batch": {
+      "main": [[{ "node": "Normalize Settlement Facts", "type": "main", "index": 0 }]]
+    },
+    "Normalize Settlement Facts": {
+      "main": [[{ "node": "Load Settlement Facts", "type": "main", "index": 0 }]]
+    },
+    "Load Settlement Facts": {
+      "main": [[{ "node": "Return ETL Result", "type": "main", "index": 0 }]]
+    }
+  }
+}

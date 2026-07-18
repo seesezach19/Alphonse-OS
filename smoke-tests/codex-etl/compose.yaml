@@ -1,0 +1,50 @@
+services:
+  warehouse:
+    image: node@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
+    user: "1000:1000"
+    working_dir: /lab
+    command: ["node", "mock-warehouse-server.js"]
+    environment:
+      WAREHOUSE_PORT: 4580
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16777216,uid=1000,gid=1000
+    ports:
+      - "127.0.0.1:${WAREHOUSE_PORT:-45881}:4580"
+    volumes:
+      - ./mock-warehouse-server.js:/lab/mock-warehouse-server.js:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4580/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  n8n:
+    image: n8nio/n8n@sha256:761374d4eb841b0a22771d6bd68f0e8d827b4979ae4e490045517b13fc1259dd
+    environment:
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_ENCRYPTION_KEY: local-codex-etl-smoke-encryption-key-v1
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+    ports:
+      - "127.0.0.1:${N8N_PORT:-45679}:5678"
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5678/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  n8n-data:

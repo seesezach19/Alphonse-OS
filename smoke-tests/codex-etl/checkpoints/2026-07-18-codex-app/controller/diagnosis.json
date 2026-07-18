@@ -1,0 +1,72 @@
+{
+  "schema_version": "alphonse.codex-etl-smoke.diagnosis.v0.1",
+  "assignment_id": "9ed1cc5e-fc82-4805-9129-11736dcc62e6",
+  "evidence_digest": "sha256:1c20580515b4f985fff1cf353bb06ed409d37d56a9a163674a981fad3564c307",
+  "diagnosis_class": "currency_scale_contract_mismatch",
+  "confidence": "high",
+  "observed_behavior": {
+    "workflow_status": "succeeded",
+    "affected_currencies": [
+      "JPY",
+      "KWD"
+    ],
+    "unaffected_currencies": [
+      "USD"
+    ]
+  },
+  "mechanism": {
+    "source_representation": "minor_units",
+    "suspected_component": "normalization_transform",
+    "applied_exponent": 2,
+    "expected_exponents": [
+      {
+        "currency": "USD",
+        "exponent": 2
+      },
+      {
+        "currency": "JPY",
+        "exponent": 0
+      },
+      {
+        "currency": "KWD",
+        "exponent": 3
+      }
+    ]
+  },
+  "evidence_citations": [
+    {
+      "claim": "The source contract declares amounts in minor units with currency-specific exponents: USD 2, JPY 0, and KWD 3.",
+      "artifact": "evidence.json",
+      "pointer": "/source_observation/received_batch/contract"
+    },
+    {
+      "claim": "The workflow execution claims success and returned HTTP 200.",
+      "artifact": "evidence.json",
+      "pointer": "/workflow_observation"
+    },
+    {
+      "claim": "Committed normalized rows divide every source amount by 100, consistent with an applied exponent of 2.",
+      "artifact": "evidence.json",
+      "pointer": "/destination_observation/committed_load/payload/normalized_rows"
+    },
+    {
+      "claim": "Reconciliation shows JPY and KWD mismatches while USD matches.",
+      "artifact": "evidence.json",
+      "pointer": "/reconciliation_observation/comparisons"
+    },
+    {
+      "claim": "The committed load contains all six expected rows, making missing or duplicated records unsupported.",
+      "artifact": "evidence.json",
+      "pointer": "/destination_observation/committed_load/receipt"
+    }
+  ],
+  "uncertainties": [
+    "Workflow source and node configuration were not provided, so the exact normalization statement cannot be directly identified.",
+    "The evidence does not establish whether the fixed exponent originates inside the named normalization revision or from an upstream parameter supplied to it."
+  ],
+  "recommended_investigations": [
+    "inspect_currency_scale_derivation",
+    "replay_currency_scale_matrix"
+  ],
+  "actions_taken": []
+}
