@@ -105,10 +105,18 @@ export function buildDiagnosticEffectProjection({ correlationProjectionId, corre
         contract: integrationContract, correlationProjection, correlationSemanticDigest,
         integrationContractDigest });
     }).sort(compareCanonical);
-  const requiredSourcesComplete = correlationProjection.coverage.streams.every((stream) =>
+  const receiptIds = new Set(observationEvidence.map((entry) => entry.receipt_id));
+  const streamKeys = new Set(observationEvidence.map((entry) =>
+    `${entry.envelope.grant_id ?? ""}\u0000${entry.envelope.stream_id ?? ""}`));
+  const relevantStreams = correlationProjection.coverage.streams.filter((stream) => streamKeys.has(
+    `${stream.grant_id ?? ""}\u0000${stream.stream_id ?? ""}`)).sort(compareCanonical);
+  const relevantConflicts = correlationProjection.coverage.conflicts.filter((entry) =>
+    (entry.accepted_receipt_ids ?? []).some((receiptId) => receiptIds.has(receiptId)));
+  const relevantLimitations = correlationProjection.coverage.limitations.filter((entry) =>
+    receiptIds.has(entry.receipt_id)).sort(compareCanonical);
+  const requiredSourcesComplete = relevantStreams.every((stream) =>
     stream.coverage_status === "complete_through_high_water")
-    && correlationProjection.coverage.conflicts.length === 0
-    && correlationProjection.coverage.rejections.length === 0
+    && relevantConflicts.length === 0
     && !correlationProjection.graph.unresolved_relationships.some((item) =>
       ["required_observer_stream", "request_reported_ledger_claim"].includes(item.relationship));
   const semanticProjection = {
@@ -126,9 +134,9 @@ export function buildDiagnosticEffectProjection({ correlationProjectionId, corre
     cutoff: structuredClone(correlationProjection.cutoff),
     effects,
     coverage: { required_sources_complete: requiredSourcesComplete,
-      contributing_streams_digest: sha256Digest(correlationProjection.coverage.streams),
+      contributing_streams_digest: sha256Digest(relevantStreams),
       unresolved_relationships_digest: sha256Digest(correlationProjection.graph.unresolved_relationships),
-      limitations: structuredClone(correlationProjection.coverage.limitations) },
+      limitations: structuredClone(relevantLimitations) },
     authority: { kernel_effect: false, execution_authorized: false,
       external_truth_established: false, diagnosis_established: false }
   };

@@ -25,7 +25,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through12 = process.argv.includes("--through-12");
+const through13 = process.argv.includes("--through-13");
+const through12 = through13 || process.argv.includes("--through-12");
 const through11 = through12 || process.argv.includes("--through-11");
 const through10 = through11 || process.argv.includes("--through-10");
 const through09 = through10 || process.argv.includes("--through-09");
@@ -943,6 +944,10 @@ try {
         let independentVerification = null;
         let diagnosticAssignment = null;
         let assignmentVerificationMaterial = null;
+        let evidenceRevision = null;
+        let replacementAssignment = null;
+        let replacementVerificationMaterial = null;
+        let lateObservationCounts = null;
         let finalCollection = initialCollection;
         if (through10) {
           const frozen = await post("/diagnostic/v0/evidence-collections/process", {
@@ -964,7 +969,7 @@ try {
             && reference.reference_type === "diagnostic_observation_receipt"));
           assert.equal(evidencePackage.freeze_reason, "required_sources_complete");
           assert.equal(evidencePackage.semantic_package.schema_version,
-            "alphonse.diagnostic-evidence-package.v0.1");
+            "alphonse.diagnostic-evidence-package.v0.2");
           assert.equal(evidencePackage.semantic_package.freeze.required_sources_complete, true);
           assert.equal(evidencePackage.semantic_package.freeze.committed_intake_cutoff,
             projection.committed_intake_cutoff);
@@ -1100,7 +1105,16 @@ try {
             const assignmentRead = await eventually(async () => {
               const value = await kernel(`/diagnostic/v0/evidence-packages/${
                 evidencePackage.evidence_package_id}/assignment`);
-              return value.response.status === 200 ? value : null;
+              if (value.response.status === 200) return value;
+              const status = await kernel(`/diagnostic/v0/evidence-packages/${
+                evidencePackage.evidence_package_id}/assignment-status`);
+              if (status.body.assignment_processing?.status === "terminal_failed") {
+                throw new Error(JSON.stringify(status.body));
+              }
+              if (status.body.assignment_processing?.failure) {
+                throw new Error(JSON.stringify(status.body));
+              }
+              return null;
             }, "model-free assignment creation");
             diagnosticAssignment = assignmentRead.body.diagnostic_assignment;
             assert.equal(diagnosticAssignment.evidence_package_id, evidencePackage.evidence_package_id);
@@ -1315,18 +1329,198 @@ try {
               }, "VERIFIER_ASSIGNMENT_POLICY_INTEGRITY_VIOLATION");
               await assertRejectedAssignmentMutation("assignment-authority-state", (material) => {
                 material.assignment_state.state = "claimed";
-              }, "VERIFIER_ASSIGNMENT_AUTHORITY_VIOLATION");
+              }, "VERIFIER_ASSIGNMENT_STATE_HISTORY_MISMATCH");
               await assertRejectedAssignmentMutation("assignment-creation-transition", (material) => {
                 material.assignment_creation.transition.payload.authority_granted = "diagnostic";
               }, "VERIFIER_ASSIGNMENT_CREATION_HISTORY_MISMATCH");
             }
+            if (through13) {
+              compose("pause", "crm-ledger-observer");
+              const lateForwardingId = randomUUID();
+              const lateDeliveryId = `late-delivery-${randomUUID()}`;
+              const lateWrite = await request("http://127.0.0.1:43700", "/v0/crm/leads", {
+                method: "POST",
+                headers: {
+                  authorization: "Bearer local-n8n-crm-route-token",
+                  "x-alphonse-logical-operation-id": firstRequest.logical_operation_id,
+                  "x-alphonse-delivery-id": lateDeliveryId,
+                  "x-alphonse-forwarding-id": lateForwardingId,
+                  "x-alphonse-source-delivery-key": `late-key-${randomUUID()}`
+                },
+                body: JSON.stringify({ company: "late-evidence-proof" })
+              });
+              assert.equal(lateWrite.response.status, 202, JSON.stringify(lateWrite.body));
+              await eventually(async () => {
+                const requestStatus = await request("http://127.0.0.1:43700", "/internal/v0/status");
+                return requestStatus.body.reported_count === 3 ? requestStatus : null;
+              }, "late request observation before committed-effect observation", 60_000);
+              const requestOnlyWake = await post("/diagnostic/v0/evidence-revisions/process", {
+                case_id: diagnosticCase.case_id
+              });
+              assert.ok([200, 201].includes(requestOnlyWake.response.status),
+                JSON.stringify(requestOnlyWake.body));
+              const requestOnlyRevision = await eventually(async () => {
+                const value = await kernel(`/diagnostic/v0/evidence-revisions/${diagnosticCase.case_id}`);
+                const latest = value.body.evidence_revision?.revision_history?.at(-1);
+                return value.response.status === 200 && latest
+                  && !latest.assessment.material_change_classes.includes("behavior_evaluation_changed")
+                  ? { value, latest } : null;
+              }, "request-only temporal evidence assessment", 60_000);
+              assert.equal(requestOnlyRevision.latest.assessment.recommended_action, "notify_only");
+              compose("unpause", "crm-ledger-observer");
+              const lateObserved = await eventually(async () => {
+                const [requestStatus, ledgerStatus] = await Promise.all([
+                  request("http://127.0.0.1:43700", "/internal/v0/status"),
+                  request("http://127.0.0.1:43702", "/healthz")
+                ]);
+                return requestStatus.body.reported_count === 3
+                  && ledgerStatus.body.reported_count === 3 ? { requestStatus, ledgerStatus } : null;
+              }, "late request and committed-effect observations", 60_000);
+              lateObservationCounts = { requests: lateObserved.requestStatus.body.reported_count,
+                effects: lateObserved.ledgerStatus.body.reported_count };
+
+              const revisionWake = await post("/diagnostic/v0/evidence-revisions/process", {
+                case_id: diagnosticCase.case_id
+              });
+              assert.ok([200, 201].includes(revisionWake.response.status), JSON.stringify(revisionWake.body));
+              const revisionRead = await eventually(async () => {
+                const value = await kernel(`/diagnostic/v0/evidence-revisions/${diagnosticCase.case_id}`);
+                const revision = value.body.evidence_revision;
+                const behaviorChange = revision?.revision_history?.findLast((entry) =>
+                  entry.reevaluation_available?.notice.material_change_classes
+                    .includes("behavior_evaluation_changed")
+                  && entry.reevaluation_available.recommended_action === "replace_unclaimed");
+                return value.response.status === 200
+                  && behaviorChange ? { value, behaviorChange } : null;
+              }, "material evidence revision and reevaluation notice", 60_000);
+              evidenceRevision = revisionRead.value.body.evidence_revision;
+              const replacementRevision = revisionRead.behaviorChange;
+              const replacementNotice = replacementRevision.reevaluation_available;
+              assert.notEqual(evidenceRevision.current_evidence_package_id,
+                evidencePackage.evidence_package_id);
+              assert.equal(replacementRevision.assessment.outcome, "revision_created");
+              assert.equal(replacementRevision.assessment.recommended_action, "replace_unclaimed");
+              assert.equal(replacementNotice.recommended_action, "replace_unclaimed");
+              assert.ok(replacementNotice.known_affected_assignments.some((entry) =>
+                entry.assignment_id === diagnosticAssignment.assignment_id && entry.state === "unclaimed"));
+
+              const successorPackageId = replacementNotice.successor_evidence_package_id;
+              const successorPackageRead = await kernel(`/diagnostic/v0/evidence-packages/${successorPackageId}`);
+              assert.equal(successorPackageRead.response.status, 200, JSON.stringify(successorPackageRead.body));
+              const successorPackage = successorPackageRead.body.evidence_package;
+              const currentPackageRead = await kernel(
+                `/diagnostic/v0/evidence-packages/${evidenceRevision.current_evidence_package_id}`);
+              assert.equal(currentPackageRead.response.status, 200, JSON.stringify(currentPackageRead.body));
+              evidenceRevision.current_package_revision_number =
+                currentPackageRead.body.evidence_package.revision_number;
+              assert.ok(BigInt(successorPackage.revision_number) > 1n);
+              assert.equal(successorPackage.predecessor_evidence_package_id,
+                replacementNotice.predecessor_evidence_package_id);
+              assert.equal(successorPackage.assessment_kind, "late_evidence");
+              assert.equal(successorPackage.semantic_package.authority.model_request_created, false);
+              assert.ok(BigInt(evidenceRevision.current_package_revision_number)
+                >= BigInt(successorPackage.revision_number));
+              assert.ok(evidenceRevision.revision_history.length >= 2);
+
+              const replacementRead = await eventually(async () => {
+                const value = await kernel(`/diagnostic/v0/evidence-packages/${successorPackageId}/assignment`);
+                return value.response.status === 200 ? value : null;
+              }, "policy-governed unclaimed assignment replacement", 60_000);
+              replacementAssignment = replacementRead.body.diagnostic_assignment;
+              assert.notEqual(replacementAssignment.assignment_id, diagnosticAssignment.assignment_id);
+              assert.equal(replacementAssignment.evidence_package_id, successorPackageId);
+              assert.equal(replacementAssignment.assignment_policy_activation_id,
+                assignmentPolicyActivation.assignment_policy_activation_id);
+              assert.equal(replacementAssignment.state.current, "unclaimed");
+              assert.equal(replacementAssignment.authority_granted, "none");
+              assert.equal(replacementAssignment.model_request_created, false);
+              const replacedRead = await kernel(`/diagnostic/v0/assignments/${diagnosticAssignment.assignment_id}`);
+              assert.equal(replacedRead.response.status, 200, JSON.stringify(replacedRead.body));
+              assert.equal(replacedRead.body.diagnostic_assignment.state.current, "expired");
+              assert.equal(replacedRead.body.diagnostic_assignment.state.revision, "1");
+
+              const replacementMaterialRead = await kernel(
+                `/diagnostic/v0/assignment-verification-material/${replacementAssignment.assignment_id}`);
+              assert.equal(replacementMaterialRead.response.status, 200,
+                JSON.stringify(replacementMaterialRead.body));
+              replacementVerificationMaterial =
+                replacementMaterialRead.body.assignment_verification_material;
+              assert.equal(replacementVerificationMaterial.replacement_history.replacement
+                .replaced_assignment_id, diagnosticAssignment.assignment_id);
+              assert.equal(replacementVerificationMaterial.replacement_history.replaced_assignment_state.state,
+                "expired");
+
+              const revisionBundleRead = await kernel(
+                `/diagnostic/v0/independent-verification-bundles/${successorPackageId}`);
+              assert.equal(revisionBundleRead.response.status, 200, JSON.stringify(revisionBundleRead.body));
+              const revisionBundle = revisionBundleRead.body.independent_verification_bundle;
+              const revisionVerified = await runOfflineVerifier({ imageTag: verifierImage,
+                imageDigest: verifierImageDigest, verificationBundle: revisionBundle,
+                assignmentVerificationMaterial: replacementVerificationMaterial,
+                label: "material-revision-replacement" });
+              assert.equal(revisionVerified.status, 0, revisionVerified.stderr);
+              assert.equal(revisionVerified.report.result, "verified",
+                JSON.stringify(revisionVerified.report));
+              assert.equal(revisionVerified.report.assignment_verification.assignment_id,
+                replacementAssignment.assignment_id);
+              assert.equal(revisionVerified.report.assignment_verification.state, "unclaimed");
+              assertVerificationReportDigest(revisionVerified.report);
+
+              const changedNotice = structuredClone(revisionBundle);
+              changedNotice.bundle.published_outputs_to_compare.reevaluation_notice
+                .notice_document.recommended_action = "notify_only";
+              resealVerificationBundle(changedNotice);
+              const rejectedNotice = await runOfflineVerifier({ imageTag: verifierImage,
+                imageDigest: verifierImageDigest, verificationBundle: changedNotice,
+                label: "revision-policy-decision" });
+              assert.equal(rejectedNotice.status, 1, rejectedNotice.stderr);
+              assert.equal(rejectedNotice.report.failure.code,
+                "VERIFIER_EVIDENCE_REVISION_POLICY_MISMATCH");
+              const changedPredecessor = structuredClone(revisionBundle);
+              changedPredecessor.bundle.independent_inputs.predecessor_verification.artifact
+                .bundle.target.committed_intake_cutoff = "999999";
+              resealVerificationBundle(changedPredecessor);
+              const rejectedPredecessor = await runOfflineVerifier({ imageTag: verifierImage,
+                imageDigest: verifierImageDigest, verificationBundle: changedPredecessor,
+                label: "revision-predecessor-substitution" });
+              assert.equal(rejectedPredecessor.status, 1, rejectedPredecessor.stderr);
+              assert.equal(rejectedPredecessor.report.failure.code,
+                "VERIFIER_REVISION_PREDECESSOR_BUNDLE_INVALID");
+
+              const revisionDb = new pg.Client({ connectionString:
+                "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+              await revisionDb.connect();
+              try {
+                const counts = await revisionDb.query(
+                  `SELECT
+                    (SELECT COUNT(*)::int FROM diagnostic_cases
+                      WHERE case_origin='deterministic_behavior_trigger') AS cases,
+                    (SELECT COUNT(*)::int FROM diagnostic_behavior_triggers) AS triggers,
+                    (SELECT COUNT(*)::int FROM diagnostic_evidence_packages) AS packages,
+                    (SELECT COUNT(*)::int FROM diagnostic_reevaluation_notices) AS notices,
+                    (SELECT COUNT(*)::int FROM diagnostic_assignment_replacements) AS replacements,
+                    (SELECT COUNT(*)::int FROM diagnostic_assignments) AS assignments,
+                    (SELECT COUNT(*)::int FROM diagnostic_diagnosis_requests) AS diagnosis_requests`
+                );
+                assert.equal(counts.rows[0].cases, 1);
+                assert.equal(counts.rows[0].triggers, 1);
+                assert.ok(counts.rows[0].packages >= 2);
+                assert.ok(counts.rows[0].notices >= 1);
+                assert.equal(counts.rows[0].replacements, 1);
+                assert.equal(counts.rows[0].assignments, 2);
+                assert.equal(counts.rows[0].diagnosis_requests, 0);
+              } finally { await revisionDb.end(); }
+            }
             independentVerification = { verifierImageDigest, report: valid.report,
-              adversarial_cases: through12 ? 13 : 9, physical_reorder_verified: true };
+              adversarial_cases: through13 ? 15 : through12 ? 13 : 9,
+              physical_reorder_verified: true };
           }
         }
         interpretation = { activation, evidencePolicyActivation, assignmentPolicyActivation,
           effectProjection, evaluation, trigger, diagnosticCase, finalCollection, evidencePackage,
-          diagnosticAssignment, assignmentVerificationMaterial, independentVerification };
+          diagnosticAssignment, assignmentVerificationMaterial, evidenceRevision,
+          replacementAssignment, replacementVerificationMaterial, lateObservationCounts,
+          independentVerification };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -1347,13 +1541,15 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through12 ? "canonical-diagnostic-proof-12"
+    schema_version: "0.1.0", ticket: through13 ? "canonical-diagnostic-proof-13"
+      : through12 ? "canonical-diagnostic-proof-12"
       : through11 ? "canonical-diagnostic-proof-11"
       : through10 ? "canonical-diagnostic-proof-10"
       : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through12 ? "model_free_unclaimed_diagnostic_assignment"
+    status: "passed", completed_capability: through13 ? "material_evidence_revision_and_bounded_reassignment"
+      : through12 ? "model_free_unclaimed_diagnostic_assignment"
       : through11 ? "independently_recomputed_diagnostic_lineage"
       : through10 ? "frozen_content_addressed_evidence_package"
       : through09 ? "deterministic_committed_effect_violation_case"
@@ -1396,12 +1592,23 @@ try {
         "deterministic_assignment_identity", "immutable_assignment_facts",
         "separate_fenced_unclaimed_state", "frozen_event_time_controls_expiry",
         "answer_free_neutral_worker_contract", "assignment_created_before_verifier_run",
-        "assignment_independently_recomputed", "no_dispatch_worker_model_or_execution_authority"] : [])],
+        "assignment_independently_recomputed", "no_dispatch_worker_model_or_execution_authority"] : []),
+      ...(through13 ? ["committed_prefix_drives_revision_monitor",
+        "case_relevant_material_digest", "nonmaterial_and_material_changes_separated",
+        "same_pinned_activations_reused", "immutable_evidence_package_revision",
+        "reevaluation_notice_preserves_temporal_cutoffs", "one_trigger_and_case_preserved",
+        "unclaimed_assignment_replaced_by_exact_policy", "claimed_or_terminal_replacement_forbidden",
+        "complete_assignment_state_history_verified", "revision_chain_independently_recomputed",
+        "no_worker_model_diagnosis_repair_or_execution_authority"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
-    crm_request_observation_count: extendedResult?.requests.reported_count ?? 0,
-    crm_effect_observation_count: extendedResult?.ledger.reported_count ?? 0,
+    crm_request_observation_count:
+      extendedResult?.interpretation?.lateObservationCounts?.requests
+        ?? extendedResult?.requests.reported_count ?? 0,
+    crm_effect_observation_count:
+      extendedResult?.interpretation?.lateObservationCounts?.effects
+        ?? extendedResult?.ledger.reported_count ?? 0,
     correlation_projection_count: extendedResult?.correlation ? 1 : 0,
     correlation_semantic_digest: extendedResult?.correlation?.projection.semantic_digest ?? null,
     diagnostic_effect_projection_count: extendedResult?.interpretation ? 1 : 0,
@@ -1410,7 +1617,9 @@ try {
     behavior_evaluation_result: extendedResult?.interpretation?.evaluation.semantic_evaluation.result ?? null,
     deterministic_case_count: extendedResult?.interpretation ? 1 : 0,
     evidence_collection_lease_count: extendedResult?.interpretation?.finalCollection ? 1 : 0,
-    evidence_package_count: extendedResult?.interpretation?.evidencePackage ? 1 : 0,
+    evidence_package_count: extendedResult?.interpretation?.evidenceRevision
+      ? Number(extendedResult.interpretation.evidenceRevision.current_package_revision_number)
+      : extendedResult?.interpretation?.evidencePackage ? 1 : 0,
     evidence_package_semantic_digest:
       extendedResult?.interpretation?.evidencePackage?.semantic_digest ?? null,
     evidence_package_artifact_digest:
@@ -1431,6 +1640,14 @@ try {
       extendedResult?.interpretation?.diagnosticAssignment?.assignment_digest ?? null,
     diagnostic_assignment_state:
       extendedResult?.interpretation?.diagnosticAssignment?.state.current ?? null,
+    evidence_revision_status:
+      extendedResult?.interpretation?.evidenceRevision?.latest_assessment.outcome ?? null,
+    evidence_revision_material_change_classes:
+      extendedResult?.interpretation?.evidenceRevision?.latest_assessment.material_change_classes ?? [],
+    replacement_assignment_id:
+      extendedResult?.interpretation?.replacementAssignment?.assignment_id ?? null,
+    replacement_assignment_state:
+      extendedResult?.interpretation?.replacementAssignment?.state.current ?? null,
     model_requests: 0, worker_run_created: false
   }, null, 2)}\n`);
 } catch (error) {

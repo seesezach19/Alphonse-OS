@@ -17,7 +17,8 @@ const BOUND_FILES = [
   "package-lock.json",
   "diagnostic-migrations/017_evidence_collection_and_packages.sql",
   "diagnostic-migrations/018_independent_diagnostic_verification.sql",
-  "diagnostic-migrations/019_model_free_diagnostic_assignments.sql"
+  "diagnostic-migrations/019_model_free_diagnostic_assignments.sql",
+  "diagnostic-migrations/020_material_evidence_revisions.sql"
 ];
 
 function rawDigest(bytes) {

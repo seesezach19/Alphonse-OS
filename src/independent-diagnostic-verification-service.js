@@ -131,19 +131,29 @@ export function createIndependentDiagnosticVerificationService({
       ), "DIAGNOSTIC_TRIGGER_NOT_FOUND", "Diagnostic Trigger does not exist.");
       const evaluationRow = row(await client.query(
         "SELECT * FROM diagnostic_behavior_evaluations WHERE installation_id=$1 AND evaluation_id=$2",
-        [installationId, triggerRow.evaluation_id]
+        [installationId, packageRow.evaluation_id ?? triggerRow.evaluation_id]
       ), "BEHAVIOR_EVALUATION_NOT_FOUND", "Behavior Evaluation does not exist.");
       const effectRow = row(await client.query(
         "SELECT * FROM diagnostic_effect_projections WHERE installation_id=$1 AND effect_projection_id=$2",
-        [installationId, evaluationRow.effect_projection_id]
+        [installationId, packageRow.effect_projection_id ?? evaluationRow.effect_projection_id]
       ), "DIAGNOSTIC_EFFECT_PROJECTION_NOT_FOUND", "Diagnostic Effect Projection does not exist.");
       const projectionRow = row(await client.query(
         "SELECT * FROM diagnostic_correlation_projections WHERE installation_id=$1 AND projection_id=$2",
-        [installationId, effectRow.correlation_projection_id]
+        [installationId, packageRow.correlation_projection_id ?? effectRow.correlation_projection_id]
       ), "CORRELATION_PROJECTION_NOT_FOUND", "Correlation Projection does not exist.");
       if (String(projectionRow.committed_intake_cutoff) !== cutoff) {
         fail("INDEPENDENT_VERIFICATION_LINEAGE_INTEGRITY_VIOLATION",
           "Evidence package and Correlation Projection bind different committed cutoffs.");
+      }
+      if ((packageRow.evaluation_id && packageRow.evaluation_id !== evaluationRow.evaluation_id)
+          || (packageRow.effect_projection_id
+            && packageRow.effect_projection_id !== effectRow.effect_projection_id)
+          || (packageRow.correlation_projection_id
+            && packageRow.correlation_projection_id !== projectionRow.projection_id)
+          || evaluationRow.effect_projection_id !== effectRow.effect_projection_id
+          || effectRow.correlation_projection_id !== projectionRow.projection_id) {
+        fail("INDEPENDENT_VERIFICATION_REVISION_LINEAGE_INTEGRITY_VIOLATION",
+          "Revision package does not bind one exact projection, effect, and evaluation chain.");
       }
       const registrationRow = row(await client.query(
         "SELECT * FROM diagnostic_correlation_registrations WHERE installation_id=$1 AND registration_id=$2",
@@ -159,6 +169,27 @@ export function createIndependentDiagnosticVerificationService({
          WHERE installation_id=$1 AND evidence_policy_activation_id=$2`,
         [installationId, packageRow.evidence_policy_activation_id]
       ), "DIAGNOSTIC_EVIDENCE_POLICY_ACTIVATION_NOT_FOUND", "Evidence policy activation does not exist.");
+      const assignmentPolicyRow = packageRow.assignment_policy_activation_id ? row(await client.query(
+        `SELECT * FROM diagnostic_assignment_policy_activations
+         WHERE installation_id=$1 AND environment_id=$2 AND assignment_policy_activation_id=$3`,
+        [installationId, environmentId, packageRow.assignment_policy_activation_id]
+      ), "DIAGNOSTIC_ASSIGNMENT_POLICY_ACTIVATION_NOT_FOUND",
+      "Revision Assignment Policy activation does not exist.") : null;
+      let assignmentPolicyExport = null;
+      if (assignmentPolicyRow) {
+        const resolved = await resolveDeploymentExports(assignmentPolicyRow.deployment_id,
+          [assignmentPolicyRow.policy_export_id]);
+        const exportRecord = resolved.exports.get(assignmentPolicyRow.policy_export_id);
+        if (resolved.package_version_id !== assignmentPolicyRow.package_version_id
+            || resolved.package_artifact_digest !== assignmentPolicyRow.package_artifact_digest
+            || exportRecord?.kind !== "diagnostic_assignment_policy") {
+          fail("INDEPENDENT_VERIFICATION_ASSIGNMENT_POLICY_MATERIAL_UNAVAILABLE",
+            "Revision Assignment Policy cannot be resolved from its exact deployed package.");
+        }
+        assignmentPolicyExport = encodeValue({ deployment_id: resolved.deployment_id,
+          package_version_id: resolved.package_version_id,
+          package_artifact_digest: resolved.package_artifact_digest, export_record: exportRecord });
+      }
 
       const outcomeRows = rows(await client.query(
         `SELECT * FROM diagnostic_intake_outcomes
@@ -246,21 +277,51 @@ export function createIndependentDiagnosticVerificationService({
         "SELECT * FROM diagnostic_evidence_collection_leases WHERE installation_id=$1 AND case_id=$2",
         [installationId, caseRow.case_id]
       ), "DIAGNOSTIC_EVIDENCE_COLLECTION_NOT_FOUND", "Evidence collection does not exist.");
-      const referenceRows = rows(await client.query(
+      const referenceRows = String(packageRow.revision_number) !== "1" ? rows(await client.query(
+        `SELECT * FROM diagnostic_evidence_package_references
+         WHERE evidence_package_id=$1 ORDER BY reference_type,reference_id`, [evidencePackageId]
+      )) : rows(await client.query(
         `SELECT * FROM diagnostic_evidence_collection_lease_references
          WHERE lease_id=$1 ORDER BY reference_type,reference_id`, [leaseRow.lease_id]
       ));
       const jobRow = row(await client.query(
         "SELECT * FROM diagnostic_evidence_collection_jobs WHERE lease_id=$1", [leaseRow.lease_id]
       ), "DIAGNOSTIC_EVIDENCE_COLLECTION_NOT_FOUND", "Evidence collection job does not exist.");
-      const releaseRow = row(await client.query(
-        "SELECT * FROM diagnostic_evidence_collection_lease_releases WHERE lease_id=$1", [leaseRow.lease_id]
-      ), "DIAGNOSTIC_EVIDENCE_COLLECTION_RELEASE_NOT_FOUND", "Evidence collection release does not exist.");
+      const releaseRow = (await client.query(
+        "SELECT * FROM diagnostic_evidence_collection_lease_releases WHERE evidence_package_id=$1",
+        [evidencePackageId]
+      )).rows[0] ?? null;
+      if (String(packageRow.revision_number) === "1" && !releaseRow) {
+        throw new KernelError(404, "DIAGNOSTIC_EVIDENCE_COLLECTION_RELEASE_NOT_FOUND",
+          "Initial evidence package collection release does not exist.");
+      }
+      const assessmentRow = packageRow.predecessor_evidence_package_id ? (await client.query(
+        `SELECT * FROM diagnostic_evidence_revision_assessments
+         WHERE resulting_evidence_package_id=$1`, [evidencePackageId]
+      )).rows[0] ?? null : null;
+      const noticeRow = assessmentRow ? (await client.query(
+        "SELECT * FROM diagnostic_reevaluation_notices WHERE assessment_id=$1",
+        [assessmentRow.assessment_id]
+      )).rows[0] ?? null : null;
       const pinRows = rows(await client.query(
         `SELECT * FROM diagnostic_artifact_retention_pins
          WHERE evidence_package_id=$1 ORDER BY object_type,object_id`, [evidencePackageId]
       ));
       const packageArtifact = await artifactStore.getJson(packageRow.package_artifact_digest);
+      let predecessorVerification = null;
+      if (packageRow.predecessor_evidence_package_id) {
+        const predecessorRecord = row(await client.query(
+          `SELECT * FROM diagnostic_independent_verification_bundles
+           WHERE installation_id=$1 AND evidence_package_id=$2`,
+          [installationId, packageRow.predecessor_evidence_package_id]
+        ), "INDEPENDENT_VERIFICATION_PREDECESSOR_BUNDLE_NOT_FOUND",
+        "Revision package predecessor does not have a sealed independent verification bundle.");
+        const predecessorArtifact = await artifactStore.getJson(predecessorRecord.bundle_artifact_digest);
+        predecessorVerification = {
+          record: encodeValue(predecessorRecord),
+          artifact: encodeValue(predecessorArtifact.content)
+        };
+      }
       const stageArchives = [];
       for (const digest of [registrationRow.projector_artifact_digest,
         interpretationRow.stage_artifact_digest, policyRow.stage_artifact_digest]) {
@@ -305,6 +366,7 @@ export function createIndependentDiagnosticVerificationService({
           observation_grant_snapshots: grantSnapshotRows,
           observation_grant_application_receipts: grantApplicationRows,
           stream_coverage_snapshot: coverageRows,
+          predecessor_verification: predecessorVerification,
           stage_artifact_archives: stageArchives,
           verification_identities: {
             tokenization_result_receipt: {
@@ -334,13 +396,17 @@ export function createIndependentDiagnosticVerificationService({
           diagnostic_case: encodeValue(caseRow),
           diagnostic_claims: claimRows,
           evidence_policy_activation: encodeValue(policyRow),
+          assignment_policy_activation: assignmentPolicyRow ? encodeValue(assignmentPolicyRow) : null,
+          assignment_policy_export: assignmentPolicyExport,
           evidence_collection_lease: encodeValue(leaseRow),
           evidence_collection_references: referenceRows,
           evidence_collection_job: encodeValue(jobRow),
-          evidence_collection_release: encodeValue(releaseRow),
+          evidence_collection_release: releaseRow ? encodeValue(releaseRow) : null,
           retention_pins: pinRows,
           evidence_package: encodeValue(packageRow),
-          evidence_package_artifact: encodeValue(packageArtifact.content)
+          evidence_package_artifact: encodeValue(packageArtifact.content),
+          evidence_revision_assessment: assessmentRow ? encodeValue(assessmentRow) : null,
+          reevaluation_notice: noticeRow ? encodeValue(noticeRow) : null
         },
         assurance_boundary: {
           processing_profile: "D0",

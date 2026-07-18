@@ -17,7 +17,8 @@ const BOUND_FILES = [
   "diagnostic-migrations/014_correlation_projections.sql",
   "diagnostic-migrations/015_correlation_integrity_hardening.sql",
   "diagnostic-migrations/016_effect_interpretation_and_behavior_cases.sql",
-  "diagnostic-migrations/017_evidence_collection_and_packages.sql"
+  "diagnostic-migrations/017_evidence_collection_and_packages.sql",
+  "diagnostic-migrations/020_material_evidence_revisions.sql"
 ];
 
 function rawDigest(bytes) {

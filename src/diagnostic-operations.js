@@ -661,6 +661,43 @@ const descriptors = [
     issues: ["DIAGNOSTIC_EVIDENCE_PACKAGE_NOT_FOUND"]
   }),
   {
+    operation_id: "diagnostic.evidence_revision.process",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Assess newly committed case-relevant evidence and create a separate immutable package revision only for exact material change.",
+    visibility: "public",
+    authority_class: "authenticated_diagnostic_owner_wakeup_requester",
+    effect_class: "deterministic_evidence_revision_assessment",
+    idempotency: "case_predecessor_cutoff_pinned_activations_and_revision_rules",
+    transport: { method: "POST", path: "/diagnostic/v0/evidence-revisions/process" },
+    input_schema: {
+      type: "object",
+      required: ["case_id"],
+      additionalProperties: false,
+      properties: { case_id: { type: "string", format: "uuid" } }
+    },
+    output_schema: { type: "object", required: ["status", "evidence_package", "assessment",
+      "reevaluation_available"] },
+    supported_modes: ["live"],
+    preconditions: ["revision_monitor_exists", "committed_prefix_advanced",
+      "case_opening_activations_available"],
+    outcomes: ["no_new_committed_outcomes", "nonmaterial_change_recorded",
+      "evidence_package_revision_created", "reevaluation_notice_created"],
+    issues: ["DIAGNOSTIC_EVIDENCE_REVISION_MONITOR_NOT_FOUND",
+      "DIAGNOSTIC_EVIDENCE_REVISION_ACTIVATION_DRIFT",
+      "DIAGNOSTIC_EVIDENCE_MATERIAL_CHANGE_UNCLASSIFIED"],
+    emitted_events: ["diagnostic.evidence_package.revised", "diagnostic.reevaluation.available",
+      "diagnostic.assignment.replacement_requested"],
+    next_operations: ["diagnostic.evidence_revision.get", "diagnostic.evidence_package.get"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.evidence_revision.get",
+    summary: "Inspect the current package lineage, latest exact assessment, and reevaluation notice for one case.",
+    path: "/diagnostic/v0/evidence-revisions/{case_id}",
+    idName: "case_id",
+    resultKey: "evidence_revision",
+    issues: ["DIAGNOSTIC_EVIDENCE_REVISION_MONITOR_NOT_FOUND"]
+  }),
+  {
     operation_id: "diagnostic.assignment_policy_activation.activate",
     version: DIAGNOSTIC_PROTOCOL_VERSION,
     summary: "Activate one exact answer-free Diagnostic Assignment work contract without granting execution authority.",

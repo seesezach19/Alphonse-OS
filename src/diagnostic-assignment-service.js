@@ -25,6 +25,7 @@ import {
   verifyAssignmentCreationMaterial,
   verifyAssignmentPolicyActivationRow,
   verifyAssignmentRow,
+  verifyAssignmentStateHistory,
   verifyAssignmentStageRecord
 } from "./diagnostic-assignment-persistence.js";
 import { KernelError } from "./errors.js";
@@ -35,13 +36,17 @@ import {
 } from "./stage-artifact-archive.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const ASSIGNMENT_POLICY_EXPORT_VERSION = "0.1.0";
+const ASSIGNMENT_POLICY_EXPORT_VERSIONS = Object.freeze(["0.1.0", "0.2.0"]);
 const FROZEN_EVENT_SCHEMA = "alphonse.evidence-package-frozen-assignment-event.v0.1";
+const REPLACEMENT_EVENT_SCHEMA = "alphonse.diagnostic-assignment-replacement-event.v0.1";
 const DELIVERY_SCHEMA = "alphonse.diagnostic-assignment-delivery.v0.1";
 const NONDETERMINISM_SCHEMA = "alphonse.diagnostic-assignment-nondeterminism.v0.1";
 const VERIFICATION_MATERIAL_SCHEMA = "alphonse.diagnostic-assignment-verification-material.v0.1";
 const FAILURE_INPUT_SCHEMA = "alphonse.diagnostic-assignment-stage-failure-input.v0.1";
-const EVIDENCE_PACKAGE_STAGE_AUTHOR = "diagnostic-stage-worker:evidence-packaging-v0.1";
+const EVIDENCE_PACKAGE_STAGE_AUTHORS = Object.freeze([
+  "diagnostic-stage-worker:evidence-packaging-v0.1",
+  "diagnostic-stage-worker:evidence-packaging-v0.2"
+]);
 
 function same(left, right) {
   return canonicalize(left) === canonicalize(right);
@@ -89,7 +94,8 @@ function encodeValue(value) {
 
 function sourceEventDocument(transition) {
   return {
-    schema_version: FROZEN_EVENT_SCHEMA,
+    schema_version: transition.transition_type === "diagnostic.assignment.replacement_requested"
+      ? REPLACEMENT_EVENT_SCHEMA : FROZEN_EVENT_SCHEMA,
     transition_id: transition.transition_id,
     installation_id: transition.installation_id,
     diagnostic_sequence: String(transition.diagnostic_sequence),
@@ -129,7 +135,7 @@ function verifyFrozenDelivery(outbox, transition, installationId) {
       || outbox.event_type !== "diagnostic.evidence_package.frozen"
       || transition.transition_type !== outbox.event_type
       || transition.aggregate_type !== "diagnostic_case"
-      || transition.actor_type !== "service" || transition.actor_id !== EVIDENCE_PACKAGE_STAGE_AUTHOR
+      || transition.actor_type !== "service" || !EVIDENCE_PACKAGE_STAGE_AUTHORS.includes(transition.actor_id)
       || iso(outbox.created_at) !== iso(transition.occurred_at)
       || !same(Object.keys(outbox.payload ?? {}).sort(), expectedOutboxPayload)
       || !same(Object.keys(transition.payload ?? {}).sort(), expectedTransitionPayload)
@@ -149,6 +155,49 @@ function verifyFrozenDelivery(outbox, transition, installationId) {
     delivery: deliveryDocument(outbox),
     deliveryDigest: sha256Digest(deliveryDocument(outbox))
   };
+}
+
+function verifyReplacementDelivery(outbox, transition, installationId) {
+  const expectedTransitionPayload = [
+    "assignment_policy_activation_digest", "assignment_policy_activation_id",
+    "predecessor_evidence_package_id", "reevaluation_notice_id", "replaced_assignment_id",
+    "successor_evidence_package_id", "successor_package_artifact_digest", "successor_semantic_digest"
+  ];
+  const expectedOutboxPayload = ["reevaluation_notice_id", "transition_id"];
+  const payload = transition?.payload;
+  if (!outbox || !transition || outbox.installation_id !== installationId
+      || transition.installation_id !== installationId
+      || outbox.transition_id !== transition.transition_id
+      || outbox.event_type !== "diagnostic.assignment.replacement_requested"
+      || transition.transition_type !== outbox.event_type
+      || transition.aggregate_type !== "diagnostic_assignment_replacement"
+      || transition.aggregate_id !== payload?.reevaluation_notice_id
+      || transition.actor_type !== "service" || !EVIDENCE_PACKAGE_STAGE_AUTHORS.includes(transition.actor_id)
+      || iso(outbox.created_at) !== iso(transition.occurred_at)
+      || !same(Object.keys(outbox.payload ?? {}).sort(), expectedOutboxPayload)
+      || !same(Object.keys(payload ?? {}).sort(), expectedTransitionPayload)
+      || outbox.payload.transition_id !== transition.transition_id
+      || outbox.payload.reevaluation_notice_id !== payload.reevaluation_notice_id
+      || ![payload.reevaluation_notice_id, payload.replaced_assignment_id,
+        payload.predecessor_evidence_package_id, payload.successor_evidence_package_id].every((entry) => UUID.test(entry))
+      || !UUID.test(payload.assignment_policy_activation_id)
+      || ![payload.assignment_policy_activation_digest, payload.successor_semantic_digest,
+        payload.successor_package_artifact_digest].every((entry) => /^sha256:[0-9a-f]{64}$/.test(entry))) {
+    throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_REPLACEMENT_SOURCE_INTEGRITY_VIOLATION",
+      "Assignment replacement delivery does not match its exact governed transition.");
+  }
+  return {
+    sourceEvent: sourceEventDocument(transition),
+    sourceEventDigest: sha256Digest(sourceEventDocument(transition)),
+    delivery: deliveryDocument(outbox),
+    deliveryDigest: sha256Digest(deliveryDocument(outbox))
+  };
+}
+
+function verifyAssignmentDelivery(outbox, transition, installationId) {
+  return outbox?.event_type === "diagnostic.assignment.replacement_requested"
+    ? verifyReplacementDelivery(outbox, transition, installationId)
+    : verifyFrozenDelivery(outbox, transition, installationId);
 }
 
 function activationReference(exportRecord) {
@@ -173,6 +222,7 @@ export function createDiagnosticAssignmentService({
   const { pool } = database;
   let timer = null;
   let tickRunning = false;
+  let lastLoopError = null;
 
   async function activatePolicy(input, actorId, now = new Date()) {
     exact(input, "input", [
@@ -184,9 +234,9 @@ export function createDiagnosticAssignmentService({
     const resolved = await resolveDeploymentExports(deploymentId, [input.assignment_policy_export_id]);
     const exportRecord = resolved.exports.get(input.assignment_policy_export_id);
     if (resolved.deployment_id !== deploymentId || exportRecord?.kind !== "diagnostic_assignment_policy"
-        || exportRecord.contract_version !== ASSIGNMENT_POLICY_EXPORT_VERSION) {
+        || !ASSIGNMENT_POLICY_EXPORT_VERSIONS.includes(exportRecord.contract_version)) {
       throw new KernelError(409, "DIAGNOSTIC_ASSIGNMENT_POLICY_EXPORT_MISMATCH",
-        "Activation must reference one exact deployed v0.1 Diagnostic Assignment Policy export.");
+        "Activation must reference one supported exact deployed Diagnostic Assignment Policy export.");
     }
     validateDiagnosticAssignmentPolicy(exportRecord.content);
     const policyDocument = structuredClone(exportRecord.content);
@@ -280,7 +330,7 @@ export function createDiagnosticAssignmentService({
       `SELECT * FROM diagnostic_transitions WHERE installation_id=$1 AND transition_id=$2${forUpdate ? " FOR SHARE" : ""}`,
       [installationId, outbox.transition_id]
     )).rows[0];
-    return { outbox, transition, ...verifyFrozenDelivery(outbox, transition, installationId) };
+    return { outbox, transition, ...verifyAssignmentDelivery(outbox, transition, installationId) };
   }
 
   async function receiveDelivery(outboxId, now = new Date()) {
@@ -311,13 +361,17 @@ export function createDiagnosticAssignmentService({
 
   async function resolveStageInput(material) {
     const payload = material.sourceEvent.payload;
-    const evidencePackage = await packageReader.getPackage(payload.evidence_package_id);
-    if (evidencePackage.case_id !== material.sourceEvent.aggregate_id
-        || evidencePackage.semantic_digest !== payload.semantic_digest
-        || evidencePackage.package_artifact_digest !== payload.package_artifact_digest
+    const replacement = material.sourceEvent.event_type === "diagnostic.assignment.replacement_requested";
+    const evidencePackage = await packageReader.getPackage(replacement
+      ? payload.successor_evidence_package_id : payload.evidence_package_id);
+    if ((!replacement && evidencePackage.case_id !== material.sourceEvent.aggregate_id)
+        || evidencePackage.semantic_digest !== (replacement
+          ? payload.successor_semantic_digest : payload.semantic_digest)
+        || evidencePackage.package_artifact_digest !== (replacement
+          ? payload.successor_package_artifact_digest : payload.package_artifact_digest)
         || evidencePackage.frozen_at !== material.sourceEvent.occurred_at) {
       throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_PACKAGE_INTEGRITY_VIOLATION",
-        "Frozen source event does not bind the exact verified Evidence Package.");
+        "Assignment source event does not bind the exact verified Evidence Package.");
     }
     const policy = await getAssignmentPolicyActivation(pool, {
       installationId,
@@ -344,7 +398,37 @@ export function createDiagnosticAssignmentService({
       assignmentPolicy: policy.policy_document,
       stageArtifactDigest: DIAGNOSTIC_ASSIGNMENT_STAGE_ARTIFACT_DIGEST
     });
-    return { evidencePackage, policy, stageInput, projection };
+    if (!replacement) return { evidencePackage, policy, stageInput, projection, replacement: null };
+    const replacedAssignment = (await pool.query(
+      `SELECT a.*,s.state,s.state_revision,s.last_transition_id,s.updated_at AS state_updated_at
+       FROM diagnostic_assignments a JOIN diagnostic_assignment_states s ON s.assignment_id=a.assignment_id
+       WHERE a.installation_id=$1 AND a.environment_id=$2 AND a.assignment_id=$3`,
+      [installationId, environmentId, payload.replaced_assignment_id]
+    )).rows[0];
+    const notice = (await pool.query(
+      `SELECT * FROM diagnostic_reevaluation_notices
+       WHERE installation_id=$1 AND reevaluation_notice_id=$2`,
+      [installationId, payload.reevaluation_notice_id]
+    )).rows[0];
+    const affectedAssignment = notice?.known_affected_assignments?.find((entry) =>
+      entry.assignment_id === payload.replaced_assignment_id);
+    if (!replacedAssignment || replacedAssignment.case_id !== evidencePackage.case_id
+        || replacedAssignment.assignment_policy_activation_id !== payload.assignment_policy_activation_id
+        || !notice || sha256Digest(notice.notice_document) !== notice.notice_digest
+        || notice.predecessor_evidence_package_id !== payload.predecessor_evidence_package_id
+        || notice.successor_evidence_package_id !== payload.successor_evidence_package_id
+        || affectedAssignment?.assignment_digest !== replacedAssignment.assignment_digest
+        || affectedAssignment?.evidence_package_id !== replacedAssignment.evidence_package_id
+        || affectedAssignment?.state !== "unclaimed"
+        || notice.recommended_action !== "replace_unclaimed") {
+      throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_REPLACEMENT_LINEAGE_INTEGRITY_VIOLATION",
+        "Replacement request does not bind one exact prior assignment, notice, policy, and package revision.");
+    }
+    return { evidencePackage, policy, stageInput, projection, replacement: {
+      notice,
+      replaced_assignment_id: replacedAssignment.assignment_id,
+      predecessor_evidence_package_id: payload.predecessor_evidence_package_id
+    } };
   }
 
   async function recordNondeterminism(client, { existing, material, resolved, detectedAt }) {
@@ -407,6 +491,19 @@ export function createDiagnosticAssignmentService({
         [material.sourceEvent.transition_id]
       )).rows[0];
       if (existingStage) {
+        if (existingStage.outcome === "replacement_not_performed") {
+          verifyAssignmentStageRecord(existingStage, null);
+          if (existingStage.source_event_digest !== material.sourceEventDigest
+              || existingStage.stage_input_digest !== resolved.projection.stage_input_digest) {
+            throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_INPUT_HISTORY_DIVERGENCE",
+              "Existing replacement no-op resolves to a different verified input digest.");
+          }
+          await client.query("COMMIT");
+          return { replayed: true, result: {
+            diagnostic_assignment: null,
+            replacement_status: "not_performed_claimed_or_terminal"
+          } };
+        }
         const existingAssignment = (await client.query(
           "SELECT * FROM diagnostic_assignments WHERE assignment_id=$1",
           [existingStage.assignment_id]
@@ -437,6 +534,52 @@ export function createDiagnosticAssignmentService({
           return { replayed: true, result: { diagnostic_assignment: assignmentView(existingAssignment, state) } };
         }
       } else {
+        const replacedState = resolved.replacement ? (await client.query(
+          `SELECT a.*,s.state,s.state_revision,s.last_transition_id,s.updated_at AS state_updated_at
+           FROM diagnostic_assignments a JOIN diagnostic_assignment_states s ON s.assignment_id=a.assignment_id
+           WHERE a.installation_id=$1 AND a.assignment_id=$2 FOR UPDATE OF s`,
+          [installationId, resolved.replacement.replaced_assignment_id]
+        )).rows[0] : null;
+        if (resolved.replacement && (!replacedState || replacedState.state !== "unclaimed")) {
+          const stageRecordId = deterministicUuid({ namespace: "diagnostic-assignment-replacement-noop",
+            source_transition_id: material.sourceEvent.transition_id,
+            stage_input_digest: resolved.projection.stage_input_digest });
+          const resultDocument = {
+            schema_version: DIAGNOSTIC_ASSIGNMENT_STAGE_RECORD_SCHEMA,
+            stage_record_id: stageRecordId,
+            source_transition_id: material.sourceEvent.transition_id,
+            source_event_digest: material.sourceEventDigest,
+            stage_input_digest: resolved.projection.stage_input_digest,
+            stage_artifact_digest: DIAGNOSTIC_ASSIGNMENT_STAGE_ARTIFACT_DIGEST,
+            assignment_rules_digest: DIAGNOSTIC_ASSIGNMENT_RULES_DIGEST,
+            outcome: "replacement_not_performed",
+            assignment_id: null,
+            reason: "replaced_assignment_no_longer_unclaimed",
+            processed_at: processedAt
+          };
+          await client.query(
+            `INSERT INTO diagnostic_assignment_stage_records
+              (stage_record_id,installation_id,environment_id,source_transition_id,source_event_digest,
+               stage_input,stage_input_digest,stage_artifact_digest,assignment_rules_digest,outcome,
+               assignment_id,result_document,result_digest,processed_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'replacement_not_performed',NULL,$10,$11,$12)`,
+            [stageRecordId, installationId, environmentId, material.sourceEvent.transition_id,
+              material.sourceEventDigest, resolved.stageInput, resolved.projection.stage_input_digest,
+              DIAGNOSTIC_ASSIGNMENT_STAGE_ARTIFACT_DIGEST, DIAGNOSTIC_ASSIGNMENT_RULES_DIGEST,
+              resultDocument, sha256Digest(resultDocument), processedAt]
+          );
+          await client.query(
+            `UPDATE diagnostic_assignment_inbox
+             SET status='completed',attempt_count=attempt_count+1,last_error_code=NULL,
+                 completed_at=$2,updated_at=$2 WHERE source_transition_id=$1 AND status='pending'`,
+            [material.sourceEvent.transition_id, processedAt]
+          );
+          await client.query("COMMIT");
+          return { replayed: false, result: {
+            diagnostic_assignment: null,
+            replacement_status: "not_performed_claimed_or_terminal"
+          } };
+        }
         const byIdentity = (await client.query(
           "SELECT * FROM diagnostic_assignments WHERE assignment_id=$1",
           [resolved.projection.assignment_id]
@@ -498,7 +641,7 @@ export function createDiagnosticAssignmentService({
             [installationId, commandId, resolved.projection.stage_input_digest,
               DIAGNOSTIC_ASSIGNMENT_STAGE_AUTHOR,
               { assignment_id: resolved.projection.assignment_id,
-                assignment_digest: resolved.projection.assignment_digest }, processedAt]
+                assignment_digest: resolved.projection.assignment_digest }, createdAt]
           );
           await client.query(
             `INSERT INTO diagnostic_transitions
@@ -514,7 +657,7 @@ export function createDiagnosticAssignmentService({
                 evidence_package_semantic_digest: resolved.evidencePackage.semantic_digest,
                 assignment_policy_activation_id: resolved.policy.assignment_policy_activation_id,
                 assignment_policy_activation_digest: resolved.policy.activation_digest,
-                initial_state: "unclaimed", authority_granted: "none" }, processedAt]
+                initial_state: "unclaimed", authority_granted: "none" }, createdAt]
           );
           const state = (await client.query(
             `INSERT INTO diagnostic_assignment_states
@@ -522,8 +665,92 @@ export function createDiagnosticAssignmentService({
                last_transition_id,updated_at)
              VALUES ($1,$2,$3,$4,'unclaimed',0,$5,$6) RETURNING *`,
             [resolved.projection.assignment_id, installationId, environmentId,
-              resolved.projection.assignment_digest, transitionId, processedAt]
+              resolved.projection.assignment_digest, transitionId, createdAt]
           )).rows[0];
+          let expiredTransitionId = null;
+          if (resolved.replacement) {
+            const replaceCommandId = `assignment-replace:${resolved.replacement.notice.reevaluation_notice_id}`;
+            expiredTransitionId = randomUUID();
+            const replacementDocument = {
+              schema_version: "alphonse.diagnostic-assignment-replacement.v0.1",
+              replacement_id: deterministicUuid({ namespace: "diagnostic-assignment-replacement",
+                reevaluation_notice_id: resolved.replacement.notice.reevaluation_notice_id,
+                replaced_assignment_id: replacedState.assignment_id,
+                replacement_assignment_id: resolved.projection.assignment_id }),
+              case_id: resolved.evidencePackage.case_id,
+              reevaluation_notice_id: resolved.replacement.notice.reevaluation_notice_id,
+              replaced_assignment: {
+                assignment_id: replacedState.assignment_id,
+                assignment_digest: replacedState.assignment_digest,
+                evidence_package_id: replacedState.evidence_package_id,
+                prior_state: "unclaimed"
+              },
+              replacement_assignment: {
+                assignment_id: resolved.projection.assignment_id,
+                assignment_digest: resolved.projection.assignment_digest,
+                evidence_package_id: resolved.evidencePackage.evidence_package_id,
+                initial_state: "unclaimed"
+              },
+              assignment_policy_activation_id: resolved.policy.assignment_policy_activation_id,
+              assignment_policy_activation_digest: resolved.policy.activation_digest,
+              reason: "material_evidence_revision_policy",
+              authority: "bounded_assignment_replacement_only",
+              created_at: processedAt
+            };
+            const replacementDigest = sha256Digest(replacementDocument);
+            await client.query(
+              `INSERT INTO diagnostic_commands
+                (installation_id,command_id,request_digest,operation_id,actor_type,actor_id,result,accepted_at)
+               VALUES ($1,$2,$3,'diagnostic.assignment.replace','service',$4,$5,$6)`,
+              [installationId, replaceCommandId, material.sourceEventDigest,
+                DIAGNOSTIC_ASSIGNMENT_STAGE_AUTHOR,
+                { replaced_assignment_id: replacedState.assignment_id,
+                  replacement_assignment_id: resolved.projection.assignment_id,
+                  reevaluation_notice_id: resolved.replacement.notice.reevaluation_notice_id }, processedAt]
+            );
+            await client.query(
+              `INSERT INTO diagnostic_transitions
+                (transition_id,installation_id,diagnostic_sequence,aggregate_type,aggregate_id,transition_type,
+                 from_revision,to_revision,command_id,actor_type,actor_id,payload,occurred_at)
+               VALUES ($1,$2,$3,'diagnostic_assignment',$4,'diagnostic.assignment.expired',$5,$6,$7,
+                 'service',$8,$9,$10)`,
+              [expiredTransitionId, installationId, String(BigInt(node.next_sequence) + 1n),
+                replacedState.assignment_id, String(BigInt(replacedState.state_revision) + 1n),
+                String(BigInt(replacedState.state_revision) + 2n), replaceCommandId,
+                DIAGNOSTIC_ASSIGNMENT_STAGE_AUTHOR,
+                { assignment_id: replacedState.assignment_id,
+                  assignment_digest: replacedState.assignment_digest,
+                  reason: "material_evidence_revision_policy",
+                  reevaluation_notice_id: resolved.replacement.notice.reevaluation_notice_id,
+                  replacement_assignment_id: resolved.projection.assignment_id,
+                  successor_evidence_package_id: resolved.evidencePackage.evidence_package_id }, processedAt]
+            );
+            const stateUpdate = await client.query(
+              `UPDATE diagnostic_assignment_states
+               SET state='expired',state_revision=state_revision+1,last_transition_id=$2,updated_at=$3
+               WHERE assignment_id=$1 AND state='unclaimed' AND state_revision=$4`,
+              [replacedState.assignment_id, expiredTransitionId, processedAt, replacedState.state_revision]
+            );
+            if (stateUpdate.rowCount !== 1) {
+              throw new KernelError(409, "DIAGNOSTIC_ASSIGNMENT_REPLACEMENT_RACE_LOST",
+                "Assignment was claimed or changed before governed replacement could commit.");
+            }
+            await client.query(
+              `INSERT INTO diagnostic_assignment_replacements
+                (replacement_id,installation_id,environment_id,case_id,reevaluation_notice_id,
+                 replaced_assignment_id,replacement_assignment_id,predecessor_evidence_package_id,
+                 successor_evidence_package_id,assignment_policy_activation_id,replacement_document,
+                 replacement_digest,created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+              [replacementDocument.replacement_id, installationId, environmentId,
+                resolved.evidencePackage.case_id, resolved.replacement.notice.reevaluation_notice_id,
+                replacedState.assignment_id, resolved.projection.assignment_id,
+                resolved.replacement.predecessor_evidence_package_id,
+                resolved.evidencePackage.evidence_package_id,
+                resolved.policy.assignment_policy_activation_id, replacementDocument,
+                replacementDigest, processedAt]
+            );
+          }
           const stageRecordId = deterministicUuid({ namespace: "diagnostic-assignment-stage-record",
             source_transition_id: material.sourceEvent.transition_id,
             stage_input_digest: resolved.projection.stage_input_digest });
@@ -562,11 +789,21 @@ export function createDiagnosticAssignmentService({
               (outbox_id,installation_id,transition_id,event_type,payload,created_at)
              VALUES ($1,$2,$3,'diagnostic.assignment.created',$4,$5)`,
             [randomUUID(), installationId, transitionId,
-              { transition_id: transitionId, assignment_id: resolved.projection.assignment_id }, processedAt]
+              { transition_id: transitionId, assignment_id: resolved.projection.assignment_id }, createdAt]
           );
+          if (expiredTransitionId) {
+            await client.query(
+              `INSERT INTO diagnostic_outbox
+                (outbox_id,installation_id,transition_id,event_type,payload,created_at)
+               VALUES ($1,$2,$3,'diagnostic.assignment.expired',$4,$5)`,
+              [randomUUID(), installationId, expiredTransitionId,
+                { transition_id: expiredTransitionId, assignment_id: replacedState.assignment_id,
+                  replacement_assignment_id: resolved.projection.assignment_id }, processedAt]
+            );
+          }
           await client.query(
-            `UPDATE diagnostic_nodes SET revision=revision+1,next_sequence=next_sequence+1,updated_at=$2
-             WHERE installation_id=$1`, [installationId, processedAt]
+            `UPDATE diagnostic_nodes SET revision=revision+$2,next_sequence=next_sequence+$2,updated_at=$3
+             WHERE installation_id=$1`, [installationId, expiredTransitionId ? "2" : "1", processedAt]
           );
           verifyAssignmentRow(assignmentRow, state);
           await client.query("COMMIT");
@@ -693,7 +930,8 @@ export function createDiagnosticAssignmentService({
        FROM diagnostic_outbox o
        JOIN diagnostic_transitions t ON t.transition_id=o.transition_id
        LEFT JOIN diagnostic_assignment_inbox i ON i.source_transition_id=t.transition_id
-       WHERE o.installation_id=$1 AND o.event_type='diagnostic.evidence_package.frozen'
+       WHERE o.installation_id=$1
+         AND o.event_type IN ('diagnostic.evidence_package.frozen','diagnostic.assignment.replacement_requested')
          AND t.payload ? 'assignment_policy_activation_id'
          AND (i.source_transition_id IS NULL OR i.status='pending')
        ORDER BY t.diagnostic_sequence,o.outbox_id LIMIT $2`,
@@ -704,7 +942,16 @@ export function createDiagnosticAssignmentService({
       try {
         results.push(await processOutboxEvent(candidate.outbox_id, now));
       } catch (error) {
-        if (isTerminalStageError(error)) await recordTerminalFailure(candidate.outbox_id, error, now);
+        if (isTerminalStageError(error)) {
+          await recordTerminalFailure(candidate.outbox_id, error, now);
+        } else {
+          await pool.query(
+            `UPDATE diagnostic_assignment_inbox
+             SET attempt_count=attempt_count+1,last_error_code=$2,updated_at=$3
+             WHERE outbox_id=$1 AND status='pending'`,
+            [candidate.outbox_id, error.code ?? error.name ?? "UNEXPECTED_ASSIGNMENT_STAGE_ERROR", iso(now)]
+          );
+        }
         results.push({ error });
       }
     }
@@ -724,10 +971,13 @@ export function createDiagnosticAssignmentService({
       [assignmentId]
     )).rows[0];
     verifyAssignmentRow(row, state);
-    const transition = state ? (await pool.query(
-      "SELECT * FROM diagnostic_transitions WHERE installation_id=$1 AND transition_id=$2",
-      [installationId, state.last_transition_id]
-    )).rows[0] : null;
+    const transitions = (await pool.query(
+      `SELECT * FROM diagnostic_transitions
+       WHERE installation_id=$1 AND aggregate_type='diagnostic_assignment' AND aggregate_id=$2
+       ORDER BY diagnostic_sequence`, [installationId, assignmentId]
+    )).rows;
+    verifyAssignmentStateHistory({ row, state, transitions });
+    const transition = transitions.find((entry) => entry.transition_type === "diagnostic.assignment.created") ?? null;
     const command = transition ? (await pool.query(
       "SELECT * FROM diagnostic_commands WHERE installation_id=$1 AND command_id=$2",
       [installationId, transition.command_id]
@@ -744,7 +994,7 @@ export function createDiagnosticAssignmentService({
     const creation = verifyAssignmentCreationMaterial({
       row, state, transition, command, outbox: outboxes[0]
     });
-    return { row, state, creation };
+    return { row, state, creation, transitions };
   }
 
   async function getAssignment(assignmentId) {
@@ -771,8 +1021,11 @@ export function createDiagnosticAssignmentService({
     await packageReader.getPackage(evidencePackageId);
     const transition = (await pool.query(
       `SELECT * FROM diagnostic_transitions
-       WHERE installation_id=$1 AND transition_type='diagnostic.evidence_package.frozen'
-         AND payload->>'evidence_package_id'=$2`,
+       WHERE installation_id=$1 AND (
+         (transition_type='diagnostic.evidence_package.frozen' AND payload->>'evidence_package_id'=$2)
+         OR (transition_type='diagnostic.assignment.replacement_requested'
+           AND payload->>'successor_evidence_package_id'=$2))
+       ORDER BY diagnostic_sequence DESC LIMIT 1`,
       [installationId, evidencePackageId]
     )).rows[0];
     if (!transition?.payload?.assignment_policy_activation_id) {
@@ -785,7 +1038,8 @@ export function createDiagnosticAssignmentService({
     )).rows[0];
     if (!inbox) {
       return { evidence_package_id: evidencePackageId, source_transition_id: transition.transition_id,
-        status: "awaiting_delivery", assignment_id: null, failure: null, authority_granted: "none" };
+        status: "awaiting_delivery", assignment_id: null, failure: lastLoopError,
+        authority_granted: "none" };
     }
     const stage = (await pool.query(
       "SELECT * FROM diagnostic_assignment_stage_records WHERE source_transition_id=$1",
@@ -797,9 +1051,17 @@ export function createDiagnosticAssignmentService({
         status: "terminal_failed", assignment_id: null,
         failure: stage.result_document.error, authority_granted: "none" };
     }
+    if (inbox.status === "completed" && stage?.outcome === "replacement_not_performed") {
+      verifyAssignmentStageRecord(stage, null);
+      return { evidence_package_id: evidencePackageId, source_transition_id: transition.transition_id,
+        status: "replacement_not_performed", assignment_id: null,
+        failure: null, authority_granted: "none" };
+    }
     if (inbox.status !== "completed" || !stage) {
       return { evidence_package_id: evidencePackageId, source_transition_id: transition.transition_id,
-        status: "pending", assignment_id: null, failure: null, authority_granted: "none" };
+        status: "pending", assignment_id: null,
+        failure: inbox.last_error_code ? { code: inbox.last_error_code,
+          attempt_count: inbox.attempt_count } : null, authority_granted: "none" };
     }
     const { row: assignment, state } = await loadAssignmentRow(stage.assignment_id);
     verifyAssignmentStageRecord(stage, assignment);
@@ -824,7 +1086,7 @@ export function createDiagnosticAssignmentService({
 
   async function getVerificationMaterial(assignmentId) {
     uuid(assignmentId, "assignment_id");
-    const { row: assignment, state, creation } = await loadAssignmentRow(assignmentId);
+    const { row: assignment, state, creation, transitions } = await loadAssignmentRow(assignmentId);
     const policy = await getAssignmentPolicyActivation(pool, {
       installationId, environmentId,
       assignmentPolicyActivationId: assignment.assignment_policy_activation_id
@@ -846,7 +1108,7 @@ export function createDiagnosticAssignmentService({
       "SELECT * FROM diagnostic_outbox WHERE outbox_id=$1",
       [inbox.outbox_id]
     )).rows[0];
-    const delivery = verifyFrozenDelivery(outbox, transition, installationId);
+    const delivery = verifyAssignmentDelivery(outbox, transition, installationId);
     if (delivery.sourceEventDigest !== inbox.source_event_digest
         || delivery.deliveryDigest !== inbox.delivery_digest || inbox.status !== "completed") {
       throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_INBOX_INTEGRITY_VIOLATION",
@@ -866,11 +1128,57 @@ export function createDiagnosticAssignmentService({
         "Assignment Policy activation no longer resolves to its exact deployed export material.");
     }
     const evidencePackage = await packageReader.getPackage(assignment.evidence_package_id);
+    let replacementHistory = null;
+    if (transition.transition_type === "diagnostic.assignment.replacement_requested") {
+      const replacement = (await pool.query(
+        `SELECT * FROM diagnostic_assignment_replacements
+         WHERE installation_id=$1 AND replacement_assignment_id=$2`,
+        [installationId, assignmentId]
+      )).rows[0];
+      if (!replacement) {
+        throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_REPLACEMENT_HISTORY_INTEGRITY_VIOLATION",
+          "Replacement Assignment is missing its immutable replacement record.");
+      }
+      const notice = (await pool.query(
+        `SELECT * FROM diagnostic_reevaluation_notices
+         WHERE installation_id=$1 AND reevaluation_notice_id=$2`,
+        [installationId, replacement.reevaluation_notice_id]
+      )).rows[0];
+      const replaced = await loadAssignmentRow(replacement.replaced_assignment_id);
+      const expiry = replaced.transitions.find((entry) =>
+        entry.transition_type === "diagnostic.assignment.expired"
+          && entry.payload?.replacement_assignment_id === assignmentId);
+      const expiryCommand = expiry ? (await pool.query(
+        "SELECT * FROM diagnostic_commands WHERE installation_id=$1 AND command_id=$2",
+        [installationId, expiry.command_id]
+      )).rows[0] : null;
+      const expiryOutboxes = expiry ? (await pool.query(
+        `SELECT * FROM diagnostic_outbox
+         WHERE installation_id=$1 AND transition_id=$2 AND event_type='diagnostic.assignment.expired'`,
+        [installationId, expiry.transition_id]
+      )).rows : [];
+      if (!notice || !expiry || !expiryCommand || expiryOutboxes.length !== 1) {
+        throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_REPLACEMENT_HISTORY_INTEGRITY_VIOLATION",
+          "Replacement Assignment does not resolve one complete notice, expiry, and prior history.");
+      }
+      replacementHistory = {
+        replacement,
+        reevaluation_notice: notice,
+        replaced_assignment: replaced.row,
+        replaced_assignment_state: replaced.state,
+        replaced_assignment_creation: replaced.creation,
+        replaced_assignment_transitions: replaced.transitions,
+        expiry_command: expiryCommand,
+        expiry_outbox: expiryOutboxes[0]
+      };
+    }
     return encodeValue({
       schema_version: VERIFICATION_MATERIAL_SCHEMA,
       assignment: assignment,
       assignment_state: state,
       assignment_creation: creation,
+      assignment_transitions: transitions,
+      replacement_history: replacementHistory,
       assignment_policy_activation: policy,
       assignment_policy_export: {
         deployment_id: resolvedPolicyExport.deployment_id,
@@ -898,7 +1206,9 @@ export function createDiagnosticAssignmentService({
     const tick = async () => {
       if (tickRunning) return;
       tickRunning = true;
-      try { await processAvailable(); } catch {}
+      try { await processAvailable(); lastLoopError = null; }
+      catch (error) { lastLoopError = { code: error.code ?? error.name ?? "ASSIGNMENT_STAGE_LOOP_ERROR",
+        message: error.message }; }
       finally { tickRunning = false; }
     };
     timer = setInterval(tick, intervalMs);

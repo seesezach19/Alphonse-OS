@@ -1,15 +1,18 @@
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import { selectCaseRelevantCoverage } from "./diagnostic-case-coverage.js";
 import { validateEvidenceSelectionPolicy } from "./diagnostic-evidence-contracts.js";
 import { KernelError } from "./errors.js";
 
 export const DIAGNOSTIC_EVIDENCE_SELECTION_RULES = Object.freeze({
-  schema_version: "alphonse.diagnostic-evidence-selection-rules.v0.1",
+  schema_version: "alphonse.diagnostic-evidence-selection-rules.v0.2",
   seed: "matched_committed_effects",
   selection: "typed_graph_paths_only",
   broad_logical_operation_search: false,
   cardinality: "required_ancestors_for_every_matched_effect",
   model_selected_evidence: false,
-  optional_destination_snapshot_blocks_freeze: false
+  optional_destination_snapshot_blocks_freeze: false,
+  coverage_scope: "selected_case_contributing_streams",
+  unattributable_rejections: "independent_prefix_lineage_only"
 });
 export const DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST =
   sha256Digest(DIAGNOSTIC_EVIDENCE_SELECTION_RULES);
@@ -57,9 +60,9 @@ export function selectDiagnosticEvidence({
     fail("DIAGNOSTIC_EVIDENCE_INPUT_VERSION_UNSUPPORTED",
       "Evidence selection requires hardened correlation, normalized effects, and bounded evaluation inputs.");
   }
-  if (behaviorEvaluation.result !== "violated") {
-    fail("DIAGNOSTIC_EVIDENCE_EVALUATION_NOT_VIOLATED",
-      "Evidence collection may start only from an exact violated Behavior Evaluation.");
+  if (!["indeterminate", "satisfied", "violated"].includes(behaviorEvaluation.result)) {
+    fail("DIAGNOSTIC_EVIDENCE_EVALUATION_RESULT_UNSUPPORTED",
+      "Evidence selection requires one exact bounded Behavior Evaluation result.");
   }
   const nodes = correlationProjection.graph.nodes;
   const edges = correlationProjection.graph.edges;
@@ -230,7 +233,11 @@ export function selectDiagnosticEvidence({
   }
   selectedProvenance.sort(compareCanonical);
 
-  const incompleteStreams = correlationProjection.coverage.streams.filter((stream) =>
+  const caseCoverage = selectCaseRelevantCoverage({
+    correlationProjection,
+    observationEvidence: selectedObservations
+  });
+  const incompleteStreams = caseCoverage.streams.filter((stream) =>
     stream.coverage_status !== "complete_through_high_water").map((stream) => ({
     grant_id: stream.grant_id,
     stream_id: stream.stream_id,
@@ -270,14 +277,14 @@ export function selectDiagnosticEvidence({
       incomplete_contributing_streams: incompleteStreams
     },
     coverage_and_limitations: {
-      streams: structuredClone(correlationProjection.coverage.streams),
-      gaps: structuredClone(correlationProjection.coverage.streams.flatMap((stream) =>
+      streams: structuredClone(caseCoverage.streams),
+      gaps: structuredClone(caseCoverage.streams.flatMap((stream) =>
         stream.missing_ranges.map((range) => ({ grant_id: stream.grant_id, stream_id: stream.stream_id, range })))),
-      conflicts: structuredClone(correlationProjection.coverage.conflicts),
-      rejections: structuredClone(correlationProjection.coverage.rejections),
+      conflicts: structuredClone(caseCoverage.conflicts),
+      rejections: structuredClone(caseCoverage.rejections),
       contradictions,
       unresolved_relationships: structuredClone(correlationProjection.graph.unresolved_relationships),
-      limitations: structuredClone(correlationProjection.coverage.limitations)
+      limitations: structuredClone(caseCoverage.limitations)
     },
     disclosure_accounting: {
       selection_seed: "matched_committed_effects",

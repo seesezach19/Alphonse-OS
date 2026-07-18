@@ -1,7 +1,9 @@
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import { DIAGNOSTIC_EVIDENCE_MATERIAL_CHANGE_CLASSES } from "./diagnostic-evidence-revision.js";
 import { KernelError } from "./errors.js";
 
-export const DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA = "alphonse.diagnostic-assignment-policy.v0.1";
+export const DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA_V0_1 = "alphonse.diagnostic-assignment-policy.v0.1";
+export const DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA = "alphonse.diagnostic-assignment-policy.v0.2";
 export const DIAGNOSTIC_ASSIGNMENT_POLICY_ACTIVATION_SCHEMA =
   "alphonse.diagnostic-assignment-policy-activation.v0.1";
 export const DIAGNOSTIC_ASSIGNMENT_STAGE_INPUT_SCHEMA =
@@ -124,13 +126,17 @@ function exactStrings(value, path, expected) {
 }
 
 export function validateDiagnosticAssignmentPolicy(value) {
-  exact(value, "diagnostic_assignment_policy", [
+  const baseFields = [
     "schema_version", "policy_id", "instruction", "output_schema", "required_passport_class",
     "required_worker_capabilities", "prohibitions", "model_requirements", "runtime_requirements",
     "isolation", "mounts", "network", "resources", "assignment_ttl_seconds",
     "data_classification", "disclosure"
-  ]);
-  if (value.schema_version !== DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA) {
+  ];
+  const versionedFields = value?.schema_version === DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA
+    ? [...baseFields, "late_evidence"] : baseFields;
+  exact(value, "diagnostic_assignment_policy", versionedFields);
+  if (![DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA_V0_1,
+    DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA].includes(value.schema_version)) {
     fail("diagnostic_assignment_policy.schema_version is unsupported.");
   }
   if (typeof value.policy_id !== "string" || !IDENTIFIER.test(value.policy_id)) {
@@ -212,7 +218,44 @@ export function validateDiagnosticAssignmentPolicy(value) {
       || value.disclosure.provider_training !== "prohibited") {
     fail("diagnostic_assignment_policy.disclosure is unsupported.");
   }
+  if (value.schema_version === DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA) {
+    exact(value.late_evidence, "diagnostic_assignment_policy.late_evidence", [
+      "default_action", "material_change_actions", "claimed_assignment_action"
+    ]);
+    if (value.late_evidence.default_action !== "notify_only"
+        || value.late_evidence.claimed_assignment_action !== "notify_only") {
+      fail("Late-evidence defaults and claimed-assignment handling must remain notification only.");
+    }
+    if (!Array.isArray(value.late_evidence.material_change_actions)
+        || value.late_evidence.material_change_actions.length >
+          DIAGNOSTIC_EVIDENCE_MATERIAL_CHANGE_CLASSES.length) {
+      fail("diagnostic_assignment_policy.late_evidence.material_change_actions is invalid.");
+    }
+    const seen = new Set();
+    for (const [index, entry] of value.late_evidence.material_change_actions.entries()) {
+      exact(entry, `diagnostic_assignment_policy.late_evidence.material_change_actions[${index}]`, [
+        "material_change_class", "action"
+      ]);
+      if (!DIAGNOSTIC_EVIDENCE_MATERIAL_CHANGE_CLASSES.includes(entry.material_change_class)
+          || !["notify_only", "replace_unclaimed"].includes(entry.action)
+          || seen.has(entry.material_change_class)) {
+        fail("Late-evidence material action must be unique and use the closed vocabulary.", { index });
+      }
+      seen.add(entry.material_change_class);
+    }
+  }
   return structuredClone(value);
+}
+
+export function resolveLateEvidenceAssignmentAction(policy, materialChangeClasses, assignmentState) {
+  const validated = validateDiagnosticAssignmentPolicy(policy);
+  if (assignmentState !== "unclaimed") return "notify_only";
+  if (validated.schema_version === DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA_V0_1) return "notify_only";
+  const actions = new Map(validated.late_evidence.material_change_actions.map((entry) => [
+    entry.material_change_class, entry.action
+  ]));
+  return materialChangeClasses.some((entry) => actions.get(entry) === "replace_unclaimed")
+    ? "replace_unclaimed" : validated.late_evidence.default_action;
 }
 
 export function validateDiagnosticAssignmentExport(kind, content) {

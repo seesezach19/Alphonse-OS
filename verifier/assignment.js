@@ -6,10 +6,18 @@ const STAGE_INPUT_SCHEMA = "alphonse.diagnostic-assignment-stage-input.v0.1";
 const ASSIGNMENT_SCHEMA = "alphonse.diagnostic-assignment.v0.1";
 const RECORD_SCHEMA = "alphonse.diagnostic-assignment-record.v0.1";
 const STAGE_RECORD_SCHEMA = "alphonse.diagnostic-assignment-stage-record.v0.1";
-const SOURCE_EVENT_SCHEMA = "alphonse.evidence-package-frozen-assignment-event.v0.1";
+const FROZEN_EVENT_SCHEMA = "alphonse.evidence-package-frozen-assignment-event.v0.1";
+const REPLACEMENT_EVENT_SCHEMA = "alphonse.diagnostic-assignment-replacement-event.v0.1";
 const DELIVERY_SCHEMA = "alphonse.diagnostic-assignment-delivery.v0.1";
 const ASSIGNMENT_AUTHOR = "diagnostic-stage-worker:assignment-creation-v0.1";
-const PACKAGE_AUTHOR = "diagnostic-stage-worker:evidence-packaging-v0.1";
+const PACKAGE_AUTHORS = ["diagnostic-stage-worker:evidence-packaging-v0.1",
+  "diagnostic-stage-worker:evidence-packaging-v0.2"];
+const MATERIAL_CHANGE_CLASSES = [
+  "behavior_evaluation_changed", "contradiction_added", "contradiction_resolved",
+  "contributing_coverage_changed", "governed_reinterpretation_requested",
+  "required_relationship_became_unresolved", "required_relationship_resolved",
+  "required_role_connected", "required_role_disconnected", "selected_evidence_changed"
+];
 const RULES = {
   schema_version: "alphonse.diagnostic-assignment-rules.v0.1",
   identity_namespace: "diagnostic-assignment",
@@ -138,11 +146,15 @@ function verifyStageArchive(entry, expectedDigest) {
 }
 
 function verifyNeutralPolicy(policy) {
-  assert(exactKeys(policy, ["schema_version", "policy_id", "instruction", "output_schema",
+  const baseFields = ["schema_version", "policy_id", "instruction", "output_schema",
     "required_passport_class", "required_worker_capabilities", "prohibitions", "model_requirements",
     "runtime_requirements", "isolation", "mounts", "network", "resources", "assignment_ttl_seconds",
-    "data_classification", "disclosure"])
-    && policy.schema_version === "alphonse.diagnostic-assignment-policy.v0.1"
+    "data_classification", "disclosure"];
+  const fields = policy?.schema_version === "alphonse.diagnostic-assignment-policy.v0.2"
+    ? [...baseFields, "late_evidence"] : baseFields;
+  assert(exactKeys(policy, fields)
+    && ["alphonse.diagnostic-assignment-policy.v0.1",
+      "alphonse.diagnostic-assignment-policy.v0.2"].includes(policy.schema_version)
     && typeof policy.policy_id === "string" && /^[a-z][a-z0-9._:-]{2,199}$/.test(policy.policy_id)
     && same(policy.instruction, EXPECTED_INSTRUCTION),
   "VERIFIER_ASSIGNMENT_INSTRUCTION_NOT_NEUTRAL",
@@ -177,11 +189,32 @@ function verifyNeutralPolicy(policy) {
       recipient: "authorized_claimed_worker_run_only", provider_training: "prohibited" }),
   "VERIFIER_ASSIGNMENT_POLICY_AUTHORITY_VIOLATION",
   "Assignment Policy does not preserve its exact bounded no-authority work contract.");
+  if (policy.schema_version === "alphonse.diagnostic-assignment-policy.v0.2") {
+    assert(exactKeys(policy.late_evidence,
+      ["default_action", "material_change_actions", "claimed_assignment_action"])
+      && policy.late_evidence.default_action === "notify_only"
+      && policy.late_evidence.claimed_assignment_action === "notify_only"
+      && Array.isArray(policy.late_evidence.material_change_actions)
+      && policy.late_evidence.material_change_actions.length <= MATERIAL_CHANGE_CLASSES.length,
+    "VERIFIER_ASSIGNMENT_LATE_EVIDENCE_POLICY_INVALID",
+    "Assignment Policy late-evidence defaults exceed notification-only authority.");
+    const seen = new Set();
+    for (const entry of policy.late_evidence.material_change_actions) {
+      assert(exactKeys(entry, ["material_change_class", "action"])
+        && MATERIAL_CHANGE_CLASSES.includes(entry.material_change_class)
+        && ["notify_only", "replace_unclaimed"].includes(entry.action)
+        && !seen.has(entry.material_change_class),
+      "VERIFIER_ASSIGNMENT_LATE_EVIDENCE_POLICY_INVALID",
+      "Assignment Policy late-evidence actions are not one closed unique mapping.");
+      seen.add(entry.material_change_class);
+    }
+  }
 }
 
 function sourceEvent(transition) {
   return {
-    schema_version: SOURCE_EVENT_SCHEMA,
+    schema_version: transition.transition_type === "diagnostic.assignment.replacement_requested"
+      ? REPLACEMENT_EVENT_SCHEMA : FROZEN_EVENT_SCHEMA,
     transition_id: transition.transition_id,
     installation_id: transition.installation_id,
     diagnostic_sequence: String(transition.diagnostic_sequence),
@@ -207,6 +240,52 @@ function delivery(outbox) {
     payload: structuredClone(outbox.payload),
     created_at: iso(outbox.created_at)
   };
+}
+
+function verifyAssignmentStateHistory(row, state, transitions) {
+  assert(Array.isArray(transitions) && transitions.length > 0,
+    "VERIFIER_ASSIGNMENT_STATE_HISTORY_MISMATCH",
+    "Assignment requires one complete immutable transition history.");
+  const ordered = [...transitions].sort((left, right) =>
+    BigInt(left.diagnostic_sequence) < BigInt(right.diagnostic_sequence) ? -1 : 1);
+  let expectedState = "unclaimed";
+  for (let index = 0; index < ordered.length; index += 1) {
+    const transition = ordered[index];
+    assert(transition.installation_id === row.installation_id
+      && transition.aggregate_type === "diagnostic_assignment"
+      && transition.aggregate_id === row.assignment_id
+      && String(transition.from_revision) === String(index)
+      && String(transition.to_revision) === String(index + 1),
+    "VERIFIER_ASSIGNMENT_STATE_HISTORY_MISMATCH",
+    "Assignment transitions are not one contiguous aggregate chain.");
+    if (index === 0) {
+      assert(transition.transition_type === "diagnostic.assignment.created",
+        "VERIFIER_ASSIGNMENT_STATE_HISTORY_MISMATCH",
+        "Assignment history does not begin with immutable creation.");
+      continue;
+    }
+    const nextState = {
+      "diagnostic.assignment.claimed": "claimed",
+      "diagnostic.assignment.expired": "expired",
+      "diagnostic.assignment.cancelled": "cancelled"
+    }[transition.transition_type];
+    const allowed = expectedState === "unclaimed"
+      ? ["claimed", "expired", "cancelled"].includes(nextState)
+      : expectedState === "claimed" && nextState === "cancelled";
+    assert(allowed && transition.payload?.assignment_id === row.assignment_id
+      && transition.payload?.assignment_digest === row.assignment_digest,
+    "VERIFIER_ASSIGNMENT_STATE_HISTORY_MISMATCH",
+    "Assignment history contains an invalid state or identity transition.");
+    expectedState = nextState;
+  }
+  const last = ordered.at(-1);
+  assert(state.assignment_id === row.assignment_id && state.assignment_digest === row.assignment_digest
+    && state.state === expectedState && String(state.state_revision) === String(ordered.length - 1)
+    && state.last_transition_id === last.transition_id
+    && iso(state.updated_at) === iso(last.occurred_at),
+  "VERIFIER_ASSIGNMENT_STATE_HISTORY_MISMATCH",
+  "Assignment state projection does not match its immutable transition chain.");
+  return ordered;
 }
 
 function buildStageInput(material, event, policy) {
@@ -293,6 +372,103 @@ function projectAssignment(stageInput, policy) {
   return { assignmentId, seriesId, assignment, assignmentDigest: sha256Digest(assignment), inputDigest };
 }
 
+function verifyReplacementHistory(material, event, projected, policy, published) {
+  const history = material.replacement_history;
+  assert(history && published.reevaluation_notice
+    && same(history.reevaluation_notice, published.reevaluation_notice),
+  "VERIFIER_ASSIGNMENT_REPLACEMENT_HISTORY_MISMATCH",
+  "Replacement does not bind the independently verified reevaluation notice.");
+  const replacement = history.replacement;
+  const notice = history.reevaluation_notice;
+  const replaced = history.replaced_assignment;
+  const replacedState = history.replaced_assignment_state;
+  assert(sha256Digest(notice.notice_document) === notice.notice_digest
+    && notice.reevaluation_notice_id === event.payload.reevaluation_notice_id
+    && notice.predecessor_evidence_package_id === event.payload.predecessor_evidence_package_id
+    && notice.successor_evidence_package_id === event.payload.successor_evidence_package_id
+    && notice.recommended_action === "replace_unclaimed"
+    && event.payload.replaced_assignment_id === replaced.assignment_id,
+  "VERIFIER_ASSIGNMENT_REPLACEMENT_HISTORY_MISMATCH",
+  "Replacement notice and source transition do not bind one exact package lineage.");
+  assert(sha256Digest(replaced.assignment_document) === replaced.assignment_digest
+    && sha256Digest(replaced.record_document) === replaced.record_digest
+    && replaced.case_id === projected.assignment.case_id
+    && notice.known_affected_assignments.some((entry) =>
+      entry.assignment_id === replaced.assignment_id
+        && entry.assignment_digest === replaced.assignment_digest
+        && entry.evidence_package_id === replaced.evidence_package_id
+        && entry.state === "unclaimed")
+    && replaced.assignment_policy_activation_id === policy.assignment_policy_activation_id,
+  "VERIFIER_ASSIGNMENT_REPLACEMENT_HISTORY_MISMATCH",
+  "Replaced Assignment identity or policy lineage does not verify.");
+  const replacedTransitions = verifyAssignmentStateHistory(
+    replaced, replacedState, history.replaced_assignment_transitions);
+  const expiry = replacedTransitions.find((entry) =>
+    entry.transition_type === "diagnostic.assignment.expired"
+      && entry.payload?.replacement_assignment_id === projected.assignmentId);
+  const expectedExpiryPayload = {
+    assignment_id: replaced.assignment_id,
+    assignment_digest: replaced.assignment_digest,
+    reason: "material_evidence_revision_policy",
+    reevaluation_notice_id: notice.reevaluation_notice_id,
+    replacement_assignment_id: projected.assignmentId,
+    successor_evidence_package_id: projected.assignment.evidence_package.evidence_package_id
+  };
+  assert(expiry && same(expiry.payload, expectedExpiryPayload)
+    && expiry.actor_type === "service" && expiry.actor_id === ASSIGNMENT_AUTHOR
+    && replacedState.state === "expired"
+    && history.expiry_command?.command_id === expiry.command_id
+    && history.expiry_command.installation_id === replaced.installation_id
+    && history.expiry_command.operation_id === "diagnostic.assignment.replace"
+    && history.expiry_command.actor_type === "service"
+    && history.expiry_command.actor_id === ASSIGNMENT_AUTHOR
+    && history.expiry_command.request_digest === sha256Digest(event)
+    && same(history.expiry_command.result, {
+      replaced_assignment_id: replaced.assignment_id,
+      replacement_assignment_id: projected.assignmentId,
+      reevaluation_notice_id: notice.reevaluation_notice_id
+    })
+    && iso(history.expiry_command.accepted_at) === iso(expiry.occurred_at)
+    && history.expiry_outbox?.transition_id === expiry.transition_id
+    && history.expiry_outbox.event_type === "diagnostic.assignment.expired"
+    && same(history.expiry_outbox.payload, { transition_id: expiry.transition_id,
+      assignment_id: replaced.assignment_id, replacement_assignment_id: projected.assignmentId })
+    && iso(history.expiry_outbox.created_at) === iso(expiry.occurred_at),
+  "VERIFIER_ASSIGNMENT_REPLACEMENT_HISTORY_MISMATCH",
+  "Replaced Assignment expiry command, transition, state, and outbox do not verify.");
+  const expectedReplacement = {
+    schema_version: "alphonse.diagnostic-assignment-replacement.v0.1",
+    replacement_id: deterministicUuid({ namespace: "diagnostic-assignment-replacement",
+      reevaluation_notice_id: notice.reevaluation_notice_id,
+      replaced_assignment_id: replaced.assignment_id,
+      replacement_assignment_id: projected.assignmentId }),
+    case_id: projected.assignment.case_id,
+    reevaluation_notice_id: notice.reevaluation_notice_id,
+    replaced_assignment: { assignment_id: replaced.assignment_id,
+      assignment_digest: replaced.assignment_digest,
+      evidence_package_id: replaced.evidence_package_id, prior_state: "unclaimed" },
+    replacement_assignment: { assignment_id: projected.assignmentId,
+      assignment_digest: projected.assignmentDigest,
+      evidence_package_id: projected.assignment.evidence_package.evidence_package_id,
+      initial_state: "unclaimed" },
+    assignment_policy_activation_id: policy.assignment_policy_activation_id,
+    assignment_policy_activation_digest: policy.activation_digest,
+    reason: "material_evidence_revision_policy",
+    authority: "bounded_assignment_replacement_only",
+    created_at: iso(expiry.occurred_at)
+  };
+  assert(same(expectedReplacement, replacement.replacement_document)
+    && sha256Digest(expectedReplacement) === replacement.replacement_digest
+    && replacement.replacement_id === expectedReplacement.replacement_id
+    && replacement.replaced_assignment_id === replaced.assignment_id
+    && replacement.replacement_assignment_id === projected.assignmentId
+    && replacement.predecessor_evidence_package_id === event.payload.predecessor_evidence_package_id
+    && replacement.successor_evidence_package_id === event.payload.successor_evidence_package_id
+    && replacement.assignment_policy_activation_id === policy.assignment_policy_activation_id,
+  "VERIFIER_ASSIGNMENT_REPLACEMENT_HISTORY_MISMATCH",
+  "Immutable Assignment replacement record does not independently recompute.");
+}
+
 export function verifyDiagnosticAssignmentMaterial(material, independentlyVerifiedPackage) {
   assert(material?.schema_version === MATERIAL_SCHEMA,
     "VERIFIER_ASSIGNMENT_MATERIAL_INVALID", "Assignment verification material schema is unsupported.");
@@ -328,7 +504,9 @@ export function verifyDiagnosticAssignmentMaterial(material, independentlyVerifi
     && exportedPolicy.package_artifact_digest === policy.package_artifact_digest
     && exportedPolicy.export_record?.kind === "diagnostic_assignment_policy"
     && exportedPolicy.export_record.export_id === policy.policy_export_id
-    && exportedPolicy.export_record.contract_version === "0.1.0"
+    && exportedPolicy.export_record.contract_version ===
+      (policy.policy_document.schema_version === "alphonse.diagnostic-assignment-policy.v0.2"
+        ? "0.2.0" : "0.1.0")
     && sha256Digest(exportedPolicy.export_record.content) === policy.policy_digest
     && same(exportedPolicy.export_record.content, policy.policy_document),
   "VERIFIER_ASSIGNMENT_POLICY_EXPORT_MISMATCH",
@@ -338,32 +516,53 @@ export function verifyDiagnosticAssignmentMaterial(material, independentlyVerifi
 
   const event = sourceEvent(material.source_transition);
   const delivered = delivery(material.source_outbox_delivery);
-  assert(event.event_type === "diagnostic.evidence_package.frozen"
-    && event.aggregate_type === "diagnostic_case"
-    && event.actor.type === "service" && event.actor.id === PACKAGE_AUTHOR
+  const replacement = event.event_type === "diagnostic.assignment.replacement_requested";
+  const expectedEventPayload = replacement ? [
+    "assignment_policy_activation_digest", "assignment_policy_activation_id",
+    "predecessor_evidence_package_id", "reevaluation_notice_id", "replaced_assignment_id",
+    "successor_evidence_package_id", "successor_package_artifact_digest", "successor_semantic_digest"
+  ] : [
+    "assignment_policy_activation_digest", "assignment_policy_activation_id", "evidence_package_id",
+    "freeze_reason", "package_artifact_digest", "semantic_digest"
+  ];
+  const expectedDeliveryPayload = replacement
+    ? ["reevaluation_notice_id", "transition_id"] : ["evidence_package_id", "transition_id"];
+  assert(["diagnostic.evidence_package.frozen",
+    "diagnostic.assignment.replacement_requested"].includes(event.event_type)
+    && event.aggregate_type === (replacement ? "diagnostic_assignment_replacement" : "diagnostic_case")
+    && (!replacement || event.aggregate_id === event.payload.reevaluation_notice_id)
+    && event.actor.type === "service" && PACKAGE_AUTHORS.includes(event.actor.id)
+    && exactKeys(event.payload, expectedEventPayload)
+    && exactKeys(delivered.payload, expectedDeliveryPayload)
     && delivered.transition_id === event.transition_id
     && delivered.event_type === event.event_type
     && delivered.created_at === event.occurred_at
     && delivered.payload.transition_id === event.transition_id
-    && delivered.payload.evidence_package_id === event.payload.evidence_package_id
+    && (replacement
+      ? delivered.payload.reevaluation_notice_id === event.payload.reevaluation_notice_id
+      : delivered.payload.evidence_package_id === event.payload.evidence_package_id)
     && sha256Digest(event) === material.inbox_receipt.source_event_digest
     && same(event, material.inbox_receipt.source_event_document)
     && sha256Digest(delivered) === material.inbox_receipt.delivery_digest
     && same(delivered, material.inbox_receipt.delivery_document)
     && material.inbox_receipt.status === "completed",
   "VERIFIER_ASSIGNMENT_SOURCE_EVENT_INTEGRITY_VIOLATION",
-  "Assignment source delivery does not match its immutable frozen-package transition.");
+  "Assignment source delivery does not match its immutable package or replacement transition.");
   const publishedPackage = independentlyVerifiedPackage.bundle.published_outputs_to_compare.evidence_package;
-  const evidencePolicy = independentlyVerifiedPackage.bundle.published_outputs_to_compare
-    .evidence_policy_activation;
+  const published = independentlyVerifiedPackage.bundle.published_outputs_to_compare;
+  const evidencePolicy = published.evidence_policy_activation;
   assert(material.evidence_package.evidence_package_id === publishedPackage.evidence_package_id
     && material.evidence_package.case_id === publishedPackage.case_id
     && material.evidence_package.semantic_digest === publishedPackage.semantic_digest
     && material.evidence_package.package_artifact_digest === publishedPackage.package_artifact_digest
     && material.evidence_package.frozen_at === iso(publishedPackage.frozen_at)
-    && event.payload.evidence_package_id === publishedPackage.evidence_package_id
-    && event.payload.semantic_digest === publishedPackage.semantic_digest
-    && event.payload.package_artifact_digest === publishedPackage.package_artifact_digest
+    && (replacement
+      ? event.payload.successor_evidence_package_id === publishedPackage.evidence_package_id
+        && event.payload.successor_semantic_digest === publishedPackage.semantic_digest
+        && event.payload.successor_package_artifact_digest === publishedPackage.package_artifact_digest
+      : event.payload.evidence_package_id === publishedPackage.evidence_package_id
+        && event.payload.semantic_digest === publishedPackage.semantic_digest
+        && event.payload.package_artifact_digest === publishedPackage.package_artifact_digest)
     && event.payload.assignment_policy_activation_id === policy.assignment_policy_activation_id
     && event.payload.assignment_policy_activation_digest === policy.activation_digest
     && policy.deployment_id === evidencePolicy.deployment_id
@@ -436,8 +635,7 @@ export function verifyDiagnosticAssignmentMaterial(material, independentlyVerifi
     initial_state: "unclaimed",
     authority_granted: "none"
   };
-  assert(state.last_transition_id === creationTransition?.transition_id
-    && creationTransition.installation_id === event.installation_id
+  assert(creationTransition?.installation_id === event.installation_id
     && creationTransition.aggregate_type === "diagnostic_assignment"
     && creationTransition.aggregate_id === projected.assignmentId
     && creationTransition.transition_type === "diagnostic.assignment.created"
@@ -447,7 +645,7 @@ export function verifyDiagnosticAssignmentMaterial(material, independentlyVerifi
     && creationTransition.actor_type === "service"
     && creationTransition.actor_id === ASSIGNMENT_AUTHOR
     && same(creationTransition.payload, creationPayload)
-    && iso(creationTransition.occurred_at) === iso(state.updated_at)
+    && iso(creationTransition.occurred_at) === iso(row.created_at)
     && creationCommand.installation_id === event.installation_id
     && creationCommand.operation_id === "diagnostic.assignment.create"
     && creationCommand.actor_type === "service" && creationCommand.actor_id === ASSIGNMENT_AUTHOR
@@ -463,9 +661,14 @@ export function verifyDiagnosticAssignmentMaterial(material, independentlyVerifi
     && iso(creationOutbox.created_at) === iso(creationTransition.occurred_at),
   "VERIFIER_ASSIGNMENT_CREATION_HISTORY_MISMATCH",
   "Assignment state does not match its exact creation command, transition, and outbox.");
+  verifyAssignmentStateHistory(row, state, material.assignment_transitions);
+  if (replacement) verifyReplacementHistory(material, event, projected, policy, published);
+  else assert(material.replacement_history === null,
+    "VERIFIER_ASSIGNMENT_REPLACEMENT_HISTORY_MISMATCH",
+    "Initial Assignment unexpectedly carries replacement history.");
   assert(state.assignment_id === projected.assignmentId && state.assignment_digest === projected.assignmentDigest
     && state.installation_id === event.installation_id && state.environment_id === policy.environment_id
-    && state.state === "unclaimed" && String(state.state_revision) === "0"
+    && ["unclaimed", "claimed", "expired", "cancelled"].includes(state.state)
     && projected.assignment.authority.authority_granted === "none"
     && projected.assignment.authority.granted_capabilities.length === 0
     && projected.assignment.authority.worker_bound === false
@@ -473,7 +676,7 @@ export function verifyDiagnosticAssignmentMaterial(material, independentlyVerifi
     && projected.assignment.authority.model_contacted === false
     && projected.assignment.authority.provider_request_created === false,
   "VERIFIER_ASSIGNMENT_AUTHORITY_VIOLATION",
-  "Model-free Assignment or current state exceeds the no-authority checkpoint.");
+  "Assignment creation artifact exceeds the no-authority checkpoint.");
   return { assignment_id: projected.assignmentId, assignment_digest: projected.assignmentDigest,
     stage_input_digest: projected.inputDigest, state: state.state,
     assignment_policy_activation_digest: policy.activation_digest };

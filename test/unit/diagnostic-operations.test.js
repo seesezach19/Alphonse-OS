@@ -39,6 +39,8 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.evidence_collection.process",
     "diagnostic.evidence_collection.get",
     "diagnostic.evidence_package.get",
+    "diagnostic.evidence_revision.process",
+    "diagnostic.evidence_revision.get",
     "diagnostic.assignment_policy_activation.activate",
     "diagnostic.assignment_policy_activation.get",
     "diagnostic.assignment.get",

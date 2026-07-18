@@ -370,7 +370,7 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
   const diagnosticAssignmentPolicy = {
     kind: "diagnostic_assignment_policy",
     export_id: "assignment:model-free-diagnostic-analysis",
-    contract_version: "0.1.0",
+    contract_version: "0.2.0",
     content: {
       schema_version: DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA,
       policy_id: "policy:model-free-diagnostic-analysis",
@@ -421,6 +421,13 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
         evidence_scope: "exact_assigned_package_only",
         recipient: "authorized_claimed_worker_run_only",
         provider_training: "prohibited"
+      },
+      late_evidence: {
+        default_action: "notify_only",
+        material_change_actions: [
+          { material_change_class: "behavior_evaluation_changed", action: "replace_unclaimed" }
+        ],
+        claimed_assignment_action: "notify_only"
       }
     }
   };

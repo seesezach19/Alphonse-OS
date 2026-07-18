@@ -1,4 +1,5 @@
 import { canonicalize, deterministicUuid, sha256Digest } from "./canonical-json.js";
+import { selectCaseRelevantCoverage } from "./diagnostic-case-coverage.js";
 import { validateIntegrationBehaviorContract } from "./diagnostic-effect-contracts.js";
 
 export const DIAGNOSTIC_EFFECT_PROJECTION_SCHEMA = "alphonse.diagnostic-effect-projection.v0.1";
@@ -131,10 +132,10 @@ export function buildDiagnosticEffectProjection({
       integrationContractDigest
     });
   }).sort(compareCanonical);
-  const requiredSourcesComplete = correlationProjection.coverage.streams.every((stream) =>
+  const caseCoverage = selectCaseRelevantCoverage({ correlationProjection, observationEvidence });
+  const requiredSourcesComplete = caseCoverage.streams.every((stream) =>
     stream.coverage_status === "complete_through_high_water")
-    && correlationProjection.coverage.conflicts.length === 0
-    && correlationProjection.coverage.rejections.length === 0
+    && caseCoverage.conflicts.length === 0
     && !correlationProjection.graph.unresolved_relationships.some((item) =>
       ["required_observer_stream", "request_reported_ledger_claim"].includes(item.relationship));
   const semanticProjection = {
@@ -157,9 +158,9 @@ export function buildDiagnosticEffectProjection({
     effects,
     coverage: {
       required_sources_complete: requiredSourcesComplete,
-      contributing_streams_digest: sha256Digest(correlationProjection.coverage.streams),
+      contributing_streams_digest: sha256Digest(caseCoverage.streams),
       unresolved_relationships_digest: sha256Digest(correlationProjection.graph.unresolved_relationships),
-      limitations: structuredClone(correlationProjection.coverage.limitations)
+      limitations: structuredClone(caseCoverage.limitations)
     },
     authority: {
       kernel_effect: false,

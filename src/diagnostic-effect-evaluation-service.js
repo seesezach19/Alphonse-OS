@@ -906,6 +906,175 @@ export function createDiagnosticEffectEvaluationService({
     }
   }
 
+  async function reevaluate(input, now = new Date()) {
+    exact(input, "input", ["case_id", "correlation_projection_id", "activation_id"]);
+    const caseId = uuid(input.case_id, "case_id");
+    const correlationProjectionId = uuid(input.correlation_projection_id, "correlation_projection_id");
+    const activationId = uuid(input.activation_id, "activation_id");
+    const diagnosticCase = await getDeterministicCase(caseId);
+    const openingEvaluation = await getEvaluation(diagnosticCase.opening_basis.evaluation_id);
+    const openingEffectProjection = await getEffectProjection(openingEvaluation.effect_projection_id);
+    if (openingEffectProjection.activation_id !== activationId) {
+      throw new KernelError(409, "DIAGNOSTIC_REEVALUATION_ACTIVATION_DRIFT",
+        "Ordinary late-evidence reevaluation must reuse the exact case-opening interpretation activation.");
+    }
+    const projection = await correlationReader.getProjection(correlationProjectionId);
+    if (projection.logical_operation_id !== openingEffectProjection.logical_operation_id
+        || projection.semantic_projection.scope.workflow_id !== diagnosticCase.scope.workflow_id
+        || projection.semantic_projection.scope.integration_id !== diagnosticCase.scope.integration_id
+        || sha256Digest(projection.semantic_projection) !== projection.semantic_digest) {
+      throw new KernelError(409, "DIAGNOSTIC_REEVALUATION_SCOPE_MISMATCH",
+        "Reevaluation projection does not match the exact existing Diagnostic Case scope.");
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [`diagnostic-effect:${installationId}:${correlationProjectionId}:${activationId}`]);
+      const activation = await getActivation(activationId, client);
+      if (activation.stage_artifact_digest !== DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_DIGEST
+          || !same(activation.stage_artifact_manifest, DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_MANIFEST)
+          || activation.interpreter_rules_digest !== DIAGNOSTIC_EFFECT_INTERPRETER_RULES_DIGEST
+          || activation.evaluator_rules_digest !== COUNT_BY_CORRELATION_RULES_DIGEST) {
+        throw new KernelError(409, "DIAGNOSTIC_INTERPRETATION_ARTIFACT_MISMATCH",
+          "Pinned interpretation material differs from the running deterministic reevaluation stage.");
+      }
+      const references = projection.semantic_projection.graph.nodes
+        .filter((node) => ["destination.effect", "destination.request"].includes(node.node_type))
+        .map((node) => node.receipt_reference);
+      const observationRows = references.length ? (await client.query(
+        `SELECT r.*,
+                a.installation_id AS schema_installation_id,
+                a.environment_id AS schema_environment_id,
+                a.observation_type AS schema_observation_type,
+                a.schema_id AS schema_activation_schema_id,
+                a.schema_version AS schema_activation_schema_version,
+                a.schema_digest AS schema_activation_schema_digest
+         FROM diagnostic_observation_receipts r
+         JOIN diagnostic_observation_schema_activations a
+           ON a.installation_id=r.installation_id AND a.activation_id=r.schema_activation_id
+         WHERE r.installation_id=$1 AND r.receipt_id=ANY($2::uuid[])
+         ORDER BY r.intake_position,r.receipt_id`,
+        [installationId, references.map((reference) => reference.receipt_id)]
+      )).rows : [];
+      const observationEvidence = verifyProjectedObservationMaterials({
+        receiptReferences: references,
+        observationRows,
+        installationId,
+        environmentId
+      });
+      const interpreted = buildDiagnosticEffectProjection({
+        correlationProjectionId,
+        correlationSemanticDigest: projection.semantic_digest,
+        correlationProjection: projection.semantic_projection,
+        integrationActivationId: activationId,
+        integrationContract: activation.integration_contract,
+        integrationContractDigest: activation.integration_contract_digest,
+        interpreterArtifactDigest: DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_DIGEST,
+        observationEvidence
+      });
+      const effectProjectionId = deterministicUuid({
+        namespace: "diagnostic-effect-projection",
+        correlation_projection_id: correlationProjectionId,
+        activation_digest: activation.activation_digest
+      });
+      const evaluation = evaluateCountByCorrelation({
+        effectProjectionId,
+        effectSemanticDigest: interpreted.semantic_digest,
+        effectProjection: interpreted.semantic_projection,
+        behaviorActivationId: activationId,
+        behaviorContract: activation.behavior_contract,
+        behaviorContractDigest: activation.behavior_contract_digest,
+        evaluatorActivationId: activationId,
+        evaluator: activation.evaluator_document,
+        evaluatorDigest: activation.evaluator_digest,
+        evaluatorArtifactDigest: DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_DIGEST,
+        evaluatorRulesDigest: COUNT_BY_CORRELATION_RULES_DIGEST
+      });
+      const existing = (await client.query(
+        `SELECT * FROM diagnostic_effect_projections
+         WHERE installation_id=$1 AND correlation_projection_id=$2 AND activation_id=$3`,
+        [installationId, correlationProjectionId, activationId]
+      )).rows[0];
+      if (existing) {
+        verifyEffectRow(existing);
+        if (existing.effect_projection_id !== effectProjectionId
+            || existing.semantic_digest !== interpreted.semantic_digest
+            || !same(existing.semantic_projection, interpreted.semantic_projection)) {
+          failIntegrity("DIAGNOSTIC_EFFECT_PROJECTION_NONDETERMINISM",
+            "Exact reevaluation inputs produced different effect semantics.");
+        }
+        const evaluationRow = verifyEvaluationRow((await client.query(
+          `SELECT * FROM diagnostic_behavior_evaluations
+           WHERE installation_id=$1 AND effect_projection_id=$2`,
+          [installationId, effectProjectionId]
+        )).rows[0]);
+        if (evaluationRow.evaluation_id !== evaluation.evaluation_id
+            || evaluationRow.semantic_digest !== evaluation.semantic_digest
+            || !same(evaluationRow.semantic_evaluation, evaluation.semantic_evaluation)) {
+          failIntegrity("BEHAVIOR_EVALUATION_NONDETERMINISM",
+            "Exact reevaluation inputs produced different Behavior Evaluation semantics.");
+        }
+        await client.query("COMMIT");
+        return { replayed: true, result: {
+          diagnostic_effect_projection: effectView(existing),
+          behavior_evaluation: evaluationView(evaluationRow),
+          diagnostic_case: diagnosticCase,
+          trigger_created: false,
+          case_created: false
+        } };
+      }
+      const createdAt = iso(now);
+      const effectRecord = {
+        schema_version: EFFECT_RECORD_SCHEMA,
+        effect_projection_id: effectProjectionId,
+        correlation_projection_id: correlationProjectionId,
+        activation_id: activationId,
+        semantic_digest: interpreted.semantic_digest,
+        created_at: createdAt
+      };
+      const effectRow = (await client.query(
+        `INSERT INTO diagnostic_effect_projections
+          (effect_projection_id,installation_id,environment_id,correlation_projection_id,activation_id,
+           logical_operation_id,semantic_projection,semantic_digest,record_document,record_digest,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [effectProjectionId, installationId, environmentId, correlationProjectionId, activationId,
+          projection.logical_operation_id, interpreted.semantic_projection, interpreted.semantic_digest,
+          effectRecord, sha256Digest(effectRecord), createdAt]
+      )).rows[0];
+      const evaluationRecord = {
+        schema_version: EVALUATION_RECORD_SCHEMA,
+        evaluation_id: evaluation.evaluation_id,
+        effect_projection_id: effectProjectionId,
+        activation_id: activationId,
+        semantic_digest: evaluation.semantic_digest,
+        created_at: createdAt
+      };
+      const evaluationRow = (await client.query(
+        `INSERT INTO diagnostic_behavior_evaluations
+          (evaluation_id,installation_id,environment_id,effect_projection_id,activation_id,
+           logical_operation_id,semantic_evaluation,semantic_digest,record_document,record_digest,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [evaluation.evaluation_id, installationId, environmentId, effectProjectionId, activationId,
+          projection.logical_operation_id, evaluation.semantic_evaluation, evaluation.semantic_digest,
+          evaluationRecord, sha256Digest(evaluationRecord), createdAt]
+      )).rows[0];
+      await client.query("COMMIT");
+      return { replayed: false, result: {
+        diagnostic_effect_projection: effectView(verifyEffectRow(effectRow)),
+        behavior_evaluation: evaluationView(verifyEvaluationRow(evaluationRow)),
+        diagnostic_case: diagnosticCase,
+        trigger_created: false,
+        case_created: false
+      } };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async function getEffectProjection(effectProjectionId) {
     uuid(effectProjectionId, "effect_projection_id");
     const row = (await pool.query(
@@ -967,6 +1136,7 @@ export function createDiagnosticEffectEvaluationService({
     activate,
     getActivation: async (id) => activationView(await getActivation(id)),
     process,
+    reevaluate,
     getEffectProjection,
     getEvaluation,
     getTrigger,

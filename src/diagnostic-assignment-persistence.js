@@ -157,7 +157,6 @@ export function verifyAssignmentCreationMaterial({ row, state, transition, comma
     assignment_id: row?.assignment_id
   };
   if (!row || !state || !transition || !command || !outbox
-      || state.last_transition_id !== transition.transition_id
       || transition.installation_id !== row.installation_id
       || transition.aggregate_type !== "diagnostic_assignment"
       || transition.aggregate_id !== row.assignment_id
@@ -166,7 +165,7 @@ export function verifyAssignmentCreationMaterial({ row, state, transition, comma
       || transition.command_id !== command.command_id
       || transition.actor_type !== "service" || transition.actor_id !== row.created_by
       || !same(transition.payload, expectedPayload)
-      || iso(transition.occurred_at) !== iso(state.updated_at)
+      || iso(transition.occurred_at) !== iso(row.created_at)
       || command.installation_id !== row.installation_id
       || command.operation_id !== "diagnostic.assignment.create"
       || command.actor_type !== "service" || command.actor_id !== row.created_by
@@ -182,6 +181,59 @@ export function verifyAssignmentCreationMaterial({ row, state, transition, comma
       "Assignment state does not match its exact creation command, transition, and outbox history.");
   }
   return { transition, command, outbox };
+}
+
+export function verifyAssignmentStateHistory({ row, state, transitions }) {
+  if (!row || !state || !Array.isArray(transitions) || transitions.length === 0) {
+    fail("DIAGNOSTIC_ASSIGNMENT_STATE_HISTORY_INTEGRITY_VIOLATION",
+      "Assignment state requires one complete immutable transition history.");
+  }
+  const ordered = [...transitions].sort((left, right) =>
+    BigInt(left.diagnostic_sequence) < BigInt(right.diagnostic_sequence) ? -1 : 1);
+  const creation = ordered[0];
+  let expectedState = "unclaimed";
+  for (let index = 0; index < ordered.length; index += 1) {
+    const transition = ordered[index];
+    if (transition.installation_id !== row.installation_id
+        || transition.aggregate_type !== "diagnostic_assignment"
+        || transition.aggregate_id !== row.assignment_id
+        || String(transition.from_revision) !== String(index)
+        || String(transition.to_revision) !== String(index + 1)) {
+      fail("DIAGNOSTIC_ASSIGNMENT_STATE_HISTORY_INTEGRITY_VIOLATION",
+        "Assignment transition history is not one exact contiguous aggregate chain.");
+    }
+    if (index === 0) {
+      if (transition.transition_type !== "diagnostic.assignment.created") {
+        fail("DIAGNOSTIC_ASSIGNMENT_STATE_HISTORY_INTEGRITY_VIOLATION",
+          "Assignment transition history must begin with its immutable creation.");
+      }
+      continue;
+    }
+    const nextState = {
+      "diagnostic.assignment.claimed": "claimed",
+      "diagnostic.assignment.expired": "expired",
+      "diagnostic.assignment.cancelled": "cancelled"
+    }[transition.transition_type];
+    const allowed = (expectedState === "unclaimed"
+      && ["claimed", "expired", "cancelled"].includes(nextState))
+      || (expectedState === "claimed" && nextState === "cancelled");
+    if (!allowed || transition.payload?.assignment_id !== row.assignment_id
+        || transition.payload?.assignment_digest !== row.assignment_digest) {
+      fail("DIAGNOSTIC_ASSIGNMENT_STATE_HISTORY_INTEGRITY_VIOLATION",
+        "Assignment transition history contains an invalid state or identity binding.");
+    }
+    expectedState = nextState;
+  }
+  const last = ordered.at(-1);
+  if (creation.transition_id === undefined
+      || state.state !== expectedState
+      || String(state.state_revision) !== String(ordered.length - 1)
+      || state.last_transition_id !== last.transition_id
+      || iso(state.updated_at) !== iso(last.occurred_at)) {
+    fail("DIAGNOSTIC_ASSIGNMENT_STATE_HISTORY_INTEGRITY_VIOLATION",
+      "Assignment state projection does not match its complete immutable transition chain.");
+  }
+  return ordered;
 }
 
 export function verifyAssignmentStageRecord(row, assignmentRow) {
@@ -200,7 +252,10 @@ export function verifyAssignmentStageRecord(row, assignmentRow) {
       || (row.outcome === "assignment_created"
         && (row.assignment_id !== assignmentRow?.assignment_id
           || result.assignment_id !== assignmentRow.assignment_id
-          || result.assignment_digest !== assignmentRow.assignment_digest))) {
+          || result.assignment_digest !== assignmentRow.assignment_digest))
+      || (row.outcome === "replacement_not_performed"
+        && (row.assignment_id !== null || result.assignment_id !== null
+          || result.reason !== "replaced_assignment_no_longer_unclaimed"))) {
     fail("DIAGNOSTIC_ASSIGNMENT_STAGE_RECORD_INTEGRITY_VIOLATION",
       "Stored Assignment Service stage record does not match its input and result digests.");
   }

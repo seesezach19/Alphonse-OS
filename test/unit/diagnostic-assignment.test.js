@@ -7,6 +7,7 @@ import {
   DIAGNOSTIC_ASSIGNMENT_RULES_DIGEST,
   DIAGNOSTIC_WORKER_INSTRUCTION_V0_1,
   DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_1,
+  resolveLateEvidenceAssignmentAction,
   validateDiagnosticAssignmentPolicy
 } from "../../src/diagnostic-assignment-contracts.js";
 import {
@@ -59,6 +60,13 @@ function policy() {
     disclosure: {
       before_claim: "none", evidence_scope: "exact_assigned_package_only",
       recipient: "authorized_claimed_worker_run_only", provider_training: "prohibited"
+    },
+    late_evidence: {
+      default_action: "notify_only",
+      material_change_actions: [
+        { material_change_class: "behavior_evaluation_changed", action: "replace_unclaimed" }
+      ],
+      claimed_assignment_action: "notify_only"
     }
   };
 }
@@ -114,6 +122,12 @@ test("assignment policy is answer-free, neutral, closed, and authority-free", ()
   assert.equal(Object.hasOwn(checked.instruction, "expected_answer"), false);
   assert.equal(Object.hasOwn(checked.instruction, "root_cause"), false);
   assert.equal(checked.disclosure.before_claim, "none");
+  assert.equal(resolveLateEvidenceAssignmentAction(checked,
+    ["behavior_evaluation_changed"], "unclaimed"), "replace_unclaimed");
+  assert.equal(resolveLateEvidenceAssignmentAction(checked,
+    ["behavior_evaluation_changed"], "claimed"), "notify_only");
+  assert.equal(resolveLateEvidenceAssignmentAction(checked,
+    ["contradiction_added"], "unclaimed"), "notify_only");
 
   const narrowed = policy();
   narrowed.output_schema.properties.best_supported_hypothesis.properties.mechanism.enum =

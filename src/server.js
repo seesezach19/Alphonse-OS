@@ -407,6 +407,7 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     packageReader: diagnosticEvidencePackageService,
     resolveDeploymentExports: resolveDeployedExports
   });
+  diagnosticEvidencePackageService.startRevisionMonitor();
   diagnosticAssignmentService.start();
 }
 const upgradeService = createUpgradeService(database, identityIntent, packageService, deploymentService,
@@ -949,6 +950,19 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { evidence_package: await service.getPackage(
       pathId(url.pathname, "/diagnostic/v0/evidence-packages/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/evidence-revisions/process") {
+    const service = requireDiagnosticEvidencePackaging();
+    await authenticateDiagnosticOwner(request, "diagnostic.evidence_revision.process");
+    return sendCommandResult(response, await service.processRevision(await readJson(request, 64 * 1024)));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/evidence-revisions\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticEvidencePackaging();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { evidence_revision: await service.getRevisionStatus(
+      pathId(url.pathname, "/diagnostic/v0/evidence-revisions/")) });
   }
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/assignment-policy-activations") {

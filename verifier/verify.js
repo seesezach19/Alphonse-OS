@@ -9,12 +9,14 @@ import { buildCorrelationProjectorInput, buildCorrelationProjection, CORRELATION
 import { buildDiagnosticEffectProjection, COUNT_BY_CORRELATION_RULES_DIGEST,
   DIAGNOSTIC_EFFECT_INTERPRETER_RULES_DIGEST, evaluateCountByCorrelation } from "./effect.js";
 import { DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST, selectDiagnosticEvidence } from "./selection.js";
+import { buildEvidencePackageMaterial, classifyEvidenceMaterialChange,
+  resolveLateEvidenceAssignmentAction, REVISION_RULES_DIGEST } from "./revision.js";
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
 const BUNDLE_SCHEMA = "alphonse.independent-diagnostic-verification-bundle.v0.1";
-const PACKAGE_SCHEMA = "alphonse.diagnostic-evidence-package.v0.1";
-const PACKAGE_ARTIFACT_SCHEMA = "alphonse.diagnostic-evidence-package-artifact.v0.1";
-const PACKAGE_RECORD_SCHEMA = "alphonse.diagnostic-evidence-package-record.v0.1";
+const PACKAGE_SCHEMA = "alphonse.diagnostic-evidence-package.v0.2";
+const PACKAGE_ARTIFACT_SCHEMA = "alphonse.diagnostic-evidence-package-artifact.v0.2";
+const PACKAGE_RECORD_SCHEMA = "alphonse.diagnostic-evidence-package-record.v0.2";
 const EFFECT_RECORD_SCHEMA = "alphonse.diagnostic-effect-projection-record.v0.1";
 const EVALUATION_RECORD_SCHEMA = "alphonse.behavior-evaluation-record.v0.1";
 const TRIGGER_SCHEMA = "alphonse.diagnostic-trigger.v0.2";
@@ -23,7 +25,7 @@ const CLAIM_SCHEMA = "alphonse.diagnostic-claim-envelope.v0.1";
 const LEASE_SCHEMA = "alphonse.evidence-collection-retention-lease.v0.1";
 const RELEASE_SCHEMA = "alphonse.evidence-collection-lease-release.v0.1";
 const EFFECT_AUTHOR = "diagnostic-stage-worker:effect-evaluation-v0.1";
-const PACKAGE_AUTHOR = "diagnostic-stage-worker:evidence-packaging-v0.1";
+const PACKAGE_AUTHOR = "diagnostic-stage-worker:evidence-packaging-v0.2";
 
 function violation(code, message, details = {}) {
   const error = new Error(message);
@@ -641,6 +643,7 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
   assert(bundle?.schema_version === BUNDLE_SCHEMA && sha256Digest(bundle) === claimedBundleDigest,
     "VERIFIER_BUNDLE_INTEGRITY_VIOLATION", "Verification bundle digest or schema does not verify.");
   const published = bundle.published_outputs_to_compare;
+  const isRevision = String(published.evidence_package.revision_number) !== "1";
   const report = {
     schema_version: "alphonse.independent-diagnostic-verification-report.v0.1",
     processing_profile: "D0",
@@ -727,6 +730,11 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
   const effectProjectionId = deterministicUuid({ namespace: "diagnostic-effect-projection",
     correlation_projection_id: published.correlation_projection.projection_id,
     activation_digest: interpretation.activation_digest });
+  const effectReceiptIds = new Set(correlation.semantic_projection.graph.nodes
+    .filter((node) => ["destination.effect", "destination.request"].includes(node.node_type))
+    .map((node) => node.receipt_reference.receipt_id));
+  const effectObservationEvidence = accepted.observationEvidence.filter((entry) =>
+    effectReceiptIds.has(entry.receipt_id));
   const effect = buildDiagnosticEffectProjection({
     correlationProjectionId: published.correlation_projection.projection_id,
     correlationSemanticDigest: correlation.semantic_digest,
@@ -735,7 +743,7 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
     integrationContract: interpretation.integration_contract,
     integrationContractDigest: interpretation.integration_contract_digest,
     interpreterArtifactDigest: interpretation.stage_artifact_digest,
-    observationEvidence: accepted.observationEvidence
+    observationEvidence: effectObservationEvidence
   });
   assert(effectProjectionId === published.diagnostic_effect_projection.effect_projection_id
     && sha256Digest(published.diagnostic_effect_projection.record_document)
@@ -761,12 +769,71 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
   assert(same(evaluation.semantic_evaluation, published.behavior_evaluation.semantic_evaluation),
     "VERIFIER_PUBLISHED_OUTPUT_MISMATCH", "Published evaluation bytes differ from recomputation.");
 
-  const createdAt = iso(published.diagnostic_trigger.created_at);
-  const triggerId = deterministicUuid({ namespace: "diagnostic-trigger",
+  let createdAt;
+  let triggerId;
+  let caseId;
+  let triggerDigest;
+  let trigger;
+  let claimMaterials;
+  let caseDigest;
+  if (isRevision) {
+    const predecessor = bundle.independent_inputs.predecessor_verification;
+    const predecessorArtifact = predecessor?.artifact;
+    const predecessorRecord = predecessor?.record;
+    assert(predecessorArtifact?.schema_version
+        === "alphonse.independent-diagnostic-verification-bundle-artifact.v0.1"
+      && predecessorArtifact?.bundle
+      && sha256Digest(predecessorArtifact.bundle) === predecessorRecord?.bundle_digest
+      && predecessorArtifact.bundle_digest === predecessorRecord.bundle_digest
+      && sha256Digest(predecessorArtifact) === predecessorRecord.bundle_artifact_digest
+      && sha256Digest(predecessorRecord.record_document) === predecessorRecord.record_digest
+      && predecessorRecord.record_document.verification_bundle_id
+        === predecessorRecord.verification_bundle_id
+      && predecessorRecord.record_document.evidence_package_id
+        === predecessorRecord.evidence_package_id
+      && predecessorRecord.record_document.bundle_digest === predecessorRecord.bundle_digest
+      && predecessorRecord.record_document.bundle_artifact_digest
+        === predecessorRecord.bundle_artifact_digest
+      && predecessorArtifact.bundle.target.evidence_package_id
+        === published.evidence_package.predecessor_evidence_package_id,
+    "VERIFIER_REVISION_PREDECESSOR_BUNDLE_INVALID",
+    "Revision predecessor does not have one exact sealed independent verification bundle.");
+    const predecessorReport = verifyIndependentDiagnosticBundle({
+      bundle: predecessorArtifact.bundle, bundle_digest: predecessorRecord.bundle_digest
+    }, verifierIdentity);
+    assert(predecessorReport.result === "verified",
+      "VERIFIER_REVISION_PREDECESSOR_BUNDLE_INVALID",
+      "Revision predecessor bundle did not independently recompute.");
+    const opening = predecessorArtifact.bundle.published_outputs_to_compare;
+    assert(same(opening.diagnostic_trigger, published.diagnostic_trigger)
+      && same(opening.diagnostic_case, published.diagnostic_case)
+      && same(opening.diagnostic_claims, published.diagnostic_claims),
+    "VERIFIER_REVISION_CASE_LINEAGE_MISMATCH",
+    "Revision package changed its immutable opening trigger, case, or claim lineage.");
+    createdAt = iso(published.diagnostic_trigger.created_at);
+    triggerId = published.diagnostic_trigger.trigger_id;
+    triggerDigest = sha256Digest(published.diagnostic_trigger.trigger_document);
+    caseId = published.diagnostic_case.case_id;
+    caseDigest = sha256Digest(published.diagnostic_case.case_document);
+    assert(triggerDigest === published.diagnostic_trigger.trigger_digest
+      && caseDigest === published.diagnostic_case.case_digest
+      && published.diagnostic_case.trigger_id === triggerId,
+    "VERIFIER_REVISION_CASE_LINEAGE_INTEGRITY_VIOLATION",
+    "Revision opening case material does not verify against its immutable digests.");
+    trigger = { ...published.diagnostic_trigger.trigger_document, trigger_digest: triggerDigest };
+    claimMaterials = published.diagnostic_claims.map((claim) => ({
+      document: claim.claim_document,
+      claim_digest: claim.claim_digest
+    }));
+    compareStage(report, "diagnostic_trigger", triggerDigest, published.diagnostic_trigger.trigger_digest);
+    compareStage(report, "diagnostic_case", caseDigest, published.diagnostic_case.case_digest);
+  } else {
+  createdAt = iso(published.diagnostic_trigger.created_at);
+  triggerId = deterministicUuid({ namespace: "diagnostic-trigger",
     behavior_contract_digest: interpretation.behavior_contract_digest,
     logical_operation_id: correlation.semantic_projection.scope.logical_operation_id,
     evaluation_semantic_digest: evaluation.semantic_digest });
-  const caseId = deterministicUuid({ namespace: "diagnostic-case", trigger_id: triggerId });
+  caseId = deterministicUuid({ namespace: "diagnostic-case", trigger_id: triggerId });
   const triggerDocument = { schema_version: TRIGGER_SCHEMA, trigger_id: triggerId, case_id: caseId,
     evaluation_id: evaluation.evaluation_id, evaluation_semantic_digest: evaluation.semantic_digest,
     behavior_contract_digest: interpretation.behavior_contract_digest,
@@ -776,14 +843,14 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
     evidence_policy_activation_id: policy.evidence_policy_activation_id,
     evidence_policy_activation_digest: policy.activation_digest, evidence_collection_required: true,
     created_at: createdAt };
-  const triggerDigest = sha256Digest(triggerDocument);
+  triggerDigest = sha256Digest(triggerDocument);
   assert(triggerId === published.diagnostic_trigger.trigger_id
     && same(triggerDocument, published.diagnostic_trigger.trigger_document)
     && triggerDigest === published.diagnostic_trigger.trigger_digest,
   "VERIFIER_TRIGGER_MISMATCH", "Deterministic trigger does not match recomputation.");
   compareStage(report, "diagnostic_trigger", triggerDigest, published.diagnostic_trigger.trigger_digest);
-  const trigger = { ...triggerDocument, trigger_digest: triggerDigest };
-  const claimMaterials = buildClaims({ correlation: { ...correlation,
+  trigger = { ...triggerDocument, trigger_digest: triggerDigest };
+  claimMaterials = buildClaims({ correlation: { ...correlation,
     projection_id: published.correlation_projection.projection_id }, effect: { ...effect, effect_projection_id: effectProjectionId },
   evaluation, trigger, caseId, assessedAt: createdAt });
   const caseDocument = { schema_version: CASE_SCHEMA, case_id: caseId, trigger_id: triggerId,
@@ -795,7 +862,7 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
     evidence_policy_activation_digest: policy.activation_digest, evidence_collection_required: true,
     root_cause_status: "NOT_ESTABLISHED",
     authority: { diagnosis: "not_granted", repair: "not_granted", kernel_effect: "not_granted" } };
-  const caseDigest = sha256Digest(caseDocument);
+  caseDigest = sha256Digest(caseDocument);
   assert(caseId === published.diagnostic_case.case_id && same(caseDocument, published.diagnostic_case.case_document)
     && caseDigest === published.diagnostic_case.case_digest,
   "VERIFIER_CASE_MISMATCH", "Deterministic case does not match recomputation.");
@@ -810,12 +877,30 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
     "D0 Claim Envelopes do not match recomputation.");
   compareStage(report, "diagnostic_claim_manifest", sha256Digest(recomputedClaims),
     sha256Digest(publishedClaims));
+  }
 
   const selection = selectDiagnosticEvidence({ correlationProjection: correlation.semantic_projection,
     effectProjection: effect.semantic_projection, behaviorEvaluation: evaluation.semantic_evaluation,
     observationEvidence: accepted.observationEvidence, selectionPolicy: policy.selection_policy });
   const lease = published.evidence_collection_lease;
-  const initialReferences = [
+  let initialReferences;
+  let leaseId;
+  let leaseDocument;
+  let leaseDigest;
+  if (isRevision) {
+    const opening = bundle.independent_inputs.predecessor_verification.artifact.bundle
+      .published_outputs_to_compare;
+    assert(same(lease, opening.evidence_collection_lease),
+      "VERIFIER_REVISION_COLLECTION_LINEAGE_MISMATCH",
+      "Revision package changed its immutable opening evidence collection lease.");
+    leaseId = lease.lease_id;
+    leaseDocument = lease.lease_document;
+    leaseDigest = sha256Digest(leaseDocument);
+    initialReferences = [];
+    assert(leaseDigest === lease.lease_digest, "VERIFIER_COLLECTION_LEASE_MISMATCH",
+      "Revision evidence collection lease digest does not verify.");
+  } else {
+  initialReferences = [
     packageReference("correlation_projection", published.correlation_projection.projection_id, correlation.semantic_digest),
     packageReference("diagnostic_interpretation_activation", interpretation.activation_id, interpretation.activation_digest),
     packageReference("evidence_policy_activation", policy.evidence_policy_activation_id, policy.activation_digest),
@@ -826,9 +911,9 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
     ...claimMaterials.map((claim) => packageReference("diagnostic_claim_envelope",
       claim.document.claim_id, claim.claim_digest))
   ].sort(compareCanonical);
-  const leaseId = deterministicUuid({ namespace: "diagnostic-evidence-collection-lease",
+  leaseId = deterministicUuid({ namespace: "diagnostic-evidence-collection-lease",
     trigger_id: triggerId, evidence_policy_activation_digest: policy.activation_digest });
-  const leaseDocument = { schema_version: LEASE_SCHEMA, lease_id: leaseId,
+  leaseDocument = { schema_version: LEASE_SCHEMA, lease_id: leaseId,
     installation_id: bundle.target.installation_id, environment_id: bundle.target.environment_id,
     case_id: caseId, trigger_id: triggerId, trigger_digest: triggerDigest,
     evidence_policy_activation_id: policy.evidence_policy_activation_id,
@@ -839,11 +924,12 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
     collection_deadline: addSeconds(createdAt, policy.retention_policy.collection_window_seconds),
     lease_expires_at: addSeconds(createdAt, policy.retention_policy.collection_lease_seconds),
     created_at: createdAt };
-  const leaseDigest = sha256Digest(leaseDocument);
+  leaseDigest = sha256Digest(leaseDocument);
   assert(leaseId === lease.lease_id && leaseDigest === lease.lease_digest
     && same(leaseDocument, lease.lease_document), "VERIFIER_COLLECTION_LEASE_MISMATCH",
   "Evidence Collection Retention Lease does not match recomputation.");
   compareStage(report, "evidence_collection_lease", leaseDigest, lease.lease_digest);
+  }
 
   const packageRow = published.evidence_package;
   const governedDependencies = [
@@ -894,29 +980,180 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
       record_id: claim.document.claim_id, record_digest: claim.claim_digest,
       result: claim.document.effective_support }))
   ].sort(compareCanonical);
-  const semanticPackage = { schema_version: PACKAGE_SCHEMA, case_id: caseId, trigger_id: triggerId,
-    evidence_policy_activation_id: policy.evidence_policy_activation_id, revision_number: "1",
-    scope: structuredClone(correlation.semantic_projection.scope),
-    freeze: { reason: packageRow.freeze_reason,
-      committed_intake_cutoff: bundle.target.committed_intake_cutoff,
-      collection_deadline: leaseDocument.collection_deadline,
-      required_sources_complete: selection.required_sources_complete },
-    manifest: { governed_interpretation_dependencies: governedDependencies,
-      authenticated_observations: { observations: selection.selected_observations,
-        authenticated_provenance_dependencies: selection.authenticated_provenance_dependencies },
-      deterministic_derived_facts: deterministicFacts,
-      coverage_and_limitations: selection.coverage_and_limitations,
-      disclosure_accounting: selection.disclosure_accounting,
-      role_completion: selection.role_completion },
-    selected_graph: { nodes: selection.selected_nodes, edges: selection.selected_edges },
-    authority: { assignment_created: false, dispatch_authorized: false, worker_run_created: false,
-      model_request_created: false, diagnosis_established: false, repair_authorized: false,
-      kernel_effect_authorized: false },
-    packager: { component: PACKAGE_AUTHOR, artifact_digest: policy.stage_artifact_digest,
-      rules_digest: DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST, model_selected_evidence: false } };
+  const packageMaterial = buildEvidencePackageMaterial({
+    scope: correlation.semantic_projection.scope,
+    governedDependencies,
+    selection,
+    effectProjection: effect.semantic_projection,
+    evaluation: evaluation.semantic_evaluation,
+    caseClaims: claimMaterials.map((claim) => ({ ...claim.document, claim_digest: claim.claim_digest }))
+  });
+  let semanticPackage;
+  let evidencePackageId;
+  if (isRevision) {
+    const predecessorPackage = bundle.independent_inputs.predecessor_verification.artifact.bundle
+      .published_outputs_to_compare.evidence_package;
+    const materialChangeClasses = classifyEvidenceMaterialChange(
+      predecessorPackage.package_material, packageMaterial.document);
+    const assessment = published.evidence_revision_assessment;
+    const notice = published.reevaluation_notice;
+    const assignmentPolicy = published.assignment_policy_activation;
+    const assignmentPolicyExport = published.assignment_policy_export;
+    assert(assessment && notice
+      && (!assignmentPolicy || (assignmentPolicyExport
+        && sha256Digest(assignmentPolicy.activation_document) === assignmentPolicy.activation_digest
+        && sha256Digest(assignmentPolicy.policy_document) === assignmentPolicy.policy_digest
+        && sha256Digest(assignmentPolicy.stage_artifact_manifest)
+          === assignmentPolicy.stage_artifact_digest
+        && assignmentPolicy.activation_document.assignment_policy.export_digest
+          === assignmentPolicy.policy_digest
+        && assignmentPolicyExport.deployment_id === assignmentPolicy.deployment_id
+        && assignmentPolicyExport.package_version_id === assignmentPolicy.package_version_id
+        && assignmentPolicyExport.package_artifact_digest === assignmentPolicy.package_artifact_digest
+        && assignmentPolicyExport.export_record.export_id === assignmentPolicy.policy_export_id
+        && sha256Digest(assignmentPolicyExport.export_record.content) === assignmentPolicy.policy_digest
+        && same(assignmentPolicyExport.export_record.content, assignmentPolicy.policy_document)))
+      && packageRow.assignment_policy_activation_id
+        === (assignmentPolicy?.assignment_policy_activation_id ?? null)
+      && sha256Digest(assessment.candidate_material) === assessment.candidate_material_digest
+      && assessment.previous_material_digest === predecessorPackage.package_material_digest
+      && assessment.candidate_material_digest === packageMaterial.digest
+      && same(assessment.candidate_material, packageMaterial.document)
+      && same(assessment.material_change_classes, materialChangeClasses)
+      && assessment.outcome === "revision_created"
+      && assessment.rules_digest === REVISION_RULES_DIGEST,
+    "VERIFIER_EVIDENCE_REVISION_ASSESSMENT_MISMATCH",
+    "Revision assessment, exact material diff, or reevaluation notice does not verify.");
+    const recommendedAction = resolveLateEvidenceAssignmentAction(
+      assignmentPolicy?.policy_document ?? null, materialChangeClasses,
+      notice.known_affected_assignments);
+    const expectedAssessment = {
+      schema_version: "alphonse.diagnostic-evidence-revision-assessment.v0.1",
+      assessment_id: assessment.assessment_id,
+      case_id: caseId,
+      predecessor_evidence_package_id: predecessorPackage.evidence_package_id,
+      resulting_evidence_package_id: packageRow.evidence_package_id,
+      assessment_kind: "late_evidence",
+      candidate_cutoff: bundle.target.committed_intake_cutoff,
+      previous_material_digest: predecessorPackage.package_material_digest,
+      candidate_material_digest: packageMaterial.digest,
+      candidate_projection: {
+        correlation_projection_id: published.correlation_projection.projection_id,
+        correlation_semantic_digest: correlation.semantic_digest,
+        effect_projection_id: effectProjectionId,
+        effect_semantic_digest: effect.semantic_digest,
+        evaluation_id: evaluation.evaluation_id,
+        evaluation_semantic_digest: evaluation.semantic_digest
+      },
+      outcome: "revision_created",
+      material_change_classes: materialChangeClasses,
+      recommended_action: recommendedAction,
+      rules_digest: REVISION_RULES_DIGEST,
+      assessed_at: iso(assessment.assessed_at),
+      authority_granted: "none"
+    };
+    const expectedNotice = {
+      schema_version: "alphonse.diagnostic-reevaluation-available.v0.1",
+      reevaluation_notice_id: notice.reevaluation_notice_id,
+      case_id: caseId,
+      assessment_id: assessment.assessment_id,
+      predecessor_package: { evidence_package_id: predecessorPackage.evidence_package_id,
+        semantic_digest: predecessorPackage.semantic_digest,
+        material_digest: predecessorPackage.package_material_digest },
+      successor_package: { evidence_package_id: packageRow.evidence_package_id,
+        semantic_digest: packageRow.semantic_digest, material_digest: packageMaterial.digest },
+      material_change_classes: materialChangeClasses,
+      known_affected_assignments: notice.known_affected_assignments,
+      known_affected_diagnoses: notice.known_affected_diagnoses,
+      recommended_action: recommendedAction,
+      policy: assignmentPolicy ? {
+        assignment_policy_activation_id: assignmentPolicy.assignment_policy_activation_id,
+        activation_digest: assignmentPolicy.activation_digest
+      } : null,
+      temporal: { predecessor_cutoff: String(predecessorPackage.committed_intake_cutoff),
+        successor_cutoff: bundle.target.committed_intake_cutoff,
+        assessed_at: iso(assessment.assessed_at), freshness: "current_as_of_successor_cutoff" },
+      authority_granted: "none",
+      created_at: iso(notice.created_at)
+    };
+    assert(same(expectedAssessment, assessment.assessment_document)
+      && sha256Digest(expectedAssessment) === assessment.assessment_digest
+      && same(expectedNotice, notice.notice_document)
+      && sha256Digest(expectedNotice) === notice.notice_digest
+      && assessment.recommended_action === recommendedAction
+      && notice.recommended_action === recommendedAction,
+    "VERIFIER_EVIDENCE_REVISION_POLICY_MISMATCH",
+    "Revision assessment or notice does not match the independently recomputed policy decision.");
+    const revisionNumber = String(packageRow.revision_number);
+    const identityMaterial = { case_id: caseId,
+      predecessor_evidence_package_id: predecessorPackage.evidence_package_id,
+      revision_number: revisionNumber, package_material_digest: packageMaterial.digest,
+      committed_intake_cutoff: bundle.target.committed_intake_cutoff };
+    evidencePackageId = deterministicUuid({ namespace: "diagnostic-evidence-package-revision",
+      ...identityMaterial });
+    semanticPackage = { schema_version: PACKAGE_SCHEMA, case_id: caseId, trigger_id: triggerId,
+      evidence_policy_activation_id: policy.evidence_policy_activation_id,
+      revision_number: revisionNumber,
+      assessment: { kind: "late_evidence", rules_digest: REVISION_RULES_DIGEST,
+        material_change_classes: materialChangeClasses },
+      lineage: { predecessor_evidence_package_id: predecessorPackage.evidence_package_id,
+        correlation_projection_id: published.correlation_projection.projection_id,
+        correlation_semantic_digest: correlation.semantic_digest,
+        effect_projection_id: effectProjectionId, effect_semantic_digest: effect.semantic_digest,
+        evaluation_id: evaluation.evaluation_id, evaluation_semantic_digest: evaluation.semantic_digest },
+      material: { digest: packageMaterial.digest, document: packageMaterial.document },
+      scope: structuredClone(correlation.semantic_projection.scope),
+      freeze: { reason: "material_late_evidence",
+        committed_intake_cutoff: bundle.target.committed_intake_cutoff,
+        collection_deadline: predecessorPackage.semantic_package.freeze.collection_deadline,
+        required_sources_complete: selection.required_sources_complete,
+        assessed_at: iso(packageRow.frozen_at) },
+      manifest: { governed_interpretation_dependencies: governedDependencies,
+        authenticated_observations: { observations: selection.selected_observations,
+          authenticated_provenance_dependencies: selection.authenticated_provenance_dependencies },
+        deterministic_derived_facts: deterministicFacts,
+        coverage_and_limitations: selection.coverage_and_limitations,
+        disclosure_accounting: selection.disclosure_accounting,
+        role_completion: selection.role_completion },
+      selected_graph: { nodes: selection.selected_nodes, edges: selection.selected_edges },
+      authority: { assignment_created: false, dispatch_authorized: false, worker_run_created: false,
+        model_request_created: false, diagnosis_established: false, repair_authorized: false,
+        kernel_effect_authorized: false },
+      packager: { component: PACKAGE_AUTHOR, artifact_digest: policy.stage_artifact_digest,
+        rules_digest: DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST,
+        revision_rules_digest: REVISION_RULES_DIGEST, model_selected_evidence: false } };
+  } else {
+    semanticPackage = { schema_version: PACKAGE_SCHEMA, case_id: caseId, trigger_id: triggerId,
+      evidence_policy_activation_id: policy.evidence_policy_activation_id, revision_number: "1",
+      assessment: { kind: "initial_freeze", rules_digest: REVISION_RULES_DIGEST },
+      lineage: { predecessor_evidence_package_id: null,
+        correlation_projection_id: published.correlation_projection.projection_id,
+        correlation_semantic_digest: correlation.semantic_digest,
+        effect_projection_id: effectProjectionId, effect_semantic_digest: effect.semantic_digest,
+        evaluation_id: evaluation.evaluation_id, evaluation_semantic_digest: evaluation.semantic_digest },
+      material: { digest: packageMaterial.digest, document: packageMaterial.document },
+      scope: structuredClone(correlation.semantic_projection.scope),
+      freeze: { reason: packageRow.freeze_reason,
+        committed_intake_cutoff: bundle.target.committed_intake_cutoff,
+        collection_deadline: leaseDocument.collection_deadline,
+        required_sources_complete: selection.required_sources_complete },
+      manifest: { governed_interpretation_dependencies: governedDependencies,
+        authenticated_observations: { observations: selection.selected_observations,
+          authenticated_provenance_dependencies: selection.authenticated_provenance_dependencies },
+        deterministic_derived_facts: deterministicFacts,
+        coverage_and_limitations: selection.coverage_and_limitations,
+        disclosure_accounting: selection.disclosure_accounting,
+        role_completion: selection.role_completion },
+      selected_graph: { nodes: selection.selected_nodes, edges: selection.selected_edges },
+      authority: { assignment_created: false, dispatch_authorized: false, worker_run_created: false,
+        model_request_created: false, diagnosis_established: false, repair_authorized: false,
+        kernel_effect_authorized: false },
+      packager: { component: PACKAGE_AUTHOR, artifact_digest: policy.stage_artifact_digest,
+        rules_digest: DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST, model_selected_evidence: false } };
+    evidencePackageId = deterministicUuid({ namespace: "diagnostic-evidence-package",
+      case_id: caseId, semantic_digest: sha256Digest(semanticPackage) });
+  }
   const packageDigest = sha256Digest(semanticPackage);
-  const evidencePackageId = deterministicUuid({ namespace: "diagnostic-evidence-package",
-    case_id: caseId, semantic_digest: packageDigest });
   assert(evidencePackageId === bundle.target.evidence_package_id
     && evidencePackageId === packageRow.evidence_package_id
     && same(semanticPackage, packageRow.semantic_package), "VERIFIER_EVIDENCE_PACKAGE_MISMATCH",
@@ -932,13 +1169,59 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
   "VERIFIER_PACKAGE_ARTIFACT_MISMATCH", "Content-addressed package wrapper does not verify.");
   compareStage(report, "evidence_package_artifact", packageArtifactDigest, packageRow.package_artifact_digest);
   const packageRecord = { schema_version: PACKAGE_RECORD_SCHEMA, evidence_package_id: evidencePackageId,
-    case_id: caseId, revision_number: "1", semantic_digest: packageDigest,
+    case_id: caseId, revision_number: String(packageRow.revision_number),
+    assessment_kind: isRevision ? "late_evidence" : "initial_freeze",
+    package_material_digest: packageMaterial.digest, semantic_digest: packageDigest,
     package_artifact_digest: packageArtifactDigest, frozen_by: PACKAGE_AUTHOR,
     frozen_at: iso(packageRow.frozen_at) };
   assert(same(packageRecord, packageRow.record_document)
     && sha256Digest(packageRecord) === packageRow.record_digest,
   "VERIFIER_PACKAGE_RECORD_MISMATCH", "Evidence package record document does not verify.");
 
+  if (isRevision) {
+    const revisionReferences = uniqueCollectionReferences([
+      ...selection.selected_observations.map((entry) => packageReference(
+        "diagnostic_observation_receipt", entry.receipt_id, entry.receipt_digest)),
+      ...selection.authenticated_provenance_dependencies.flatMap((entry) => [
+        packageReference("tokenization_result_receipt", entry.result_receipt_id, entry.receipt_digest),
+        packageReference("tokenization_grant_snapshot", entry.grant_snapshot_digest,
+          entry.grant_snapshot_digest),
+        packageReference("tokenization_grant_application_receipt", entry.grant_application_receipt_digest,
+          entry.grant_application_receipt_digest)
+      ]),
+      packageReference("correlation_projection", published.correlation_projection.projection_id,
+        correlation.semantic_digest),
+      packageReference("diagnostic_effect_projection", effectProjectionId, effect.semantic_digest),
+      packageReference("behavior_evaluation", evaluation.evaluation_id, evaluation.semantic_digest),
+      packageReference("evidence_selection", evidencePackageId, sha256Digest(selection))
+    ]).sort(compareCanonical);
+    const publishedReferences = published.evidence_collection_references.map((entry) => ({
+      reference_type: entry.reference_type, reference_id: entry.reference_id,
+      reference_digest: entry.reference_digest, artifact_digest: entry.artifact_digest ?? null
+    })).sort(compareCanonical);
+    assert(same(revisionReferences, publishedReferences), "VERIFIER_PACKAGE_REFERENCE_MISMATCH",
+      "Revision package reference set does not match exact selected material.");
+    const pinMaterials = [packageReference("diagnostic_evidence_package", evidencePackageId,
+      packageDigest, packageArtifactDigest), ...revisionReferences].sort(compareCanonical);
+    const pinExpiry = addSeconds(iso(packageRow.frozen_at), policy.retention_policy.package_pin_seconds);
+    const expectedPins = pinMaterials.map((pin) => ({
+      pin_id: deterministicUuid({ namespace: "diagnostic-artifact-retention-pin",
+        evidence_package_id: evidencePackageId, object_type: pin.reference_type,
+        object_id: pin.reference_id, object_digest: pin.reference_digest }),
+      object_type: pin.reference_type, object_id: pin.reference_id,
+      object_digest: pin.reference_digest, artifact_digest: pin.artifact_digest,
+      retention_policy_digest: policy.retention_policy_digest, expires_at: pinExpiry
+    })).sort(compareCanonical);
+    const publishedPins = published.retention_pins.map((pin) => ({ pin_id: pin.pin_id,
+      object_type: pin.object_type, object_id: pin.object_id, object_digest: pin.object_digest,
+      artifact_digest: pin.artifact_digest ?? null, retention_policy_digest: pin.retention_policy_digest,
+      expires_at: iso(pin.expires_at) })).sort(compareCanonical);
+    assert(same(expectedPins, publishedPins), "VERIFIER_RETENTION_PIN_MISMATCH",
+      "Revision retention pins do not match recomputation.");
+    assert(published.evidence_collection_release === null,
+      "VERIFIER_REVISION_COLLECTION_RELEASE_INVALID",
+      "A package revision must not rewrite or create another release for the initial collection lease.");
+  } else {
   const extensionReferences = [
     ...selection.selected_observations.map((entry) => packageReference(
       "diagnostic_observation_receipt", entry.receipt_id, entry.receipt_digest)),
@@ -999,6 +1282,7 @@ export function verifyIndependentDiagnosticBundle(input, verifierIdentity = {}) 
   "VERIFIER_COLLECTION_RELEASE_MISMATCH", "Collection release does not match package and pin recomputation.");
   compareStage(report, "evidence_collection_release", sha256Digest(releaseDocument),
     published.evidence_collection_release.release_digest);
+  }
   const jobId = deterministicUuid({ namespace: "diagnostic-evidence-collection-job", lease_id: leaseId });
   assert(published.evidence_collection_job.job_id === jobId
     && published.evidence_collection_job.lease_id === leaseId

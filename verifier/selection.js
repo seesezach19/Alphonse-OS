@@ -1,13 +1,15 @@
 import { compareCanonical, sha256Digest } from "./canonical.js";
 
 export const DIAGNOSTIC_EVIDENCE_SELECTION_RULES = Object.freeze({
-  schema_version: "alphonse.diagnostic-evidence-selection-rules.v0.1",
+  schema_version: "alphonse.diagnostic-evidence-selection-rules.v0.2",
   seed: "matched_committed_effects",
   selection: "typed_graph_paths_only",
   broad_logical_operation_search: false,
   cardinality: "required_ancestors_for_every_matched_effect",
   model_selected_evidence: false,
-  optional_destination_snapshot_blocks_freeze: false
+  optional_destination_snapshot_blocks_freeze: false,
+  coverage_scope: "selected_case_contributing_streams",
+  unattributable_rejections: "independent_prefix_lineage_only"
 });
 export const DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST = sha256Digest(DIAGNOSTIC_EVIDENCE_SELECTION_RULES);
 
@@ -41,7 +43,9 @@ export function selectDiagnosticEvidence({ correlationProjection, effectProjecti
       || selectionPolicy?.schema_version !== "alphonse.evidence-selection-policy.v0.1") {
     fail("VERIFIER_EVIDENCE_INPUT_VERSION_UNSUPPORTED");
   }
-  if (behaviorEvaluation.result !== "violated") fail("VERIFIER_EVIDENCE_EVALUATION_NOT_VIOLATED");
+  if (!["indeterminate", "satisfied", "violated"].includes(behaviorEvaluation.result)) {
+    fail("VERIFIER_EVIDENCE_EVALUATION_RESULT_UNSUPPORTED");
+  }
   const { nodes, edges } = correlationProjection.graph;
   const nodesByKey = new Map(nodes.map((node) => [node.node_key, node]));
   const evidenceByReceipt = new Map(observationEvidence.map((entry) => [entry.receipt_id, entry]));
@@ -181,7 +185,17 @@ export function selectDiagnosticEvidence({ correlationProjection, effectProjecti
     }
   }
   selectedProvenance.sort(compareCanonical);
-  const incompleteStreams = correlationProjection.coverage.streams.filter((stream) =>
+  const selectedReceiptIds = new Set(selectedObservations.map((entry) => entry.receipt_id));
+  const streamKeys = new Set(selectedObservations.map((entry) =>
+    `${entry.envelope.grant_id ?? ""}\u0000${entry.envelope.stream_id ?? ""}`));
+  const relevantStreams = correlationProjection.coverage.streams.filter((stream) => streamKeys.has(
+    `${stream.grant_id ?? ""}\u0000${stream.stream_id ?? ""}`)).sort(compareCanonical);
+  const relevantConflicts = correlationProjection.coverage.conflicts.filter((entry) =>
+    (entry.accepted_receipt_ids ?? []).some((receiptId) => selectedReceiptIds.has(receiptId)))
+    .sort(compareCanonical);
+  const relevantLimitations = correlationProjection.coverage.limitations.filter((entry) =>
+    selectedReceiptIds.has(entry.receipt_id)).sort(compareCanonical);
+  const incompleteStreams = relevantStreams.filter((stream) =>
     stream.coverage_status !== "complete_through_high_water").map((stream) => ({ grant_id: stream.grant_id,
     stream_id: stream.stream_id, coverage_status: stream.coverage_status })).sort(compareCanonical);
   const selectedCountByType = Object.fromEntries([
@@ -191,7 +205,6 @@ export function selectDiagnosticEvidence({ correlationProjection, effectProjecti
     .map((type) => [type, selectedNodes.filter((entry) => entry.node_type === type).length]));
   const excludedRelatedCounts = Object.fromEntries(Object.entries(correlationProjection.graph.counts_by_type)
     .map(([type, count]) => [type, Math.max(0, count - (allSelectedCountByType[type] ?? 0))]));
-  const selectedReceiptIds = new Set(selectedObservations.map((entry) => entry.receipt_id));
   const omittedDetails = correlationProjection.manifests.receipts.filter((receipt) =>
     selectedReceiptIds.has(receipt.receipt_id) && receipt.detail_artifact_digest).map((receipt) => ({
     receipt_id: receipt.receipt_id, detail_artifact_digest: receipt.detail_artifact_digest,
@@ -212,14 +225,14 @@ export function selectDiagnosticEvidence({ correlationProjection, effectProjecti
       matched_effect_count: behaviorEvaluation.measurement.matched_effect_count,
       selected_counts_by_type: selectedCountByType, missing_roles: missingRoles.sort(compareCanonical),
       incomplete_contributing_streams: incompleteStreams },
-    coverage_and_limitations: { streams: structuredClone(correlationProjection.coverage.streams),
-      gaps: structuredClone(correlationProjection.coverage.streams.flatMap((stream) =>
+    coverage_and_limitations: { streams: structuredClone(relevantStreams),
+      gaps: structuredClone(relevantStreams.flatMap((stream) =>
         stream.missing_ranges.map((range) => ({ grant_id: stream.grant_id,
           stream_id: stream.stream_id, range })))),
-      conflicts: structuredClone(correlationProjection.coverage.conflicts),
-      rejections: structuredClone(correlationProjection.coverage.rejections), contradictions,
+      conflicts: structuredClone(relevantConflicts),
+      rejections: [], contradictions,
       unresolved_relationships: structuredClone(correlationProjection.graph.unresolved_relationships),
-      limitations: structuredClone(correlationProjection.coverage.limitations) },
+      limitations: structuredClone(relevantLimitations) },
     disclosure_accounting: { selection_seed: "matched_committed_effects",
       broad_logical_operation_search_used: false, model_selected_evidence: false,
       selected_receipt_count: selectedObservations.length, selected_edge_count: selectedEdges.length,
