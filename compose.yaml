@@ -85,6 +85,12 @@ services:
       KERNEL_DIAGNOSTIC_DISPATCH_SIGNING_SECRET: local-diagnostic-dispatch-signing-secret-with-sufficient-length-v1
       DIAGNOSTIC_DISPATCHER_AUDIENCE: diagnostic-dispatcher:v0.1
       DIAGNOSTIC_RUNNER_AUDIENCES: '["diagnostic-runner:v0.1"]'
+      DIAGNOSTIC_MODEL_BROKER_GRANT_KEY_ID: local-diagnostic-broker-grant-key-v1
+      DIAGNOSTIC_MODEL_BROKER_GRANT_SIGNING_SECRET: local-diagnostic-broker-grant-signing-secret-with-sufficient-length-v1
+      DIAGNOSTIC_MODEL_BROKER_RECEIPT_KEY_ID: local-diagnostic-broker-receipt-key-v1
+      DIAGNOSTIC_MODEL_BROKER_RECEIPT_SECRET: local-diagnostic-broker-receipt-secret-with-sufficient-length-v1
+      DIAGNOSTIC_RUNNER_ATTESTATION_KEY_ID: local-diagnostic-runner-attestation-key-v1
+      DIAGNOSTIC_RUNNER_ATTESTATION_SECRET: local-diagnostic-runner-attestation-secret-with-sufficient-length-v1
       VERIFICATION_RUNNER_ID: 00000000-0000-4000-8000-000000000700
       VERIFICATION_RUNNER_VERSION: 0.2.0
       VERIFICATION_FIXTURE_VERSION: inventory-v1

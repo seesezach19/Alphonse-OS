@@ -8,6 +8,7 @@ import pg from "pg";
 
 import { buildN8nRevisionMaterial } from "../packages/n8n-operational-package/src/index.js";
 import { sha256Digest } from "../src/canonical-json.js";
+import { runDiagnosticWorker } from "../src/diagnostic-runner.js";
 import { createCanonicalProofDeployment } from "./canonical-proof-deployment-fixture.js";
 
 const root = new URL("..", import.meta.url);
@@ -25,7 +26,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through15 = process.argv.includes("--through-15");
+const through16 = process.argv.includes("--through-16");
+const through15 = through16 || process.argv.includes("--through-15");
 const through14 = process.argv.includes("--through-14");
 const through13 = through14 || process.argv.includes("--through-13");
 const through12 = through15 || through13 || process.argv.includes("--through-12");
@@ -952,6 +954,7 @@ try {
         let lateObservationCounts = null;
         let materialErasure = null;
         let dispatchClaim = null;
+        let workerExecution = null;
         let finalCollection = initialCollection;
         if (through10) {
           const frozen = await post("/diagnostic/v0/evidence-collections/process", {
@@ -1829,10 +1832,18 @@ try {
           assert.ok(diagnosticAssignment, "Ticket 15 requires the exact Test 1 Assignment");
           assert.equal(diagnosticAssignment.state.current, "unclaimed");
           const requirements = diagnosticAssignment.assignment.work_requirements;
+          const workerImageReference = through16
+            ? `local/alphonse-diagnostic-worker:ticket-16-${process.pid}` : null;
+          if (through16) run("docker", ["build", "--file",
+            "runtime/diagnostic-worker/Dockerfile", "--tag", workerImageReference, "."],
+          { timeout: 8 * 60_000 });
+          const workerImageDigest = through16
+            ? run("docker", ["image", "inspect", "--format", "{{.Id}}",
+              workerImageReference]).trim() : `sha256:${"a".repeat(64)}`;
           const model = {
-            provider: "openai",
-            model: "frontier-diagnostic",
-            version: "pinned-v1",
+            provider: through16 ? "reference-provider" : "openai",
+            model: through16 ? "synthetic-diagnostic-fixture" : "frontier-diagnostic",
+            version: through16 ? "ticket-16-v1" : "pinned-v1",
             capability_class: requirements.model.capability_class
           };
           const broker = {
@@ -1841,7 +1852,7 @@ try {
             policy_version: "0.1.0",
             audience: "diagnostic-model-broker:v0.1",
             max_requests: 1,
-            max_input_units: 20000,
+            max_input_units: through16 ? 1000000 : 20000,
             max_output_units: 4000,
             access_delivery: "after_claim_only"
           };
@@ -1859,8 +1870,9 @@ try {
           const runtime = {
             kind: requirements.runtime.kind,
             image: {
-              reference: `local/alphonse-diagnostic-worker@sha256:${"a".repeat(64)}`,
-              digest: `sha256:${"a".repeat(64)}`
+              reference: workerImageReference
+                ?? `local/alphonse-diagnostic-worker@sha256:${"a".repeat(64)}`,
+              digest: workerImageDigest
             },
             runner: {
               runner_id: "diagnostic-runner:canonical",
@@ -2108,19 +2120,166 @@ try {
             /immutable Kernel record cannot be updated/u);
           } finally { await authorityDb.end(); }
 
+          if (through16) {
+            const workerRunId = winningClaim.worker_run.worker_run_id;
+            const launchAuthorized = await post(`/diagnostic/v0/worker-runs/${workerRunId
+              }/launch-authorizations`, command("diagnostic.worker_run.launch_authorize", {
+              worker_run_id: workerRunId
+            }));
+            assert.equal(launchAuthorized.response.status, 201,
+              JSON.stringify(launchAuthorized.body));
+            const launch = launchAuthorized.body.diagnostic_worker_launch;
+            assert.equal(launch.state, "launching");
+            assert.equal(launch.provider_credential_disclosed, false);
+            assert.equal(launch.external_business_effect_authority, "none");
+            assert.equal(launch.signed_broker_grant.document.authority.model_requests, 1);
+            assert.equal(launch.signed_broker_grant.document.authority.external_business_effects,
+              "none");
+            assert.equal(launch.signed_broker_grant.document.input.input_digest,
+              launch.input_digest);
+            assert.equal(launch.worker_input.assignment.instruction.task,
+              "analyze_assigned_frozen_evidence_package");
+            assert.equal(Object.hasOwn(launch.worker_input, "expected_answer"), false);
+
+            const brokerImageId = compose("images", "-q", "kernel").trim();
+            const brokerImageReference = brokerImageId.startsWith("sha256:")
+              ? brokerImageId : `sha256:${brokerImageId}`;
+            assert.match(brokerImageReference, /^sha256:[0-9a-f]{64}$/u);
+            const brokerGrantSigning = {
+              keyId: "local-diagnostic-broker-grant-key-v1",
+              secret: "local-diagnostic-broker-grant-signing-secret-with-sufficient-length-v1"
+            };
+            const brokerReceiptSigning = {
+              keyId: "local-diagnostic-broker-receipt-key-v1",
+              secret: "local-diagnostic-broker-receipt-secret-with-sufficient-length-v1"
+            };
+            const runnerSigning = {
+              keyId: "local-diagnostic-runner-attestation-key-v1",
+              secret: "local-diagnostic-runner-attestation-secret-with-sufficient-length-v1"
+            };
+            let started = null;
+            const runtimeResult = await runDiagnosticWorker({
+              launch,
+              workerImageReference,
+              brokerImageReference,
+              brokerGrantSigning,
+              brokerReceiptSigning,
+              runnerSigning,
+              providerCredential: "local-reference-provider-credential-held-only-by-broker-v1",
+              onStarted: async (signedStartAttestation) => {
+                started = await post(`/diagnostic/v0/worker-runs/${workerRunId}/started`, command(
+                  "diagnostic.worker_run.started", {
+                    worker_run_id: workerRunId,
+                    signed_start_attestation: signedStartAttestation
+                  }));
+                assert.equal(started.response.status, 201, JSON.stringify(started.body));
+                assert.equal(started.body.diagnostic_worker_start.state, "running");
+                assert.equal(started.body.diagnostic_worker_start.runtime_provenance.network
+                  .attached_container_ids.length, 2);
+              }
+            });
+            assert.ok(started);
+            assert.equal(runtimeResult.broker_grant_replay_denied, true,
+              JSON.stringify(runtimeResult.broker_grant_replay_probe));
+            const networkProbe = runtimeResult.worker_stdout.trim().split("\n")
+              .map((line) => JSON.parse(line)).find((entry) => entry.event === "worker_network_probe");
+            assert.ok(networkProbe);
+            assert.ok(Object.values(networkProbe.boundary_probe)
+              .every((outcome) => outcome === "denied"));
+
+            const completed = await post(`/diagnostic/v0/worker-runs/${workerRunId}/completions`,
+              command("diagnostic.worker_run.complete", {
+                worker_run_id: workerRunId,
+                signed_final_attestation: runtimeResult.signed_final_attestation,
+                output_bytes_base64: runtimeResult.output_bytes_base64
+              }));
+            assert.equal(completed.response.status, 201, JSON.stringify(completed.body));
+            const completion = completed.body.diagnostic_worker_completion;
+            assert.equal(completion.state, "completed");
+            assert.equal(completion.external_business_effects, 0);
+            assert.equal(completion.repair_authority, "none");
+            assert.equal(completion.broker_receipt.requests, 1);
+            assert.equal(completion.broker_receipt.provider_credential_location,
+              "model_broker_only");
+            assert.equal(completion.diagnosis.claim_citations_validated, true);
+            assert.equal(completion.diagnosis.implementation_location_established, false);
+            assert.deepEqual(completion.diagnosis.document.best_supported_hypothesis, {
+              mechanism: "identity_scope_mismatch",
+              scope: "logical_operation",
+              support: "BEST_SUPPORTED_HYPOTHESIS",
+              confidence: "high"
+            });
+            assert.ok(completion.diagnosis.document.alternatives.some((entry) =>
+              entry.hypothesis.includes("delivery attempts") && entry.status === "supported"));
+            assert.ok(completion.diagnosis.document.not_established.some((entry) =>
+              entry.includes("implementation location") && entry.includes("NOT_ESTABLISHED")));
+            assert.ok(completion.diagnosis.document.supporting_claims.length > 0);
+            assert.equal(completion.runtime_provenance.network.internal, true);
+            assert.ok([1, 2].includes(
+              completion.runtime_provenance.network.attached_container_ids.length));
+            assert.equal(completion.runtime_provenance.container.security.privileged, false);
+            assert.equal(completion.runtime_provenance.container.security.read_only_root, true);
+            assert.equal(completion.runtime_provenance.container.security.docker_socket_mounted,
+              false);
+            assert.equal(completion.runtime_provenance.container.mounts.host_workspace_mounted,
+              false);
+            assert.equal(completion.runtime_provenance.output_scan.sole_expected_regular_file,
+              true);
+            assert.equal(completion.runtime_provenance.adversarial_checks.broker_grant_replay,
+              "denied_already_consumed");
+
+            const finalWorkerRun = await kernel(`/diagnostic/v0/worker-runs/${workerRunId}`);
+            assert.equal(finalWorkerRun.response.status, 200, JSON.stringify(finalWorkerRun.body));
+            assert.equal(finalWorkerRun.body.diagnostic_worker_run.state.current, "completed");
+            assert.equal(finalWorkerRun.body.diagnostic_worker_run.execution.diagnosis_created,
+              true);
+            assert.equal(finalWorkerRun.body.diagnostic_worker_run.execution.diagnosis
+              .diagnosis_digest, completion.diagnosis.diagnosis_digest);
+
+            const executionDb = new pg.Client({ connectionString:
+              "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+            await executionDb.connect();
+            try {
+              const counts = (await executionDb.query(
+                `SELECT
+                  (SELECT COUNT(*)::int FROM diagnostic_worker_run_launches) AS launches,
+                  (SELECT COUNT(*)::int FROM diagnostic_worker_run_starts) AS starts,
+                  (SELECT COUNT(*)::int FROM diagnostic_worker_run_completions) AS completions,
+                  (SELECT COUNT(*)::int FROM diagnostic_worker_run_diagnoses) AS diagnoses`
+              )).rows[0];
+              assert.deepEqual(counts, { launches: 1, starts: 1, completions: 1, diagnoses: 1 });
+              await assert.rejects(executionDb.query(
+                "UPDATE diagnostic_worker_run_diagnoses SET submitted_by_id='tampered' WHERE worker_run_id=$1",
+                [workerRunId]), /immutable records cannot be updated/u);
+            } finally { await executionDb.end(); }
+            workerExecution = {
+              launch_id: launch.launch_id,
+              completion_id: completion.completion_id,
+              diagnosis_id: completion.diagnosis.diagnosis_id,
+              diagnosis_digest: completion.diagnosis.diagnosis_digest,
+              worker_run_state: "completed",
+              model_requests: 1,
+              broker_replay_denied: true,
+              network_denials: Object.keys(networkProbe.boundary_probe).length,
+              external_business_effects: 0,
+              provider_limitation: "synthetic-reference-provider"
+            };
+          }
+
           diagnosticAssignment = claimedAssignment.body.diagnostic_assignment;
           dispatchClaim = {
             dispatch_authorization_id: winningClaim.dispatch_authorization_id,
             authorization_digest: winningClaim.authorization_digest,
             worker_run_id: winningClaim.worker_run.worker_run_id,
             assignment_state: diagnosticAssignment.state.current,
-            worker_run_state: workerRun.body.diagnostic_worker_run.state.current,
+            worker_run_state: workerExecution?.worker_run_state
+              ?? workerRun.body.diagnostic_worker_run.state.current,
             material_fence_observed: true,
             competing_claim_rejected: true,
             replay_idempotent: true,
             authority_rows: 2,
             consumption_rows: 1,
-            model_requests: 0,
+            model_requests: workerExecution?.model_requests ?? 0,
             adversarial_cases: 8
           };
         }
@@ -2128,7 +2287,7 @@ try {
           effectProjection, evaluation, trigger, diagnosticCase, finalCollection, evidencePackage,
           diagnosticAssignment, assignmentVerificationMaterial, evidenceRevision,
           replacementAssignment, replacementVerificationMaterial, lateObservationCounts,
-          independentVerification, materialErasure, dispatchClaim };
+          independentVerification, materialErasure, dispatchClaim, workerExecution };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -2149,7 +2308,8 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through15 ? "canonical-diagnostic-proof-15"
+    schema_version: "0.1.0", ticket: through16 ? "canonical-diagnostic-proof-16"
+      : through15 ? "canonical-diagnostic-proof-15"
       : through14 ? "canonical-diagnostic-proof-14"
       : through13 ? "canonical-diagnostic-proof-13"
       : through12 ? "canonical-diagnostic-proof-12"
@@ -2158,7 +2318,9 @@ try {
       : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through15
+    status: "passed", completed_capability: through16
+      ? "isolated_worker_brokered_model_and_ingested_diagnosis"
+      : through15
       ? "signed_single_use_diagnostic_dispatch_and_atomic_claim"
       : through14 ? "revoked_visible_and_verifiably_erased_material"
       : through13 ? "material_evidence_revision_and_bounded_reassignment"
@@ -2229,7 +2391,21 @@ try {
         "diagnostic_plane_atomic_single_use_consumption", "material_fence_blocks_claim",
         "one_competing_claimant_wins", "claimed_worker_run_not_launched",
         "no_container_broker_token_provider_request_model_request_or_diagnosis",
-        "claim_replay_is_idempotent", "immutable_authority_and_consumption_records"] : [])],
+        "claim_replay_is_idempotent", "immutable_authority_and_consumption_records"] : []),
+      ...(through16 ? ["fresh_non_root_read_only_worker_container",
+        "no_new_privileges_and_all_capabilities_dropped",
+        "exact_read_only_package_and_bounded_tmpfs_output",
+        "no_workspace_docker_socket_host_credentials_or_platform_credentials",
+        "internal_broker_only_network_with_forbidden_destination_denials",
+        "durable_single_use_broker_grant_replay_denied",
+        "provider_credential_held_only_by_model_broker",
+        "one_schema_valid_regular_diagnosis_output",
+        "all_diagnosis_claim_ids_resolved_against_exact_package",
+        "delivery_vs_logical_operation_identity_scope_mismatch_identified",
+        "responsible_implementation_location_not_established",
+        "signed_runtime_model_broker_and_output_provenance_ingested",
+        "zero_external_business_effects_and_no_repair_authority",
+        "synthetic_provider_quality_limitation_explicit"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
@@ -2304,7 +2480,24 @@ try {
       extendedResult?.interpretation?.dispatchClaim?.consumption_rows ?? 0,
     diagnostic_dispatch_adversarial_cases:
       extendedResult?.interpretation?.dispatchClaim?.adversarial_cases ?? 0,
-    model_requests: 0, worker_run_created: Boolean(extendedResult?.interpretation?.dispatchClaim)
+    diagnostic_worker_launch_id:
+      extendedResult?.interpretation?.workerExecution?.launch_id ?? null,
+    diagnostic_worker_completion_id:
+      extendedResult?.interpretation?.workerExecution?.completion_id ?? null,
+    diagnostic_worker_diagnosis_id:
+      extendedResult?.interpretation?.workerExecution?.diagnosis_id ?? null,
+    diagnostic_worker_diagnosis_digest:
+      extendedResult?.interpretation?.workerExecution?.diagnosis_digest ?? null,
+    diagnostic_worker_network_denials:
+      extendedResult?.interpretation?.workerExecution?.network_denials ?? 0,
+    diagnostic_broker_replay_denied:
+      extendedResult?.interpretation?.workerExecution?.broker_replay_denied ?? false,
+    diagnostic_worker_external_business_effects:
+      extendedResult?.interpretation?.workerExecution?.external_business_effects ?? null,
+    diagnostic_model_provider_limitation:
+      extendedResult?.interpretation?.workerExecution?.provider_limitation ?? null,
+    model_requests: extendedResult?.interpretation?.workerExecution?.model_requests ?? 0,
+    worker_run_created: Boolean(extendedResult?.interpretation?.dispatchClaim)
   }, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`\n--- Ticket 05 service logs ---\n${compose("logs", "--no-color",

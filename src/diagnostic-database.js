@@ -48,7 +48,7 @@ export function createDiagnosticDatabase(connectionString) {
       const transitionId = randomUUID();
       const outboxId = randomUUID();
       const sequence = String(node.next_sequence);
-      const applied = await apply(client, { acceptedAt, sequence });
+      const applied = await apply(client, { acceptedAt, sequence, transitionId });
       const transition = {
         transition_id: transitionId,
         type: applied.transitionType,

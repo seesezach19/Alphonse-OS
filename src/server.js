@@ -38,6 +38,7 @@ import { createIndependentDiagnosticVerificationService } from "./independent-di
 import { createDiagnosticAssignmentService } from "./diagnostic-assignment-service.js";
 import { createDiagnosticDispatchAuthorizationService } from "./diagnostic-dispatch-authorization-service.js";
 import { createDiagnosticDispatchService } from "./diagnostic-dispatch-service.js";
+import { createDiagnosticWorkerExecutionService } from "./diagnostic-worker-execution-service.js";
 import { createDiagnosticMaterialAvailabilityService } from "./diagnostic-material-availability-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
@@ -136,6 +137,16 @@ const diagnosticDispatcherAudience = process.env.DIAGNOSTIC_DISPATCHER_AUDIENCE
   ?? "diagnostic-dispatcher:v0.1";
 const diagnosticRunnerAudiences = JSON.parse(process.env.DIAGNOSTIC_RUNNER_AUDIENCES
   ?? JSON.stringify(["diagnostic-runner:v0.1"]));
+const diagnosticBrokerGrantSigningKeyId = process.env.DIAGNOSTIC_MODEL_BROKER_GRANT_KEY_ID
+  ?? "local-diagnostic-broker-grant-key-v1";
+const diagnosticBrokerGrantSigningSecret =
+  process.env.DIAGNOSTIC_MODEL_BROKER_GRANT_SIGNING_SECRET;
+const diagnosticBrokerReceiptKeyId = process.env.DIAGNOSTIC_MODEL_BROKER_RECEIPT_KEY_ID
+  ?? "local-diagnostic-broker-receipt-key-v1";
+const diagnosticBrokerReceiptSecret = process.env.DIAGNOSTIC_MODEL_BROKER_RECEIPT_SECRET;
+const diagnosticRunnerAttestationKeyId = process.env.DIAGNOSTIC_RUNNER_ATTESTATION_KEY_ID
+  ?? "local-diagnostic-runner-attestation-key-v1";
+const diagnosticRunnerAttestationSecret = process.env.DIAGNOSTIC_RUNNER_ATTESTATION_SECRET;
 
 if (!databaseUrl) throw new Error("DATABASE_URL is required.");
 if (!bootstrapToken) throw new Error("KERNEL_BOOTSTRAP_TOKEN is required.");
@@ -171,6 +182,7 @@ let diagnosticAssignmentService = null;
 let diagnosticMaterialAvailabilityService = null;
 let diagnosticDispatchService = null;
 let diagnosticDispatchAuthorizationService = null;
+let diagnosticWorkerExecutionService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -178,6 +190,10 @@ if (diagnosticDatabaseUrl) {
   }
   if (!diagnosticDispatchSigningSecret) {
     throw new Error("Diagnostic dispatch signing configuration is required with the Diagnostic Plane.");
+  }
+  if (!diagnosticBrokerGrantSigningSecret || !diagnosticBrokerReceiptSecret
+      || !diagnosticRunnerAttestationSecret) {
+    throw new Error("Diagnostic Worker execution signing configuration is required with the Diagnostic Plane.");
   }
   diagnosticDatabase = createDiagnosticDatabase(diagnosticDatabaseUrl);
   await diagnosticDatabase.migrate();
@@ -448,6 +464,25 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     dispatcherAudience: diagnosticDispatcherAudience,
     allowedRunnerAudiences: diagnosticRunnerAudiences
   });
+  diagnosticWorkerExecutionService = createDiagnosticWorkerExecutionService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    materialAuthority: diagnosticMaterialAvailabilityService,
+    installationId,
+    environmentId,
+    brokerGrantSigning: {
+      keyId: diagnosticBrokerGrantSigningKeyId,
+      secret: diagnosticBrokerGrantSigningSecret
+    },
+    brokerReceiptSigning: {
+      keyId: diagnosticBrokerReceiptKeyId,
+      secret: diagnosticBrokerReceiptSecret
+    },
+    runnerSigning: {
+      keyId: diagnosticRunnerAttestationKeyId,
+      secret: diagnosticRunnerAttestationSecret
+    }
+  });
   diagnosticDispatchAuthorizationService = createDiagnosticDispatchAuthorizationService({
     database,
     identityIntent,
@@ -674,6 +709,14 @@ function requireDiagnosticDispatch() {
       "Diagnostic dispatch and claim service is not configured.");
   }
   return diagnosticDispatchService;
+}
+
+function requireDiagnosticWorkerExecution() {
+  if (!diagnosticWorkerExecutionService) {
+    throw new KernelError(503, "DIAGNOSTIC_WORKER_EXECUTION_UNAVAILABLE",
+      "Diagnostic Worker execution is not configured.");
+  }
+  return diagnosticWorkerExecutionService;
 }
 
 function requireDiagnosticDispatchAuthority() {
@@ -1115,8 +1158,55 @@ async function route(request, response) {
   if (request.method === "GET" && /^\/diagnostic\/v0\/worker-runs\/[^/]+$/.test(url.pathname)) {
     const service = requireDiagnosticDispatch();
     authenticateBootstrapOperator(request);
-    return sendJson(response, 200, { diagnostic_worker_run: await service.getWorkerRun(
-      pathId(url.pathname, "/diagnostic/v0/worker-runs/")) });
+    const workerRunId = pathId(url.pathname, "/diagnostic/v0/worker-runs/");
+    const workerRun = await service.getWorkerRun(workerRunId);
+    const execution = diagnosticWorkerExecutionService
+      ? await diagnosticWorkerExecutionService.getExecutionView(workerRunId) : null;
+    return sendJson(response, 200, { diagnostic_worker_run: execution
+      ? { ...workerRun, launch_state: execution.state, broker_token_created: true,
+        provider_request_created: execution.provider_request_created,
+        model_request_created: execution.model_request_created,
+        diagnosis_created: execution.diagnosis_created, execution }
+      : workerRun });
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/worker-runs\/[^/]+\/launch-authorizations$/.test(url.pathname)) {
+    const service = requireDiagnosticWorkerExecution();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.worker_run.launch_authorize");
+    const body = await readJson(request, 256 * 1024);
+    const workerRunId = decodeURIComponent(url.pathname.split("/").at(-2));
+    if (body?.input?.worker_run_id !== workerRunId) {
+      throw new KernelError(409, "DIAGNOSTIC_WORKER_RUN_ROUTE_MISMATCH",
+        "Route Worker Run ID must match command input.");
+    }
+    return sendCommandResult(response, await service.authorizeLaunch(body, actor));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/worker-runs\/[^/]+\/started$/.test(url.pathname)) {
+    const service = requireDiagnosticWorkerExecution();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.worker_run.started");
+    const body = await readJson(request, 512 * 1024);
+    const workerRunId = decodeURIComponent(url.pathname.split("/").at(-2));
+    if (body?.input?.worker_run_id !== workerRunId) {
+      throw new KernelError(409, "DIAGNOSTIC_WORKER_RUN_ROUTE_MISMATCH",
+        "Route Worker Run ID must match command input.");
+    }
+    return sendCommandResult(response, await service.recordStarted(body, actor));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/worker-runs\/[^/]+\/completions$/.test(url.pathname)) {
+    const service = requireDiagnosticWorkerExecution();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.worker_run.complete");
+    const body = await readJson(request, 24 * 1024 * 1024);
+    const workerRunId = decodeURIComponent(url.pathname.split("/").at(-2));
+    if (body?.input?.worker_run_id !== workerRunId) {
+      throw new KernelError(409, "DIAGNOSTIC_WORKER_RUN_ROUTE_MISMATCH",
+        "Route Worker Run ID must match command input.");
+    }
+    return sendCommandResult(response, await service.complete(body, actor));
   }
 
   if (request.method === "GET"

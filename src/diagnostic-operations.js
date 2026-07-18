@@ -866,12 +866,80 @@ const descriptors = [
   },
   readDescriptor({
     operationId: "diagnostic.worker_run.get",
-    summary: "Inspect one immutable claimed Worker Run boundary and its separately fenced launch state.",
+    summary: "Inspect one immutable Worker Run boundary, launch provenance, and ingested diagnosis state.",
     path: "/diagnostic/v0/worker-runs/{worker_run_id}",
     idName: "worker_run_id",
     resultKey: "diagnostic_worker_run",
-    issues: ["DIAGNOSTIC_WORKER_RUN_NOT_FOUND", "DIAGNOSTIC_WORKER_RUN_INTEGRITY_VIOLATION"]
+    issues: ["DIAGNOSTIC_WORKER_RUN_NOT_FOUND", "DIAGNOSTIC_WORKER_RUN_INTEGRITY_VIOLATION",
+      "DIAGNOSTIC_WORKER_EXECUTION_INTEGRITY_VIOLATION"]
   }),
+  {
+    operation_id: "diagnostic.worker_run.launch_authorize",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Fence current package material, issue one exact Broker Grant, and advance a claimed Worker Run to launching.",
+    visibility: "public",
+    authority_class: "customer_owner_dispatcher",
+    effect_class: "isolated_diagnostic_launch_and_one_broker_request_only",
+    idempotency: "command_id_and_exact_worker_run",
+    transport: { method: "POST", path: "/diagnostic/v0/worker-runs/{worker_run_id}/launch-authorizations" },
+    input_schema: commandEnvelope("diagnostic.worker_run.launch_authorize", {
+      type: "object", required: ["worker_run_id"], additionalProperties: false,
+      properties: { worker_run_id: { type: "string", format: "uuid" } }
+    }),
+    output_schema: { type: "object", required: ["diagnostic_worker_launch", "transition"] },
+    supported_modes: ["live"],
+    preconditions: ["worker_run_claimed_not_launched", "package_material_currently_available"],
+    outcomes: ["broker_grant_created", "worker_input_bound", "worker_run_launching"],
+    issues: ["DIAGNOSTIC_WORKER_RUN_LAUNCH_CONFLICT",
+      "DIAGNOSTIC_BROKER_INPUT_BUDGET_INSUFFICIENT"],
+    emitted_events: ["diagnostic.worker_run.launch_authorized"],
+    next_operations: ["diagnostic.worker_run.started"]
+  },
+  {
+    operation_id: "diagnostic.worker_run.started",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Accept signed trusted-runner proof of the exact running isolated container and Broker-only network.",
+    visibility: "public", authority_class: "customer_owner_dispatcher",
+    effect_class: "runtime_provenance_recording", idempotency: "command_id_and_exact_attestation",
+    transport: { method: "POST", path: "/diagnostic/v0/worker-runs/{worker_run_id}/started" },
+    input_schema: commandEnvelope("diagnostic.worker_run.started", {
+      type: "object", required: ["worker_run_id", "signed_start_attestation"],
+      additionalProperties: false,
+      properties: { worker_run_id: { type: "string", format: "uuid" },
+        signed_start_attestation: { type: "object" } }
+    }),
+    output_schema: { type: "object", required: ["diagnostic_worker_start", "transition"] },
+    supported_modes: ["live"], preconditions: ["signed_runner_attestation_exact_and_current"],
+    outcomes: ["worker_run_running", "runtime_boundary_recorded"],
+    issues: ["DIAGNOSTIC_RUNNER_ATTESTATION_BINDING_MISMATCH",
+      "DIAGNOSTIC_RUNNER_ISOLATION_INVALID", "DIAGNOSTIC_RUNNER_NETWORK_INVALID"],
+    emitted_events: ["diagnostic.worker_run.started"],
+    next_operations: ["diagnostic.worker_run.complete"]
+  },
+  {
+    operation_id: "diagnostic.worker_run.complete",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Validate post-exit runtime proof, one regular bounded output, one Broker Receipt, exact claim citations, and ingest one diagnosis.",
+    visibility: "public", authority_class: "customer_owner_dispatcher",
+    effect_class: "diagnosis_ingestion_without_external_business_effects",
+    idempotency: "command_id_exact_final_attestation_and_output_bytes",
+    transport: { method: "POST", path: "/diagnostic/v0/worker-runs/{worker_run_id}/completions" },
+    input_schema: commandEnvelope("diagnostic.worker_run.complete", {
+      type: "object", required: ["worker_run_id", "signed_final_attestation", "output_bytes_base64"],
+      additionalProperties: false,
+      properties: { worker_run_id: { type: "string", format: "uuid" },
+        signed_final_attestation: { type: "object" }, output_bytes_base64: { type: "string" } }
+    }),
+    output_schema: { type: "object", required: ["diagnostic_worker_completion", "transition"] },
+    supported_modes: ["live"],
+    preconditions: ["worker_run_running", "package_material_currently_available",
+      "signed_final_provenance_exact", "sole_output_schema_and_citations_valid"],
+    outcomes: ["worker_run_completed", "diagnosis_ingested", "broker_request_proven"],
+    issues: ["DIAGNOSTIC_WORKER_OUTPUT_BOUNDARY_INVALID",
+      "DIAGNOSTIC_MODEL_BROKER_RECEIPT_INVALID", "DIAGNOSTIC_WORKER_CITATION_INVALID"],
+    emitted_events: ["diagnostic.worker_run.completed"],
+    next_operations: ["diagnostic.worker_run.get"]
+  },
   readDescriptor({
     operationId: "diagnostic.evidence_package_assignment.get",
     summary: "Inspect the deterministic initial Assignment created from one frozen Evidence Package event.",

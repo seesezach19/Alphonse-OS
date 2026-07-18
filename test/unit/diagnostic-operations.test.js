@@ -50,6 +50,9 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.assignment.get",
     "diagnostic.assignment.claim",
     "diagnostic.worker_run.get",
+    "diagnostic.worker_run.launch_authorize",
+    "diagnostic.worker_run.started",
+    "diagnostic.worker_run.complete",
     "diagnostic.evidence_package_assignment.get",
     "diagnostic.evidence_package_assignment_status.get",
     "diagnostic.assignment_verification_material.get",
@@ -118,6 +121,19 @@ test("Diagnostic dispatch consumes exact Kernel authority without launching work
 
   const run = getDiagnosticOperationDescriptor("diagnostic.worker_run.get");
   assert.equal(run.effect_class, "read_only");
+});
+
+test("Diagnostic execution separates launch, running proof, and diagnosis ingestion", () => {
+  const launch = getDiagnosticOperationDescriptor("diagnostic.worker_run.launch_authorize");
+  const started = getDiagnosticOperationDescriptor("diagnostic.worker_run.started");
+  const completed = getDiagnosticOperationDescriptor("diagnostic.worker_run.complete");
+  assert.equal(launch.effect_class, "isolated_diagnostic_launch_and_one_broker_request_only");
+  assert.ok(launch.outcomes.includes("broker_grant_created"));
+  assert.equal(started.effect_class, "runtime_provenance_recording");
+  assert.ok(started.preconditions.includes("signed_runner_attestation_exact_and_current"));
+  assert.equal(completed.effect_class,
+    "diagnosis_ingestion_without_external_business_effects");
+  assert.ok(completed.preconditions.includes("sole_output_schema_and_citations_valid"));
 });
 
 test("Diagnostic Worker protocol is advisory, provenance-bound, and authority-free", () => {

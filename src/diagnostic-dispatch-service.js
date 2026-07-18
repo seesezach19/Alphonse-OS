@@ -35,6 +35,14 @@ function routeUuid(value, field) {
 }
 
 function workerRunView(run, state, consumption) {
+  const launchState = {
+    claimed_not_launched: "not_launched",
+    launching: "launching",
+    running: "running",
+    completed: "completed",
+    failed: "failed",
+    cancelled: "cancelled"
+  }[state.state];
   return {
     worker_run_id: run.worker_run_id,
     worker_run_digest: run.worker_run_digest,
@@ -59,11 +67,11 @@ function workerRunView(run, state, consumption) {
     claimed_by: { type: run.claimed_by_type, id: run.claimed_by_id },
     claimed_at: iso(run.claimed_at),
     expires_at: iso(run.expires_at),
-    launch_state: "not_launched",
-    broker_token_created: false,
-    provider_request_created: false,
-    model_request_created: false,
-    diagnosis_created: false,
+    launch_state: launchState,
+    broker_token_created: state.state !== "claimed_not_launched",
+    provider_request_created: state.state === "completed",
+    model_request_created: state.state === "completed",
+    diagnosis_created: state.state === "completed",
     external_business_effect_authority: "none",
     immutable_run_facts: true
   };
@@ -577,8 +585,13 @@ export function createDiagnosticDispatchService({ database, installationId, envi
         || iso(consumption.consumed_at) !== iso(run.claimed_at)
         || state.worker_run_id !== run.worker_run_id
         || state.worker_run_digest !== run.worker_run_digest
-        || state.state !== "claimed_not_launched" || String(state.state_revision) !== "0"
-        || state.last_transition_id !== transition.transition_id
+        || !["claimed_not_launched", "launching", "running", "completed", "failed", "cancelled"]
+          .includes(state.state)
+        || BigInt(state.state_revision) < 0n
+        || (state.state === "claimed_not_launched"
+          && (String(state.state_revision) !== "0"
+            || state.last_transition_id !== transition.transition_id))
+        || (state.state !== "claimed_not_launched" && BigInt(state.state_revision) < 1n)
         || transition.transition_type !== "diagnostic.assignment.claimed"
         || transition.aggregate_type !== "diagnostic_assignment"
         || transition.aggregate_id !== run.assignment_id
@@ -591,7 +604,8 @@ export function createDiagnosticDispatchService({ database, installationId, envi
         || outbox.event_type !== "diagnostic.assignment.claimed"
         || outbox.payload?.worker_run_id !== run.worker_run_id
         || iso(run.claimed_at) !== iso(transition.occurred_at)
-        || iso(state.updated_at) !== iso(transition.occurred_at)) {
+        || (state.state === "claimed_not_launched"
+          && iso(state.updated_at) !== iso(transition.occurred_at))) {
       throw new KernelError(500, "DIAGNOSTIC_WORKER_RUN_INTEGRITY_VIOLATION",
         "Stored Diagnostic Worker Run does not match its exact authorization consumption and claim history.");
     }
