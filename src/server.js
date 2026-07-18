@@ -36,6 +36,7 @@ import { createDiagnosticEffectEvaluationService } from "./diagnostic-effect-eva
 import { createDiagnosticEvidencePackageService } from "./diagnostic-evidence-package-service.js";
 import { createIndependentDiagnosticVerificationService } from "./independent-diagnostic-verification-service.js";
 import { createDiagnosticAssignmentService } from "./diagnostic-assignment-service.js";
+import { createDiagnosticMaterialAvailabilityService } from "./diagnostic-material-availability-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
 import { createPackageService } from "./package-service.js";
@@ -158,6 +159,7 @@ let diagnosticEffectEvaluationService = null;
 let diagnosticEvidencePackageService = null;
 let diagnosticIndependentVerificationService = null;
 let diagnosticAssignmentService = null;
+let diagnosticMaterialAvailabilityService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -167,7 +169,18 @@ if (diagnosticDatabaseUrl) {
   await diagnosticDatabase.migrate();
   await diagnosticDatabase.bootstrapNode(installationId);
   diagnosticArtifactStore = createContentAddressedArtifactStore(diagnosticArtifactRoot);
-  diagnosticService = createDiagnosticService(diagnosticDatabase, diagnosticArtifactStore, installationId);
+  diagnosticMaterialAvailabilityService = createDiagnosticMaterialAvailabilityService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    installationId,
+    environmentId
+  });
+  diagnosticArtifactStore.setMaterialGuard(
+    diagnosticMaterialAvailabilityService.createArtifactAccessGuard()
+  );
+  diagnosticService = createDiagnosticService(
+    diagnosticDatabase, diagnosticArtifactStore, installationId, diagnosticMaterialAvailabilityService
+  );
   const canonicalCompatibility = diagnosticRuntimeCompatibilityConfig
     ? createLegacyRuntimeCompatibility({
       ...diagnosticRuntimeCompatibilityConfig,
@@ -203,7 +216,8 @@ if (diagnosticDatabaseUrl) {
     diagnosticRuntimeDetailUrl && diagnosticRuntimeDetailToken
       ? createRuntimeDetailClient({ baseUrl: diagnosticRuntimeDetailUrl, token: diagnosticRuntimeDetailToken })
       : unavailableDetailClient,
-    diagnosticRuntimeDetailPolicy
+    diagnosticRuntimeDetailPolicy,
+    diagnosticMaterialAvailabilityService
   );
 }
 const identityIntent = createIdentityIntentService(database, installationId, environmentId, bootstrapPrincipalId);
@@ -387,7 +401,8 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
       service_key_id: tokenizationServiceKeyId ?? null,
       public_key_der_base64: tokenizationServicePublicKeyDer ?? null
     },
-    resolveDeploymentExports: resolveDeployedExports
+    resolveDeploymentExports: resolveDeployedExports,
+    materialAuthority: diagnosticMaterialAvailabilityService
   });
   diagnosticEvidencePackageService = createDiagnosticEvidencePackageService({
     database: diagnosticDatabase,
@@ -397,7 +412,8 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     correlationReader: diagnosticCorrelationService,
     effectReader: diagnosticEffectEvaluationService,
     verificationBundleWriter: diagnosticIndependentVerificationService,
-    resolveDeploymentExports: resolveDeployedExports
+    resolveDeploymentExports: resolveDeployedExports,
+    materialAuthority: diagnosticMaterialAvailabilityService
   });
   diagnosticAssignmentService = createDiagnosticAssignmentService({
     database: diagnosticDatabase,
@@ -405,7 +421,8 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     installationId,
     environmentId,
     packageReader: diagnosticEvidencePackageService,
-    resolveDeploymentExports: resolveDeployedExports
+    resolveDeploymentExports: resolveDeployedExports,
+    materialAuthority: diagnosticMaterialAvailabilityService
   });
   diagnosticEvidencePackageService.startRevisionMonitor();
   diagnosticAssignmentService.start();
@@ -598,6 +615,14 @@ function requireDiagnosticEvidencePackaging() {
       "Deterministic evidence collection and packaging are not configured.");
   }
   return diagnosticEvidencePackageService;
+}
+
+function requireDiagnosticMaterialAvailability() {
+  if (!diagnosticMaterialAvailabilityService) {
+    throw new KernelError(503, "DIAGNOSTIC_MATERIAL_AUTHORITY_UNAVAILABLE",
+      "Diagnostic material availability and erasure authority is not configured.");
+  }
+  return diagnosticMaterialAvailabilityService;
 }
 
 function requireDiagnosticAssignment() {
@@ -950,6 +975,43 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { evidence_package: await service.getPackage(
       pathId(url.pathname, "/diagnostic/v0/evidence-packages/")) });
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/evidence-packages\/[^/]+\/material-availability$/.test(url.pathname)) {
+    const service = requireDiagnosticMaterialAvailability();
+    authenticateBootstrapOperator(request);
+    const evidencePackageId = decodeURIComponent(url.pathname.split("/").at(-2));
+    return sendJson(response, 200, { material_availability:
+      await service.getPackageAvailability(evidencePackageId) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/material-erasures") {
+    const service = requireDiagnosticMaterialAvailability();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.material_erasure.request");
+    return sendCommandResult(response,
+      await service.requestErasure(await readJson(request, 64 * 1024), actor));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/material-erasures\/[^/]+\/complete$/.test(url.pathname)) {
+    const service = requireDiagnosticMaterialAvailability();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.material_erasure.complete");
+    const body = await readJson(request, 64 * 1024);
+    const decisionId = decodeURIComponent(url.pathname.split("/").at(-2));
+    if (body?.input?.erasure_decision_id !== decisionId) {
+      throw new KernelError(409, "DIAGNOSTIC_MATERIAL_ERASURE_ROUTE_MISMATCH",
+        "Route erasure decision ID must match command input.");
+    }
+    return sendCommandResult(response, await service.completeErasure(body, actor));
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/material-erasures\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticMaterialAvailability();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { material_erasure: await service.getErasure(
+      pathId(url.pathname, "/diagnostic/v0/material-erasures/")) });
   }
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/evidence-revisions/process") {

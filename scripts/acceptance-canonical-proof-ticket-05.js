@@ -25,7 +25,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through13 = process.argv.includes("--through-13");
+const through14 = process.argv.includes("--through-14");
+const through13 = through14 || process.argv.includes("--through-13");
 const through12 = through13 || process.argv.includes("--through-12");
 const through11 = through12 || process.argv.includes("--through-11");
 const through10 = through11 || process.argv.includes("--through-10");
@@ -948,6 +949,7 @@ try {
         let replacementAssignment = null;
         let replacementVerificationMaterial = null;
         let lateObservationCounts = null;
+        let materialErasure = null;
         let finalCollection = initialCollection;
         if (through10) {
           const frozen = await post("/diagnostic/v0/evidence-collections/process", {
@@ -1532,6 +1534,289 @@ try {
                 assert.equal(counts.rows[0].assignments, 2);
                 assert.equal(counts.rows[0].diagnosis_requests, 0);
               } finally { await revisionDb.end(); }
+
+              if (through14) {
+                const materialDb = new pg.Client({ connectionString:
+                  "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+                await materialDb.connect();
+                try {
+                  const originalBundleRow = (await materialDb.query(
+                    `SELECT b.bundle_artifact_digest,a.storage_key
+                     FROM diagnostic_independent_verification_bundles b
+                     JOIN diagnostic_artifacts a
+                       ON a.installation_id=b.installation_id
+                      AND a.artifact_digest=b.bundle_artifact_digest
+                     WHERE b.installation_id=(SELECT installation_id FROM diagnostic_nodes LIMIT 1)
+                       AND b.evidence_package_id=$1`,
+                    [evidencePackage.evidence_package_id]
+                  )).rows[0];
+                  assert.ok(originalBundleRow, "original verification bundle material must exist");
+                  const currentRootRow = (await materialDb.query(
+                    `SELECT storage_key FROM diagnostic_artifacts
+                     WHERE installation_id=(SELECT installation_id FROM diagnostic_nodes LIMIT 1)
+                       AND artifact_digest=$1`, [successorPackage.package_artifact_digest]
+                  )).rows[0];
+                  assert.ok(currentRootRow, "current package root material must exist");
+                  const originalRootRow = (await materialDb.query(
+                    `SELECT storage_key FROM diagnostic_artifacts
+                     WHERE installation_id=(SELECT installation_id FROM diagnostic_nodes LIMIT 1)
+                       AND artifact_digest=$1`, [evidencePackage.package_artifact_digest]
+                  )).rows[0];
+                  assert.ok(originalRootRow, "original package root material must exist");
+                  const localArtifactPath = (storageKey) => {
+                    assert.match(storageKey, /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\.json$/u);
+                    return `/var/lib/alphonse-diagnostics/${storageKey}`;
+                  };
+
+                  const holdId = randomUUID();
+                  const holdCreatedAt = new Date().toISOString();
+                  const holdDocument = {
+                    schema_version: "alphonse.diagnostic-material-retention-hold.v0.1",
+                    hold_id: holdId,
+                    artifact_digest: evidencePackage.package_artifact_digest,
+                    hold_class: "legal_hold",
+                    source: { type: "ticket14_adversarial_proof", id: diagnosticCase.case_id },
+                    expires_at: null,
+                    created_by: "canonical-proof",
+                    created_at: holdCreatedAt
+                  };
+                  await materialDb.query(
+                    `INSERT INTO diagnostic_material_retention_holds
+                      (hold_id,installation_id,environment_id,artifact_digest,hold_class,
+                       source_type,source_id,expires_at,hold_document,hold_digest,created_by,created_at)
+                     SELECT $1,n.installation_id,$2,$3,'legal_hold',$4,$5,NULL,$6,$7,$8,$9
+                     FROM diagnostic_nodes n
+                     LIMIT 1`,
+                    [holdId, tokenBase.environment_id, evidencePackage.package_artifact_digest,
+                      "ticket14_adversarial_proof", diagnosticCase.case_id, holdDocument,
+                      sha256Digest(holdDocument), "canonical-proof", holdCreatedAt]
+                  );
+                  const heldDecisionId = randomUUID();
+                  const held = await post("/diagnostic/v0/material-erasures", command(
+                    "diagnostic.material_erasure.request", {
+                      erasure_decision_id: heldDecisionId,
+                      artifact_digest: evidencePackage.package_artifact_digest,
+                      reason_code: "legal_requirement",
+                      reason: "prove legal holds fail closed",
+                      override_retention_classes: ["package_pin"]
+                    }));
+                  assert.equal(held.response.status, 409, JSON.stringify(held.body));
+                  assert.equal(held.body.error.code, "DIAGNOSTIC_MATERIAL_LEGAL_HOLD_ACTIVE");
+                  const heldDecisionCount = await materialDb.query(
+                    "SELECT COUNT(*)::int AS count FROM diagnostic_material_erasure_decisions WHERE erasure_decision_id=$1",
+                    [heldDecisionId]
+                  );
+                  assert.equal(heldDecisionCount.rows[0].count, 0);
+
+                  const unexplainedPath = localArtifactPath(originalBundleRow.storage_key);
+                  const unexplainedTemporaryPath = `/tmp/ticket14-unexplained-${process.pid}.json`;
+                  compose("exec", "-T", "kernel", "mv", "--", unexplainedPath,
+                    unexplainedTemporaryPath);
+                  try {
+                    const unexplained = await kernel(`/diagnostic/v0/evidence-packages/${
+                      evidencePackage.evidence_package_id}/material-availability`);
+                    assert.equal(unexplained.response.status, 200, JSON.stringify(unexplained.body));
+                    assert.equal(unexplained.body.material_availability.integrity_status,
+                      "integrity_violation");
+                    assert.equal(unexplained.body.material_availability.execution_eligible, false);
+                    assert.ok(unexplained.body.material_availability.failures.some((entry) =>
+                      entry.artifact_digest === originalBundleRow.bundle_artifact_digest));
+                  } finally {
+                    compose("exec", "-T", "kernel", "mv", "--", unexplainedTemporaryPath,
+                      unexplainedPath);
+                  }
+                  const restored = await kernel(`/diagnostic/v0/evidence-packages/${
+                    evidencePackage.evidence_package_id}/material-availability`);
+                  assert.equal(restored.response.status, 200, JSON.stringify(restored.body));
+                  assert.equal(restored.body.material_availability.integrity_status, "verified_present");
+                  assert.equal(restored.body.material_availability.material_status, "complete");
+
+                  const recoveryDecisionId = randomUUID();
+                  const recoveryRequest = await post("/diagnostic/v0/material-erasures", command(
+                    "diagnostic.material_erasure.request", {
+                      erasure_decision_id: recoveryDecisionId,
+                      artifact_digest: originalBundleRow.bundle_artifact_digest,
+                      reason_code: "security_response",
+                      reason: "prove deletion recovery after bytes disappear before commit",
+                      override_retention_classes: []
+                    }));
+                  assert.equal(recoveryRequest.response.status, 201,
+                    JSON.stringify(recoveryRequest.body));
+                  assert.equal(recoveryRequest.body.material_erasure.material_state,
+                    "revoked_pending_deletion");
+                  const recoveryTemporaryPath = `/tmp/ticket14-recovery-${process.pid}.json`;
+                  compose("exec", "-T", "kernel", "mv", "--", unexplainedPath,
+                    recoveryTemporaryPath);
+                  const recovered = await post(`/diagnostic/v0/material-erasures/${
+                    recoveryDecisionId}/complete`, command("diagnostic.material_erasure.complete", {
+                    erasure_decision_id: recoveryDecisionId
+                  }));
+                  assert.equal(recovered.response.status, 201, JSON.stringify(recovered.body));
+                  assert.equal(recovered.body.material_erasure.material_state, "deleted_verified");
+                  assert.equal(recovered.body.material_erasure.deletion_attempt.outcome,
+                    "already_absent");
+                  assert.equal(recovered.body.material_erasure.universal_deletion_established, false);
+
+                  const installationRow = (await materialDb.query(
+                    "SELECT installation_id FROM diagnostic_nodes LIMIT 1"
+                  )).rows[0];
+                  const materialLockKey = `diagnostic-material-mutation:${installationRow.installation_id}`;
+                  await materialDb.query("BEGIN");
+                  await materialDb.query(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [materialLockKey]
+                  );
+                  let revisionSettled = false;
+                  const fencedRevisionPromise = post("/diagnostic/v0/evidence-revisions/process", {
+                    case_id: diagnosticCase.case_id
+                  }).then((value) => { revisionSettled = true; return value; });
+                  await new Promise((resolve) => setTimeout(resolve, 250));
+                  assert.equal(revisionSettled, false,
+                    "evidence revision must wait on the material mutation fence");
+                  await materialDb.query("ROLLBACK");
+                  const fencedRevision = await fencedRevisionPromise;
+                  assert.ok([200, 201].includes(fencedRevision.response.status),
+                    JSON.stringify(fencedRevision.body));
+
+                  const currentDecisionId = randomUUID();
+                  const retentionBlocked = await post("/diagnostic/v0/material-erasures", command(
+                    "diagnostic.material_erasure.request", {
+                      erasure_decision_id: randomUUID(),
+                      artifact_digest: successorPackage.package_artifact_digest,
+                      reason_code: "privacy_request",
+                      reason: "prove active package pins require explicit authority",
+                      override_retention_classes: []
+                    }));
+                  assert.equal(retentionBlocked.response.status, 409,
+                    JSON.stringify(retentionBlocked.body));
+                  assert.equal(retentionBlocked.body.error.code,
+                    "DIAGNOSTIC_MATERIAL_RETENTION_OVERRIDE_REQUIRED");
+                  const erasureRequestCommand = command("diagnostic.material_erasure.request", {
+                    erasure_decision_id: currentDecisionId,
+                    artifact_digest: successorPackage.package_artifact_digest,
+                    reason_code: "privacy_request",
+                    reason: "remove current customer evidence under explicit retention override",
+                    override_retention_classes: ["package_pin"]
+                  });
+                  await materialDb.query("BEGIN");
+                  await materialDb.query(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [materialLockKey]
+                  );
+                  let erasureSettled = false;
+                  const markedPromise = post("/diagnostic/v0/material-erasures", erasureRequestCommand)
+                    .then((value) => { erasureSettled = true; return value; });
+                  await new Promise((resolve) => setTimeout(resolve, 250));
+                  assert.equal(erasureSettled, false,
+                    "erasure must wait on the same material mutation fence");
+                  await materialDb.query("ROLLBACK");
+                  const marked = await markedPromise;
+                  assert.equal(marked.response.status, 201, JSON.stringify(marked.body));
+                  assert.equal(marked.body.material_erasure.material_state,
+                    "revoked_pending_deletion");
+                  assert.equal(marked.body.material_erasure.physical_deletion, "pending");
+                  assert.equal(marked.body.material_erasure.universal_deletion_established, false);
+                  assert.ok(marked.body.material_erasure.assignment_invalidations.some((entry) =>
+                    entry.assignment_id === replacementAssignment.assignment_id
+                    && entry.action === "expired_unclaimed"));
+                  const currentRootPath = localArtifactPath(currentRootRow.storage_key);
+                  compose("exec", "-T", "kernel", "test", "-f", currentRootPath);
+
+                  const pendingArtifact = await kernel(`/diagnostic/v0/artifacts/${
+                    encodeURIComponent(successorPackage.package_artifact_digest)}`);
+                  assert.equal(pendingArtifact.response.status, 200,
+                    JSON.stringify(pendingArtifact.body));
+                  assert.equal(pendingArtifact.body.artifact.content, null);
+                  assert.equal(pendingArtifact.body.artifact.retention_state,
+                    "revoked_pending_deletion");
+                  assert.equal(pendingArtifact.body.artifact.verified, false);
+                  const unavailable = await kernel(`/diagnostic/v0/evidence-packages/${
+                    successorPackage.evidence_package_id}/material-availability`);
+                  assert.equal(unavailable.response.status, 200, JSON.stringify(unavailable.body));
+                  assert.equal(unavailable.body.material_availability.material_status,
+                    "material_unavailable");
+                  assert.equal(unavailable.body.material_availability.execution_eligible, false);
+                  assert.equal(unavailable.body.material_availability.integrity_status,
+                    "verified_governed_erasure");
+                  assert.equal(unavailable.body.material_availability.temporal_claim,
+                    "current_material_availability_not_historical_package_identity");
+                  const expiredForErasure = await kernel(
+                    `/diagnostic/v0/assignments/${replacementAssignment.assignment_id}`);
+                  assert.equal(expiredForErasure.response.status, 200,
+                    JSON.stringify(expiredForErasure.body));
+                  assert.equal(expiredForErasure.body.diagnostic_assignment.state.current, "expired");
+                  const blockedVerifier = await kernel(
+                    `/diagnostic/v0/independent-verification-bundles/${successorPackage.evidence_package_id}`);
+                  assert.equal(blockedVerifier.response.status, 409,
+                    JSON.stringify(blockedVerifier.body));
+                  assert.equal(blockedVerifier.body.error.code,
+                    "DIAGNOSTIC_EVIDENCE_PACKAGE_MATERIAL_UNAVAILABLE");
+                  const blockedRevision = await post("/diagnostic/v0/evidence-revisions/process", {
+                    case_id: diagnosticCase.case_id
+                  });
+                  assert.equal(blockedRevision.response.status, 409,
+                    JSON.stringify(blockedRevision.body));
+                  assert.equal(blockedRevision.body.error.code,
+                    "DIAGNOSTIC_EVIDENCE_PACKAGE_MATERIAL_UNAVAILABLE");
+
+                  const completionCommand = command("diagnostic.material_erasure.complete", {
+                    erasure_decision_id: currentDecisionId
+                  });
+                  const completed = await post(`/diagnostic/v0/material-erasures/${
+                    currentDecisionId}/complete`, completionCommand);
+                  assert.equal(completed.response.status, 201, JSON.stringify(completed.body));
+                  assert.equal(completed.body.material_erasure.material_state, "deleted_verified");
+                  assert.equal(completed.body.material_erasure.deletion_attempt.outcome, "deleted");
+                  assert.equal(completed.body.material_erasure.tombstone.document
+                    .universal_deletion_established, false);
+                  compose("exec", "-T", "kernel", "test", "!", "-e", currentRootPath);
+                  const replayedCompletion = await post(`/diagnostic/v0/material-erasures/${
+                    currentDecisionId}/complete`, completionCommand);
+                  assert.equal(replayedCompletion.response.status, 200,
+                    JSON.stringify(replayedCompletion.body));
+                  assert.equal(replayedCompletion.response.headers.get("idempotent-replayed"), "true");
+                  assert.equal(replayedCompletion.body.material_erasure.deletion_attempt
+                    .deletion_attempt_id, completed.body.material_erasure.deletion_attempt
+                    .deletion_attempt_id);
+                  const finalErasure = await kernel(
+                    `/diagnostic/v0/material-erasures/${currentDecisionId}`);
+                  assert.equal(finalErasure.response.status, 200, JSON.stringify(finalErasure.body));
+                  assert.equal(finalErasure.body.material_erasure.material_state, "deleted_verified");
+                  assert.equal(finalErasure.body.material_erasure.deletion_attempts.length, 1);
+                  assert.ok(finalErasure.body.material_erasure.tombstone);
+                  const historicalPackage = await kernel(
+                    `/diagnostic/v0/evidence-packages/${successorPackage.evidence_package_id}`);
+                  assert.equal(historicalPackage.response.status, 200,
+                    JSON.stringify(historicalPackage.body));
+                  assert.equal(historicalPackage.body.evidence_package.evidence_package_id,
+                    successorPackage.evidence_package_id);
+                  assert.equal(historicalPackage.body.evidence_package.material_availability
+                    .material_status, "material_unavailable");
+
+                  const counts = await materialDb.query(
+                    `SELECT
+                      (SELECT COUNT(*)::int FROM diagnostic_material_erasure_decisions) AS decisions,
+                      (SELECT COUNT(*)::int FROM diagnostic_artifact_erasure_tombstones) AS tombstones,
+                      (SELECT COUNT(*)::int FROM diagnostic_material_deletion_attempts) AS attempts,
+                      (SELECT COUNT(*)::int FROM diagnostic_assignment_material_invalidations) AS invalidations,
+                      (SELECT COUNT(*)::int FROM diagnostic_diagnosis_requests) AS diagnosis_requests`
+                  );
+                  assert.deepEqual(counts.rows[0], {
+                    decisions: 2, tombstones: 2, attempts: 2,
+                    invalidations: 2, diagnosis_requests: 0
+                  });
+                  materialErasure = {
+                    erasure_decision_id: currentDecisionId,
+                    material_state: finalErasure.body.material_erasure.material_state,
+                    package_material_status:
+                      unavailable.body.material_availability.material_status,
+                    assignment_state: expiredForErasure.body.diagnostic_assignment.state.current,
+                    recovery_outcome: recovered.body.material_erasure.deletion_attempt.outcome,
+                    universal_deletion_established: false,
+                    legal_hold_failed_closed: true,
+                    unexplained_missing_material_detected: true,
+                    adversarial_cases: 12
+                  };
+                } finally { await materialDb.end(); }
+              }
             }
             independentVerification = { verifierImageDigest, report: valid.report,
               adversarial_cases: through13 ? 16 : through12 ? 13 : 9,
@@ -1542,7 +1827,7 @@ try {
           effectProjection, evaluation, trigger, diagnosticCase, finalCollection, evidencePackage,
           diagnosticAssignment, assignmentVerificationMaterial, evidenceRevision,
           replacementAssignment, replacementVerificationMaterial, lateObservationCounts,
-          independentVerification };
+          independentVerification, materialErasure };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -1563,14 +1848,16 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through13 ? "canonical-diagnostic-proof-13"
+    schema_version: "0.1.0", ticket: through14 ? "canonical-diagnostic-proof-14"
+      : through13 ? "canonical-diagnostic-proof-13"
       : through12 ? "canonical-diagnostic-proof-12"
       : through11 ? "canonical-diagnostic-proof-11"
       : through10 ? "canonical-diagnostic-proof-10"
       : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through13 ? "material_evidence_revision_and_bounded_reassignment"
+    status: "passed", completed_capability: through14 ? "revoked_visible_and_verifiably_erased_material"
+      : through13 ? "material_evidence_revision_and_bounded_reassignment"
       : through12 ? "model_free_unclaimed_diagnostic_assignment"
       : through11 ? "independently_recomputed_diagnostic_lineage"
       : through10 ? "frozen_content_addressed_evidence_package"
@@ -1621,7 +1908,17 @@ try {
         "reevaluation_notice_preserves_temporal_cutoffs", "one_trigger_and_case_preserved",
         "unclaimed_assignment_replaced_by_exact_policy", "claimed_or_terminal_replacement_forbidden",
         "complete_assignment_state_history_verified", "revision_chain_independently_recomputed",
-        "no_worker_model_diagnosis_repair_or_execution_authority"] : [])],
+        "no_worker_model_diagnosis_repair_or_execution_authority"] : []),
+      ...(through14 ? ["material_access_revoked_before_physical_deletion",
+        "retention_pin_requires_explicit_override", "legal_hold_failed_closed",
+        "unexplained_missing_material_is_integrity_violation",
+        "package_history_retained_separate_from_current_availability",
+        "package_revision_and_erasure_share_material_fence",
+        "unclaimed_assignment_expired_on_material_revocation",
+        "new_verification_and_revision_authority_blocked",
+        "crash_after_byte_loss_recovers_as_already_absent",
+        "local_cas_deletion_verified_by_tombstone", "deletion_completion_is_idempotent",
+        "universal_deletion_not_established"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
@@ -1670,6 +1967,18 @@ try {
       extendedResult?.interpretation?.replacementAssignment?.assignment_id ?? null,
     replacement_assignment_state:
       extendedResult?.interpretation?.replacementAssignment?.state.current ?? null,
+    material_erasure_state:
+      extendedResult?.interpretation?.materialErasure?.material_state ?? null,
+    evidence_package_material_status:
+      extendedResult?.interpretation?.materialErasure?.package_material_status ?? null,
+    material_erasure_assignment_state:
+      extendedResult?.interpretation?.materialErasure?.assignment_state ?? null,
+    material_erasure_recovery_outcome:
+      extendedResult?.interpretation?.materialErasure?.recovery_outcome ?? null,
+    material_erasure_adversarial_cases:
+      extendedResult?.interpretation?.materialErasure?.adversarial_cases ?? 0,
+    universal_deletion_established:
+      extendedResult?.interpretation?.materialErasure?.universal_deletion_established ?? null,
     model_requests: 0, worker_run_created: false
   }, null, 2)}\n`);
 } catch (error) {

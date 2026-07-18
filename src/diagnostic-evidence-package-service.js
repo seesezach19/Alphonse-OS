@@ -156,7 +156,7 @@ function packageRowView(row) {
   };
 }
 
-async function verifyPackageRow(row, artifactStore) {
+async function verifyPackageRow(row, artifactStore, { verifyArtifact = true } = {}) {
   const legacy = row?.semantic_package?.schema_version === LEGACY_PACKAGE_SCHEMA;
   const expectedRecordSchema = legacy ? LEGACY_PACKAGE_RECORD_SCHEMA : PACKAGE_RECORD_SCHEMA;
   const expectedArtifactSchema = legacy ? LEGACY_PACKAGE_ARTIFACT_SCHEMA : PACKAGE_ARTIFACT_SCHEMA;
@@ -193,6 +193,7 @@ async function verifyPackageRow(row, artifactStore) {
     failIntegrity("DIAGNOSTIC_EVIDENCE_PACKAGE_INTEGRITY_VIOLATION",
       "Stored Diagnostic Evidence Package does not match its immutable semantic and record digests.");
   }
+  if (!verifyArtifact) return row;
   const stored = await artifactStore.getJson(row.package_artifact_digest);
   const artifact = stored.content;
   if (artifact?.schema_version !== expectedArtifactSchema
@@ -367,7 +368,8 @@ export function createDiagnosticEvidencePackageService({
   correlationReader,
   effectReader,
   verificationBundleWriter = null,
-  resolveDeploymentExports
+  resolveDeploymentExports,
+  materialAuthority = null
 }) {
   const { pool } = database;
   let revisionTimer = null;
@@ -529,7 +531,7 @@ export function createDiagnosticEvidencePackageService({
     )).rows[0] ?? null;
   }
 
-  async function processCollection(input, now = new Date()) {
+  async function processCollectionFenced(input, now = new Date()) {
     const withAssignmentPolicy = Object.hasOwn(input ?? {}, "assignment_policy_activation_id");
     exact(input, "input", withAssignmentPolicy
       ? ["case_id", "assignment_policy_activation_id"] : ["case_id"]);
@@ -766,8 +768,9 @@ export function createDiagnosticEvidencePackageService({
           ? await verificationBundleWriter.sealBundle(row.evidence_package_id, STAGE_AUTHOR, row.frozen_at) : null;
         return { replayed: true, result: { collection: (await loadEvidenceCollection(
           pool, installationId, caseId)).view, evidence_package: packageRowView(row),
-        independent_verification_bundle: verificationBundle?.result.independent_verification_bundle ?? null } };
+          independent_verification_bundle: verificationBundle?.result.independent_verification_bundle ?? null } };
       }
+      if (materialAuthority) await materialAuthority.lockMaterialMutation(client);
       await extendEvidenceCollectionReferences({
         client,
         installationId,
@@ -838,6 +841,10 @@ export function createDiagnosticEvidencePackageService({
         ...finalReferences.map((reference) => packageReference(reference.reference_type,
           reference.reference_id, reference.reference_digest, reference.artifact_digest))
       ].sort(compareCanonical);
+      if (materialAuthority) {
+        await materialAuthority.assertArtifactDigestsAdmissible(client,
+          pinMaterials.map((entry) => entry.artifact_digest), "initial_evidence_package_freeze");
+      }
       for (const pin of pinMaterials) {
         const pinId = deterministicUuid({
           namespace: "diagnostic-artifact-retention-pin",
@@ -962,6 +969,12 @@ export function createDiagnosticEvidencePackageService({
     }
   }
 
+  async function processCollection(input, now = new Date()) {
+    return materialAuthority
+      ? materialAuthority.runMaterialMutationExclusive(() => processCollectionFenced(input, now))
+      : processCollectionFenced(input, now);
+  }
+
   async function loadRevisionMonitor(caseId, client = pool, forUpdate = false) {
     const row = (await client.query(
       `SELECT * FROM diagnostic_evidence_revision_monitors
@@ -974,30 +987,50 @@ export function createDiagnosticEvidencePackageService({
   }
 
   async function prepareRevisionCandidate(caseId, now) {
-    const monitor = await loadRevisionMonitor(caseId);
-    const predecessor = await verifyPackageRow((await pool.query(
-      `SELECT * FROM diagnostic_evidence_packages
-       WHERE installation_id=$1 AND evidence_package_id=$2`,
-      [installationId, monitor.current_evidence_package_id]
-    )).rows[0], artifactStore);
-    const newestPackage = (await pool.query(
-      `SELECT evidence_package_id FROM diagnostic_evidence_packages
-       WHERE installation_id=$1 AND environment_id=$2 AND case_id=$3
-       ORDER BY revision_number DESC LIMIT 1`,
-      [installationId, environmentId, caseId]
-    )).rows[0];
-    if (!predecessor.package_material || predecessor.package_material_digest
-        !== monitor.current_package_material_digest
-        || predecessor.case_id !== caseId || predecessor.environment_id !== environmentId
-        || predecessor.evidence_policy_activation_id !== monitor.evidence_policy_activation_id
-        || predecessor.assignment_policy_activation_id !== monitor.assignment_policy_activation_id
-        || newestPackage?.evidence_package_id !== predecessor.evidence_package_id
-        || predecessor.package_material.scope?.logical_operation_id !== monitor.logical_operation_id
-        || predecessor.package_material.scope?.environment_id !== environmentId
-        || BigInt(monitor.last_assessed_cutoff) < BigInt(predecessor.committed_intake_cutoff)) {
-      failIntegrity("DIAGNOSTIC_EVIDENCE_REVISION_MONITOR_INTEGRITY_VIOLATION",
-        "Revision monitor does not bind the exact current case package, scope, activations, and material.");
+    const snapshotClient = await pool.connect();
+    let monitor;
+    let predecessor;
+    try {
+      await snapshotClient.query("BEGIN");
+      if (materialAuthority) await materialAuthority.lockMaterialMutation(snapshotClient);
+      await snapshotClient.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [`diagnostic-evidence-revision:${installationId}:${caseId}`]);
+      monitor = await loadRevisionMonitor(caseId, snapshotClient);
+      predecessor = await verifyPackageRow((await snapshotClient.query(
+        `SELECT * FROM diagnostic_evidence_packages
+         WHERE installation_id=$1 AND evidence_package_id=$2`,
+        [installationId, monitor.current_evidence_package_id]
+      )).rows[0], artifactStore, { verifyArtifact: false });
+      const newestPackage = (await snapshotClient.query(
+        `SELECT evidence_package_id FROM diagnostic_evidence_packages
+         WHERE installation_id=$1 AND environment_id=$2 AND case_id=$3
+         ORDER BY revision_number DESC LIMIT 1`,
+        [installationId, environmentId, caseId]
+      )).rows[0];
+      if (!predecessor.package_material || predecessor.package_material_digest
+          !== monitor.current_package_material_digest
+          || predecessor.case_id !== caseId || predecessor.environment_id !== environmentId
+          || predecessor.evidence_policy_activation_id !== monitor.evidence_policy_activation_id
+          || predecessor.assignment_policy_activation_id !== monitor.assignment_policy_activation_id
+          || newestPackage?.evidence_package_id !== predecessor.evidence_package_id
+          || predecessor.package_material.scope?.logical_operation_id !== monitor.logical_operation_id
+          || predecessor.package_material.scope?.environment_id !== environmentId
+          || BigInt(monitor.last_assessed_cutoff) < BigInt(predecessor.committed_intake_cutoff)) {
+        failIntegrity("DIAGNOSTIC_EVIDENCE_REVISION_MONITOR_INTEGRITY_VIOLATION",
+          "Revision monitor does not bind the exact current case package, scope, activations, and material.");
+      }
+      if (materialAuthority) {
+        await materialAuthority.assertPackageMaterialAdmissible(snapshotClient,
+          predecessor.evidence_package_id, "evidence_revision_snapshot");
+      }
+      await snapshotClient.query("COMMIT");
+    } catch (error) {
+      await snapshotClient.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      snapshotClient.release();
     }
+    predecessor = await verifyPackageRow(predecessor, artifactStore);
     const policyActivation = await getEvidencePolicyActivation(pool, {
       installationId,
       environmentId,
@@ -1142,6 +1175,21 @@ export function createDiagnosticEvidencePackageService({
     const caseId = uuid(input.case_id, "case_id");
     const candidate = await prepareRevisionCandidate(caseId, now);
     if (candidate.stale) {
+      if (materialAuthority) {
+        const availabilityClient = await pool.connect();
+        try {
+          await availabilityClient.query("BEGIN");
+          await materialAuthority.lockMaterialMutation(availabilityClient);
+          await materialAuthority.assertPackageMaterialAdmissible(availabilityClient,
+            candidate.predecessor.evidence_package_id, "evidence_revision_stale_replay");
+          await availabilityClient.query("COMMIT");
+        } catch (error) {
+          await availabilityClient.query("ROLLBACK").catch(() => {});
+          throw error;
+        } finally {
+          availabilityClient.release();
+        }
+      }
       return { replayed: true, result: {
         status: "no_new_committed_outcomes",
         evidence_package: packageRowView(candidate.predecessor),
@@ -1196,6 +1244,7 @@ export function createDiagnosticEvidencePackageService({
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      if (materialAuthority) await materialAuthority.lockMaterialMutation(client);
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
         [`diagnostic-evidence-revision:${installationId}:${caseId}`]);
       const monitor = await loadRevisionMonitor(caseId, client, true);
@@ -1213,6 +1262,10 @@ export function createDiagnosticEvidencePackageService({
               !== candidate.policyActivation.package_artifact_digest)) {
         throw new KernelError(409, "DIAGNOSTIC_ASSIGNMENT_POLICY_SCOPE_MISMATCH",
           "Case-pinned Assignment Policy no longer matches the evidence-policy deployment lineage.");
+      }
+      if (materialAuthority) {
+        await materialAuthority.assertPackageMaterialAdmissible(client,
+          candidate.predecessor.evidence_package_id, "evidence_package_revision_predecessor");
       }
       const existingAssessment = (await client.query(
         `SELECT * FROM diagnostic_evidence_revision_assessments
@@ -1431,6 +1484,11 @@ export function createDiagnosticEvidencePackageService({
         }
         const pinExpiresAt = new Date(Date.parse(candidate.assessedAt)
           + candidate.policyActivation.retention_policy.package_pin_seconds * 1000).toISOString();
+        if (materialAuthority) {
+          await materialAuthority.assertArtifactDigestsAdmissible(client,
+            [stored.artifact_digest, ...packageReferences.map((entry) => entry.artifact_digest)],
+            "material_evidence_package_revision");
+        }
         for (const reference of [packageReference("diagnostic_evidence_package", evidencePackageId,
           semanticDigest, stored.artifact_digest), ...packageReferences]) {
           const pinId = deterministicUuid({ namespace: "diagnostic-artifact-retention-pin",
@@ -1644,7 +1702,7 @@ export function createDiagnosticEvidencePackageService({
     }
   }
 
-  async function processRevision(input, now = new Date()) {
+  async function processRevisionFenced(input, now = new Date()) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         return await processRevisionAttempt(input, now);
@@ -1656,6 +1714,12 @@ export function createDiagnosticEvidencePackageService({
     }
     throw new KernelError(409, "DIAGNOSTIC_EVIDENCE_REVISION_MONITOR_ADVANCED",
       "Revision monitor continued to advance while candidate material was being prepared.");
+  }
+
+  async function processRevision(input, now = new Date()) {
+    return materialAuthority
+      ? materialAuthority.runMaterialMutationExclusive(() => processRevisionFenced(input, now))
+      : processRevisionFenced(input, now);
   }
 
   async function processAvailableRevisions({ limit = 8, now = new Date() } = {}) {
@@ -1755,7 +1819,7 @@ export function createDiagnosticEvidencePackageService({
     return (await loadEvidenceCollection(pool, installationId, caseId)).view;
   }
 
-  async function getPackage(evidencePackageId) {
+  async function getPackage(evidencePackageId, { requireAvailable = false } = {}) {
     uuid(evidencePackageId, "evidence_package_id");
     const row = (await pool.query(
       `SELECT * FROM diagnostic_evidence_packages
@@ -1766,7 +1830,20 @@ export function createDiagnosticEvidencePackageService({
       throw new KernelError(404, "DIAGNOSTIC_EVIDENCE_PACKAGE_NOT_FOUND",
         "Diagnostic Evidence Package does not exist.");
     }
-    return packageRowView(await verifyPackageRow(row, artifactStore));
+    const availability = materialAuthority
+      ? await materialAuthority.getPackageAvailability(evidencePackageId) : null;
+    if (requireAvailable && availability && !availability.execution_eligible) {
+      throw new KernelError(409, "DIAGNOSTIC_EVIDENCE_PACKAGE_MATERIAL_UNAVAILABLE",
+        "Diagnostic Evidence Package is not eligible for new authority because material is unavailable.", {
+          evidence_package_id: evidencePackageId,
+          material_status: availability.material_status,
+          integrity_status: availability.integrity_status
+        });
+    }
+    const verified = await verifyPackageRow(row, artifactStore, {
+      verifyArtifact: !availability || availability.execution_eligible
+    });
+    return { ...packageRowView(verified), material_availability: availability };
   }
 
   return {

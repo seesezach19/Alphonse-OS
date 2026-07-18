@@ -217,7 +217,8 @@ export function createDiagnosticAssignmentService({
   environmentId,
   packageReader,
   resolveDeploymentExports,
-  assignmentProjector = projectDiagnosticAssignment
+  assignmentProjector = projectDiagnosticAssignment,
+  materialAuthority = null
 }) {
   const { pool } = database;
   let timer = null;
@@ -363,7 +364,8 @@ export function createDiagnosticAssignmentService({
     const payload = material.sourceEvent.payload;
     const replacement = material.sourceEvent.event_type === "diagnostic.assignment.replacement_requested";
     const evidencePackage = await packageReader.getPackage(replacement
-      ? payload.successor_evidence_package_id : payload.evidence_package_id);
+      ? payload.successor_evidence_package_id : payload.evidence_package_id,
+    { requireAvailable: true });
     if ((!replacement && evidencePackage.case_id !== material.sourceEvent.aggregate_id)
         || evidencePackage.semantic_digest !== (replacement
           ? payload.successor_semantic_digest : payload.semantic_digest)
@@ -460,7 +462,7 @@ export function createDiagnosticAssignmentService({
     );
   }
 
-  async function processOutboxEvent(outboxId, now = new Date()) {
+  async function processOutboxEventFenced(outboxId, now = new Date()) {
     const received = await receiveDelivery(outboxId, now);
     const resolved = await resolveStageInput(received);
     const processedAt = iso(now);
@@ -468,12 +470,17 @@ export function createDiagnosticAssignmentService({
     let nondeterminism = null;
     try {
       await client.query("BEGIN");
+      if (materialAuthority) await materialAuthority.lockMaterialMutation(client);
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
         `diagnostic-assignment:${installationId}:${received.sourceEvent.transition_id}`
       ]);
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
         `diagnostic-assignment-case:${installationId}:${resolved.evidencePackage.case_id}`
       ]);
+      if (materialAuthority) {
+        await materialAuthority.assertPackageMaterialAdmissible(client,
+          resolved.evidencePackage.evidence_package_id, "diagnostic_assignment_creation");
+      }
       const material = await loadDelivery(outboxId, client, true);
       if (material.sourceEventDigest !== received.sourceEventDigest
           || material.deliveryDigest !== received.deliveryDigest) {
@@ -822,6 +829,12 @@ export function createDiagnosticAssignmentService({
     if (nondeterminism) throw nondeterminism;
     throw new KernelError(500, "DIAGNOSTIC_ASSIGNMENT_PROCESSING_FAILED",
       "Diagnostic Assignment processing ended without a durable outcome.");
+  }
+
+  async function processOutboxEvent(outboxId, now = new Date()) {
+    return materialAuthority
+      ? materialAuthority.runMaterialMutationExclusive(() => processOutboxEventFenced(outboxId, now))
+      : processOutboxEventFenced(outboxId, now);
   }
 
   function isTerminalStageError(error) {

@@ -18,7 +18,11 @@ const BOUND_FILES = [
   "diagnostic-migrations/017_evidence_collection_and_packages.sql",
   "diagnostic-migrations/018_independent_diagnostic_verification.sql",
   "diagnostic-migrations/019_model_free_diagnostic_assignments.sql",
-  "diagnostic-migrations/020_material_evidence_revisions.sql"
+  "diagnostic-migrations/020_material_evidence_revisions.sql",
+  "diagnostic-migrations/021_material_availability_and_erasure.sql",
+  "src/content-addressed-artifact-store.js",
+  "src/diagnostic-material-availability-contracts.js",
+  "src/diagnostic-material-availability-service.js"
 ];
 
 function rawDigest(bytes) {

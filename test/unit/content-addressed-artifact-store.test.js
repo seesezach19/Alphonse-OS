@@ -88,3 +88,31 @@ test("bounded opaque detail commits by exact digest before metadata can referenc
     mediaType: "application/octet-stream", maxBytes: 64
   }), (error) => error.code === "ARTIFACT_TOO_LARGE");
 });
+
+test("material guard encloses reads and writes while physical deletion remains an internal primitive", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "alphonse-diagnostic-artifacts-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = createContentAddressedArtifactStore(root);
+  const calls = [];
+  let revoked = false;
+  store.setMaterialGuard({
+    async withReadAccess(digest, operation) {
+      calls.push(["read", digest]);
+      if (revoked) throw Object.assign(new Error("revoked"), { code: "MATERIAL_REVOKED" });
+      return operation();
+    },
+    async withWriteAccess(digest, operation) {
+      calls.push(["write", digest]);
+      if (revoked) throw Object.assign(new Error("revoked"), { code: "MATERIAL_REVOKED" });
+      return operation();
+    }
+  });
+  const stored = await store.putJson({ sensitive: "bounded" });
+  await store.getJson(stored.artifact_digest);
+  assert.deepEqual(calls.map(([kind]) => kind), ["write", "read"]);
+
+  revoked = true;
+  await assert.rejects(store.getJson(stored.artifact_digest), (error) => error.code === "MATERIAL_REVOKED");
+  await assert.rejects(store.putJson({ sensitive: "bounded" }), (error) => error.code === "MATERIAL_REVOKED");
+  assert.equal((await store.deleteJson(stored.artifact_digest)).bytes_deleted, true);
+});

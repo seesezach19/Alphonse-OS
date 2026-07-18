@@ -72,7 +72,8 @@
     "017_evidence_collection_and_packages.sql",
     "018_independent_diagnostic_verification.sql",
     "019_model_free_diagnostic_assignments.sql",
-    "020_material_evidence_revisions.sql"
+    "020_material_evidence_revisions.sql",
+    "021_material_availability_and_erasure.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

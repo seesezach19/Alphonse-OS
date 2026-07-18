@@ -108,7 +108,7 @@ function bundleView(row) {
 }
 
 export function createDiagnosticReproductionService(
-  database, artifactStore, installationId, runtimeDetailClient, detailPolicy
+  database, artifactStore, installationId, runtimeDetailClient, detailPolicy, materialAuthority
 ) {
   const { pool, executeCommand } = database;
   const policy = exact(detailPolicy, "detail policy", [
@@ -136,9 +136,11 @@ export function createDiagnosticReproductionService(
        WHERE installation_id=$1 AND case_id=$2 ORDER BY attempted_at,attempt_id`, [installationId, caseId]
     );
     const bundleResult = await client.query(
-      `SELECT b.*,t.deleted_at FROM diagnostic_reproduction_bundles b
+      `SELECT b.*,COALESCE(t.deleted_at,et.completed_at) AS deleted_at FROM diagnostic_reproduction_bundles b
        LEFT JOIN diagnostic_artifact_tombstones t
          ON t.installation_id=b.installation_id AND t.artifact_digest=b.artifact_digest
+       LEFT JOIN diagnostic_artifact_erasure_tombstones et
+         ON et.installation_id=b.installation_id AND et.artifact_digest=b.artifact_digest
        WHERE b.installation_id=$1 AND b.case_id=$2 ORDER BY b.created_at,b.bundle_id`, [installationId, caseId]
     );
     const transitionResult = await client.query(
@@ -428,9 +430,11 @@ export function createDiagnosticReproductionService(
           `${installationId}:reproduction:${requestMaterialDigest}`
         ]);
         const existingBundle = await client.query(
-          `SELECT b.*,t.deleted_at FROM diagnostic_reproduction_bundles b
+          `SELECT b.*,COALESCE(t.deleted_at,et.completed_at) AS deleted_at FROM diagnostic_reproduction_bundles b
            LEFT JOIN diagnostic_artifact_tombstones t
              ON t.installation_id=b.installation_id AND t.artifact_digest=b.artifact_digest
+           LEFT JOIN diagnostic_artifact_erasure_tombstones et
+             ON et.installation_id=b.installation_id AND et.artifact_digest=b.artifact_digest
            WHERE b.installation_id=$1 AND b.material_digest=$2 FOR SHARE OF b`,
           [installationId, requestMaterialDigest]
         );
@@ -576,67 +580,9 @@ export function createDiagnosticReproductionService(
   }
 
   async function retireArtifact(value, actor) {
-    const envelope = command(value, "diagnostic.artifact.retire");
-    const input = exact(envelope.input, "input", ["artifact_digest", "reason"]);
-    const artifactDigest = string(input.artifact_digest, "input.artifact_digest", 80);
-    if (!DIGEST.test(artifactDigest)) throw new KernelError(400, "INVALID_ARTIFACT_DIGEST", "Artifact digest is invalid.");
-    const normalized = { artifact_digest: artifactDigest, reason: string(input.reason, "input.reason", 500) };
-    const accepted = { ...envelope, input: normalized, actor };
-    return executeCommand({
-      installationId,
-      command: accepted,
-      requestDigest: requestDigest(accepted),
-      apply: async (client, { acceptedAt }) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-          `${installationId}:artifact-retirement:${normalized.artifact_digest}`
-        ]);
-        const artifactResult = await client.query(
-          `SELECT a.* FROM diagnostic_artifacts a
-           JOIN diagnostic_reproduction_bundles b
-             ON b.installation_id=a.installation_id AND b.artifact_digest=a.artifact_digest
-           WHERE a.installation_id=$1 AND a.artifact_digest=$2 FOR SHARE`,
-          [installationId, normalized.artifact_digest]
-        );
-        const artifact = artifactResult.rows[0];
-        if (!artifact) throw new KernelError(404, "RETIRABLE_ARTIFACT_NOT_FOUND",
-          "Only Reproduction Bundle payload bytes can be retired through this operation.");
-        const existing = await client.query(
-          `SELECT * FROM diagnostic_artifact_tombstones WHERE installation_id=$1 AND artifact_digest=$2 FOR SHARE`,
-          [installationId, normalized.artifact_digest]
-        );
-        let row = existing.rows[0];
-        if (!row) {
-          const deleted = await artifactStore.deleteJson(normalized.artifact_digest);
-          const inserted = await client.query(
-            `INSERT INTO diagnostic_artifact_tombstones
-              (installation_id,artifact_digest,original_size_bytes,original_media_type,original_storage_key,
-               deletion_reason,deleted_by_actor_type,deleted_by_actor_id,deleted_at,bytes_deleted)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-            [installationId, artifact.artifact_digest, artifact.size_bytes, artifact.media_type, artifact.storage_key,
-              normalized.reason, actor.type, actor.id, acceptedAt, deleted.bytes_deleted]
-          );
-          row = inserted.rows[0];
-        }
-        const tombstone = {
-          artifact_digest: row.artifact_digest,
-          original_size_bytes: String(row.original_size_bytes),
-          original_media_type: row.original_media_type,
-          original_storage_key: row.original_storage_key,
-          deletion_reason: row.deletion_reason,
-          deleted_by: { type: row.deleted_by_actor_type, id: row.deleted_by_actor_id },
-          deleted_at: row.deleted_at,
-          bytes_deleted: row.bytes_deleted,
-          retained_identity: true
-        };
-        return {
-          aggregateType: "diagnostic_artifact", aggregateId: row.artifact_digest,
-          transitionType: existing.rows[0] ? "diagnostic.artifact.tombstone_reused" : "diagnostic.artifact.bytes_retired",
-          fromRevision: existing.rows[0] ? 1 : 0, toRevision: 1,
-          transitionPayload: { artifact_digest: row.artifact_digest, bytes_deleted: row.bytes_deleted },
-          result: { artifact_tombstone: tombstone, created: !existing.rows[0] }
-        };
-      }
-    });
+    if (!materialAuthority) throw new KernelError(503, "DIAGNOSTIC_MATERIAL_AUTHORITY_UNAVAILABLE",
+      "Governed material erasure is not configured.");
+    return materialAuthority.retireLegacy(value, actor);
   }
 
   return { confirmFailureSpecification, createReproduction, getCase, reportFailure, retireArtifact };

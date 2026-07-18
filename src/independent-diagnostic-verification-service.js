@@ -75,7 +75,8 @@ export function createIndependentDiagnosticVerificationService({
   installationId,
   environmentId,
   tokenizationVerificationIdentity,
-  resolveDeploymentExports
+  resolveDeploymentExports,
+  materialAuthority = null
 }) {
   const { pool } = database;
 
@@ -427,10 +428,20 @@ export function createIndependentDiagnosticVerificationService({
     }
   }
 
-  async function sealBundle(evidencePackageId, actorId, now = new Date()) {
+  async function sealBundleFenced(evidencePackageId, actorId, now = new Date()) {
     if (!UUID.test(evidencePackageId)) {
       throw new KernelError(400, "INDEPENDENT_VERIFICATION_BUNDLE_INPUT_INVALID",
         "evidence_package_id must be a UUID.");
+    }
+    if (materialAuthority) {
+      const availability = await materialAuthority.getPackageAvailability(evidencePackageId);
+      if (!availability.execution_eligible) throw new KernelError(409,
+        "DIAGNOSTIC_EVIDENCE_PACKAGE_MATERIAL_UNAVAILABLE",
+        "Independent verification material cannot be sealed from an unavailable package.", {
+          evidence_package_id: evidencePackageId,
+          material_status: availability.material_status,
+          integrity_status: availability.integrity_status
+        });
     }
     const existing = await existingForPackage(evidencePackageId);
     if (existing) {
@@ -463,6 +474,12 @@ export function createIndependentDiagnosticVerificationService({
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      if (materialAuthority) {
+        await materialAuthority.lockMaterialMutation(client);
+        await materialAuthority.assertPackageMaterialAdmissible(
+          client, evidencePackageId, "independent_verification_bundle_seal"
+        );
+      }
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
         [`independent-verification-bundle:${installationId}:${evidencePackageId}`]);
       const raced = (await client.query(
@@ -507,14 +524,36 @@ export function createIndependentDiagnosticVerificationService({
     }
   }
 
-  async function getBundle(evidencePackageId) {
+  async function sealBundle(evidencePackageId, actorId, now = new Date()) {
+    return materialAuthority
+      ? materialAuthority.runMaterialMutationExclusive(() =>
+        sealBundleFenced(evidencePackageId, actorId, now))
+      : sealBundleFenced(evidencePackageId, actorId, now);
+  }
+
+  async function getBundleFenced(evidencePackageId) {
     if (!UUID.test(evidencePackageId)) throw new KernelError(400,
       "INDEPENDENT_VERIFICATION_BUNDLE_INPUT_INVALID", "evidence_package_id must be a UUID.");
+    if (materialAuthority) {
+      const availability = await materialAuthority.getPackageAvailability(evidencePackageId);
+      if (!availability.execution_eligible) throw new KernelError(409,
+        "DIAGNOSTIC_EVIDENCE_PACKAGE_MATERIAL_UNAVAILABLE",
+        "Independent verification bundle is no longer disclosable because package material is unavailable.", {
+          evidence_package_id: evidencePackageId,
+          material_status: availability.material_status
+        });
+    }
     const record = await existingForPackage(evidencePackageId);
     if (!record) throw new KernelError(404, "INDEPENDENT_VERIFICATION_BUNDLE_NOT_FOUND",
       "Independent verification bundle has not been sealed for this package.");
     const verified = await verifyStoredRecord(record);
     return bundleView(verified.record, verified.artifact);
+  }
+
+  async function getBundle(evidencePackageId) {
+    return materialAuthority
+      ? materialAuthority.runMaterialMutationExclusive(() => getBundleFenced(evidencePackageId))
+      : getBundleFenced(evidencePackageId);
   }
 
   return { getBundle, sealBundle };

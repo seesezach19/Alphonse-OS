@@ -77,8 +77,14 @@ These are public protocol calls. Do not inspect or modify PostgreSQL directly.
 
 ## Retention, Backup, And Recovery
 
-Diagnostic metadata is append-only. Retention may delete artifact bytes while preserving a digest tombstone, identity,
-deletion reason, and deletion time. Expired records remain stale; deletion is represented explicitly rather than erased.
+Diagnostic metadata is append-only. A governed erasure decision revokes application access and package execution
+eligibility before local artifact deletion. Physical deletion is an idempotent follow-up that preserves the decision,
+digest identity, impact, deletion attempts, and a location-specific digest tombstone. Active legal holds cannot be overridden.
+Missing bytes without a governed decision are reported as an integrity violation rather than silently normalized.
+
+A verified tombstone establishes absence only from the local primary content-addressed store. It does not prove erasure
+from backups, unregistered replicas, or material already disclosed to a model or other provider. Those limits remain
+explicit, and the protocol does not claim universal deletion.
 
 Back up both PostgreSQL and the `diagnostic-artifacts` volume before upgrades. Keep `.env.release` separately. A database
 backup without matching artifacts is incomplete. Promotion preserves a rollback snapshot; uncertain promotion must be

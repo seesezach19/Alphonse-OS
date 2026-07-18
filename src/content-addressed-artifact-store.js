@@ -26,8 +26,9 @@ export function createContentAddressedArtifactStore(root) {
     throw new Error("Artifact store root is required.");
   }
   const resolvedRoot = path.resolve(root);
+  let materialGuard = null;
 
-  async function getBytes(digest, mediaType = "application/octet-stream") {
+  async function readStoredBytes(digest, mediaType = "application/octet-stream") {
     const { absolutePath, storageKey } = location(resolvedRoot, digest);
     let bytes;
     try {
@@ -55,6 +56,11 @@ export function createContentAddressedArtifactStore(root) {
       },
       bytes
     };
+  }
+
+  async function getBytes(digest, mediaType = "application/octet-stream") {
+    const read = () => readStoredBytes(digest, mediaType);
+    return materialGuard ? materialGuard.withReadAccess(digest, read) : read();
   }
 
   async function getJson(digest) {
@@ -100,41 +106,44 @@ export function createContentAddressedArtifactStore(root) {
         expected_digest: expectedDigest, actual_digest: digest
       });
     }
-    const { absolutePath, storageKey } = location(resolvedRoot, digest);
-    await mkdir(path.dirname(absolutePath), { recursive: true });
-    const temporaryPath = `${absolutePath}.${process.pid}.${randomUUID()}.tmp`;
-    let temporaryHandle;
-    try {
-      temporaryHandle = await open(temporaryPath, "wx");
-      await temporaryHandle.writeFile(bytes);
-      await temporaryHandle.sync();
-      await temporaryHandle.close();
-      temporaryHandle = null;
+    const write = async () => {
+      const { absolutePath, storageKey } = location(resolvedRoot, digest);
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      const temporaryPath = `${absolutePath}.${process.pid}.${randomUUID()}.tmp`;
+      let temporaryHandle;
       try {
-        await link(temporaryPath, absolutePath);
-      } catch (error) {
-        if (error.code !== "EEXIST") throw error;
-      }
-      if (process.platform !== "win32") {
-        const finalHandle = await open(absolutePath, "r");
+        temporaryHandle = await open(temporaryPath, "wx");
+        await temporaryHandle.writeFile(bytes);
+        await temporaryHandle.sync();
+        await temporaryHandle.close();
+        temporaryHandle = null;
         try {
-          await finalHandle.sync();
-        } finally {
-          await finalHandle.close();
+          await link(temporaryPath, absolutePath);
+        } catch (error) {
+          if (error.code !== "EEXIST") throw error;
         }
+        if (process.platform !== "win32") {
+          const finalHandle = await open(absolutePath, "r");
+          try {
+            await finalHandle.sync();
+          } finally {
+            await finalHandle.close();
+          }
+        }
+        await fsyncDirectory(path.dirname(absolutePath));
+      } finally {
+        await temporaryHandle?.close();
+        await rm(temporaryPath, { force: true });
       }
-      await fsyncDirectory(path.dirname(absolutePath));
-    } finally {
-      await temporaryHandle?.close();
-      await rm(temporaryPath, { force: true });
-    }
-    const stored = await getBytes(digest, mediaType);
-    return {
-      artifact_digest: stored.artifact.artifact_digest,
-      size_bytes: stored.artifact.size_bytes,
-      media_type: mediaType,
-      storage_key: storageKey
+      const stored = await readStoredBytes(digest, mediaType);
+      return {
+        artifact_digest: stored.artifact.artifact_digest,
+        size_bytes: stored.artifact.size_bytes,
+        media_type: mediaType,
+        storage_key: storageKey
+      };
     };
+    return materialGuard ? materialGuard.withWriteAccess(digest, write) : write();
   }
 
   async function putJson(value) {
@@ -148,6 +157,7 @@ export function createContentAddressedArtifactStore(root) {
     const { absolutePath } = location(resolvedRoot, digest);
     try {
       await rm(absolutePath);
+      await fsyncDirectory(path.dirname(absolutePath));
       return { artifact_digest: digest, bytes_deleted: true };
     } catch (error) {
       if (error.code === "ENOENT") return { artifact_digest: digest, bytes_deleted: false };
@@ -155,5 +165,14 @@ export function createContentAddressedArtifactStore(root) {
     }
   }
 
-  return { deleteJson, getBytes, getJson, putBytes, putJson };
+  function setMaterialGuard(guard) {
+    if (materialGuard) throw new Error("Artifact material guard is already configured.");
+    if (!guard || typeof guard.withReadAccess !== "function"
+        || typeof guard.withWriteAccess !== "function") {
+      throw new Error("Artifact material guard must provide read and write access wrappers.");
+    }
+    materialGuard = guard;
+  }
+
+  return { deleteJson, getBytes, getJson, putBytes, putJson, setMaterialGuard };
 }

@@ -176,7 +176,7 @@ function revisionView(row) {
   };
 }
 
-export function createDiagnosticService(database, artifactStore, installationId) {
+export function createDiagnosticService(database, artifactStore, installationId, materialAuthority = null) {
   const { pool, executeCommand } = database;
 
   function requestDigest(command) {
@@ -343,6 +343,28 @@ export function createDiagnosticService(database, artifactStore, installationId)
           bytes_deleted: row.bytes_deleted,
           retained_identity: true
         }
+      };
+    }
+    const governedRestriction = materialAuthority
+      ? await materialAuthority.getArtifactRestriction(artifactDigest) : null;
+    if (governedRestriction) {
+      const result = await pool.query(
+        `SELECT * FROM diagnostic_artifacts
+         WHERE installation_id=$1 AND artifact_digest=$2`, [installationId, artifactDigest]
+      );
+      const row = result.rows[0];
+      if (!row) throw new KernelError(500, "DIAGNOSTIC_MATERIAL_ERASURE_INTEGRITY_VIOLATION",
+        "Governed erasure state refers to missing artifact metadata.");
+      return {
+        artifact_digest: artifactDigest,
+        size_bytes: String(row.size_bytes),
+        media_type: row.media_type,
+        verified: governedRestriction.material_state === "deleted_verified",
+        retention_state: governedRestriction.material_state,
+        content: null,
+        material_erasure: governedRestriction,
+        tombstone: governedRestriction.tombstone,
+        retained_identity: true
       };
     }
     const result = await pool.query(

@@ -572,13 +572,19 @@ three structured diagnoses to identify the supported scope mismatch without unsu
   dependencies with exact policy and expiry. Ordinary GC cannot select pinned objects.
 - Unselected diagnostic objects use short configurable retention. Package-selected objects remain pinned through
   case, diagnosis, review, audit, and legal-hold retention.
-- Governed security, privacy, or legal erasure may override pins without rewriting receipts or package manifests.
+- Governed security, privacy, or legal erasure may override only explicitly named ordinary retention classes without
+  rewriting receipts or package manifests. Active legal holds fail closed and cannot be overridden by this policy.
+- A committed erasure decision revokes material access and package eligibility before asynchronous local CAS deletion.
+  Deletion is idempotent and records `deleted`, `already_absent`, or `failed` attempts.
 - Erasure produces an immutable Diagnostic Artifact Tombstone with digest, policy, reason, authorizing Principal and
   decision, request and completion times, verification, affected packages, and replica or provider limitations.
 - Evidence Material Availability Projection reports `complete`, `partially_unavailable`, or `material_unavailable`.
 - Existing diagnoses remain historical; their reproducibility degrades visibly and they are never silently rescored.
-- Dispatch rechecks material availability. Required erasure expires unclaimed assignments, may cancel active runs,
-  destroys ephemeral workspaces, and revokes broker tokens under exact policy.
+- Package revision, assignment creation, independent verification, dispatch, and claim recheck material availability
+  under the same material-mutation fence. Required erasure expires unclaimed assignments. Claimed work is cancelled
+  with exact workspace-destruction and broker-token-revocation obligations.
+- Tombstones prove only location-specific absence from the verified local primary CAS. They do not establish deletion
+  from backups, unregistered replicas, or prior model/provider disclosures, and never claim universal deletion.
 
 ### Runtime Attestation And Compatibility
 
@@ -846,6 +852,9 @@ three structured diagnoses to identify the supported scope mismatch without unsu
   individual interval fits but the applicable sum does not and require readiness failure.
 - Test deterministic package selection, disclosure accounting, redaction, artifact pins, GC exclusion, tombstones, and
   availability projection.
+- Test retention override refusal, nonoverrideable legal hold, revocation before physical deletion, crash before
+  deletion, crash after byte loss, idempotent completion, unexplained missing-byte corruption, assignment invalidation,
+  blocked downstream authority, no revoked-digest resurrection, and explicit replica/provider limitations.
 - Test assignment immutability, expiry, one-way claim, replacement, retry linkage, and zero implied authority.
 - Test dispatch authorization mismatch, expiry, audience, nonce, single use, atomic claim, stale conflict, and broker
   eligibility.
