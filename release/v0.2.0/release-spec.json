@@ -70,7 +70,8 @@
     "015_correlation_integrity_hardening.sql",
     "016_effect_interpretation_and_behavior_cases.sql",
     "017_evidence_collection_and_packages.sql",
-    "018_independent_diagnostic_verification.sql"
+    "018_independent_diagnostic_verification.sql",
+    "019_model_free_diagnostic_assignments.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { sha256Digest } from "./canonical.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const FILES = ["artifact.js", "canonical.js", "cli.js", "correlation.js", "effect.js", "selection.js", "verify.js"];
+const FILES = ["artifact.js", "assignment.js", "canonical.js", "cli.js", "correlation.js", "effect.js",
+  "selection.js", "verify.js"];
 
 function rawDigest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;

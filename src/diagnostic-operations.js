@@ -631,7 +631,10 @@ const descriptors = [
       type: "object",
       required: ["case_id"],
       additionalProperties: false,
-      properties: { case_id: { type: "string", format: "uuid" } }
+      properties: {
+        case_id: { type: "string", format: "uuid" },
+        assignment_policy_activation_id: { type: "string", format: "uuid" }
+      }
     },
     output_schema: { type: "object", required: ["collection", "evidence_package"] },
     supported_modes: ["live"],
@@ -656,6 +659,74 @@ const descriptors = [
     idName: "evidence_package_id",
     resultKey: "evidence_package",
     issues: ["DIAGNOSTIC_EVIDENCE_PACKAGE_NOT_FOUND"]
+  }),
+  {
+    operation_id: "diagnostic.assignment_policy_activation.activate",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Activate one exact answer-free Diagnostic Assignment work contract without granting execution authority.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner_requester",
+    effect_class: "immutable_diagnostic_assignment_policy_activation",
+    idempotency: "activation_identity_and_canonical_policy_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/assignment-policy-activations" },
+    input_schema: {
+      type: "object",
+      required: ["assignment_policy_activation_id", "deployment_id", "assignment_policy_export_id"],
+      additionalProperties: false,
+      properties: {
+        assignment_policy_activation_id: { type: "string", format: "uuid" },
+        deployment_id: { type: "string", format: "uuid" },
+        assignment_policy_export_id: { type: "string", minLength: 1, maxLength: 200 }
+      }
+    },
+    output_schema: { type: "object", required: ["assignment_policy_activation"] },
+    supported_modes: ["live"],
+    preconditions: ["exact_deployment_export_exists", "answer_free_assignment_contract_valid"],
+    outcomes: ["assignment_policy_activation_created", "assignment_policy_activation_replayed"],
+    issues: ["DIAGNOSTIC_ASSIGNMENT_POLICY_INVALID", "DIAGNOSTIC_ASSIGNMENT_POLICY_EXPORT_MISMATCH"],
+    emitted_events: [],
+    next_operations: ["diagnostic.assignment_policy_activation.get", "diagnostic.evidence_collection.process"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.assignment_policy_activation.get",
+    summary: "Inspect one exact immutable Assignment Policy and deterministic stage identity.",
+    path: "/diagnostic/v0/assignment-policy-activations/{assignment_policy_activation_id}",
+    idName: "assignment_policy_activation_id",
+    resultKey: "assignment_policy_activation",
+    issues: ["DIAGNOSTIC_ASSIGNMENT_POLICY_ACTIVATION_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.assignment.get",
+    summary: "Inspect immutable available-work facts and their separately fenced current state.",
+    path: "/diagnostic/v0/assignments/{assignment_id}",
+    idName: "assignment_id",
+    resultKey: "diagnostic_assignment",
+    issues: ["DIAGNOSTIC_ASSIGNMENT_NOT_FOUND", "DIAGNOSTIC_ASSIGNMENT_INTEGRITY_VIOLATION"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.evidence_package_assignment.get",
+    summary: "Inspect the deterministic initial Assignment created from one frozen Evidence Package event.",
+    path: "/diagnostic/v0/evidence-packages/{evidence_package_id}/assignment",
+    idName: "evidence_package_id",
+    resultKey: "diagnostic_assignment",
+    issues: ["DIAGNOSTIC_ASSIGNMENT_NOT_FOUND"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.evidence_package_assignment_status.get",
+    summary: "Inspect pending, terminal, created, or nondeterministic Assignment Service processing truth.",
+    path: "/diagnostic/v0/evidence-packages/{evidence_package_id}/assignment-status",
+    idName: "evidence_package_id",
+    resultKey: "assignment_processing",
+    issues: ["DIAGNOSTIC_EVIDENCE_PACKAGE_NOT_FOUND",
+      "DIAGNOSTIC_ASSIGNMENT_STAGE_RECORD_INTEGRITY_VIOLATION"]
+  }),
+  readDescriptor({
+    operationId: "diagnostic.assignment_verification_material.get",
+    summary: "Acquire read-only material for separate offline assignment-lineage recomputation.",
+    path: "/diagnostic/v0/assignment-verification-material/{assignment_id}",
+    idName: "assignment_id",
+    resultKey: "assignment_verification_material",
+    issues: ["DIAGNOSTIC_ASSIGNMENT_NOT_FOUND", "DIAGNOSTIC_ASSIGNMENT_INTEGRITY_VIOLATION"]
   }),
   readDescriptor({
     operationId: "diagnostic.independent_verification_bundle.get",

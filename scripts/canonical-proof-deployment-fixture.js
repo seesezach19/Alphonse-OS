@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
 import { sha256Digest } from "../src/canonical-json.js";
+import {
+  DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA,
+  DIAGNOSTIC_WORKER_INSTRUCTION_V0_1,
+  DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_1
+} from "../src/diagnostic-assignment-contracts.js";
 
 export async function createCanonicalProofDeployment({ kernel, dataPlane, agentToken }) {
   const toolkit = {
@@ -362,6 +367,63 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       gc_margin_seconds: 30
     }
   };
+  const diagnosticAssignmentPolicy = {
+    kind: "diagnostic_assignment_policy",
+    export_id: "assignment:model-free-diagnostic-analysis",
+    contract_version: "0.1.0",
+    content: {
+      schema_version: DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA,
+      policy_id: "policy:model-free-diagnostic-analysis",
+      instruction: structuredClone(DIAGNOSTIC_WORKER_INSTRUCTION_V0_1),
+      output_schema: structuredClone(DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_1),
+      required_passport_class: "diagnostic_interpreter",
+      required_worker_capabilities: [
+        "read_exact_evidence_package", "produce_schema_validated_diagnostic_output"
+      ],
+      prohibitions: [
+        "credential_access", "evidence_outside_assigned_package", "external_effect",
+        "kernel_authority", "repair_execution", "unbrokered_model_access"
+      ],
+      model_requirements: {
+        selection: "dispatch_time_exact_match",
+        capability_class: "diagnostic_reasoning",
+        access_delivery: "broker_after_claim_only"
+      },
+      runtime_requirements: {
+        kind: "isolated_diagnostic_worker",
+        image_selection: "dispatch_time_exact_match"
+      },
+      isolation: {
+        fresh_container_per_run: true,
+        non_root: true,
+        read_only_root: true,
+        no_new_privileges: true,
+        drop_all_capabilities: true
+      },
+      mounts: {
+        input: "read_only_exact_package",
+        output: "bounded_write_only_result",
+        temporary: "bounded_tmpfs",
+        host_workspace: "prohibited"
+      },
+      network: { mode: "model_broker_only_after_claim", general_egress: false },
+      resources: {
+        max_cpus: 1,
+        max_memory_bytes: 536870912,
+        max_pids: 64,
+        max_output_bytes: 1048576,
+        max_runtime_seconds: 600
+      },
+      assignment_ttl_seconds: 3600,
+      data_classification: "diagnostic_internal",
+      disclosure: {
+        before_claim: "none",
+        evidence_scope: "exact_assigned_package_only",
+        recipient: "authorized_claimed_worker_run_only",
+        provider_training: "prohibited"
+      }
+    }
+  };
   const candidate = {
     schema_version: "alphonse.package_candidate.v0.1",
     identity: { package_id: "com.alphonse.canonical-proof", version: "0.1.0",
@@ -383,6 +445,7 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       diagnosticEvaluator,
       evidenceSelectionPolicy,
       diagnosticRetentionPolicy,
+      diagnosticAssignmentPolicy,
       { kind: "schema", export_id: "configuration", contract_version: "1.0.0", content: {
         type: "object", required: ["enabled"], properties: { enabled: { type: "boolean" } }
       } },
@@ -521,6 +584,7 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
     behavior_contract_export: behaviorContract,
     diagnostic_evaluator_export: diagnosticEvaluator,
     evidence_selection_policy_export: evidenceSelectionPolicy,
-    diagnostic_retention_policy_export: diagnosticRetentionPolicy
+    diagnostic_retention_policy_export: diagnosticRetentionPolicy,
+    diagnostic_assignment_policy_export: diagnosticAssignmentPolicy
   };
 }

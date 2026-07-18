@@ -10,6 +10,10 @@ import {
   DIAGNOSTIC_EVIDENCE_EXPORT_KINDS,
   validateDiagnosticEvidenceExport
 } from "./diagnostic-evidence-contracts.js";
+import {
+  DIAGNOSTIC_ASSIGNMENT_EXPORT_KINDS,
+  validateDiagnosticAssignmentExport
+} from "./diagnostic-assignment-contracts.js";
 import { KernelError } from "./errors.js";
 
 const VALIDATOR_VERSION = "alphonse.package-validator.v0.1";
@@ -231,7 +235,7 @@ function validateCandidateShape(candidate, passport, session) {
     }
     rejectUnknownKeys(entry, ["kind", "export_id", "contract_version", "content"], path, issues);
     if (![...REQUIRED_EXPORT_KINDS, "capability", ...DIAGNOSTIC_INTERPRETATION_EXPORT_KINDS,
-      ...DIAGNOSTIC_EVIDENCE_EXPORT_KINDS]
+      ...DIAGNOSTIC_EVIDENCE_EXPORT_KINDS, ...DIAGNOSTIC_ASSIGNMENT_EXPORT_KINDS]
       .includes(entry.kind)) {
       issues.push(issue("UNKNOWN_EXPORT_KIND", `${path}.kind`, "Export kind is unsupported."));
     }
@@ -267,6 +271,14 @@ function validateCandidateShape(candidate, passport, session) {
       } catch (error) {
         issues.push(issue(error.code ?? "DIAGNOSTIC_EVIDENCE_POLICY_INVALID", path,
           error.message ?? "Diagnostic evidence policy export is invalid."));
+      }
+    }
+    if (DIAGNOSTIC_ASSIGNMENT_EXPORT_KINDS.includes(entry.kind)) {
+      try {
+        validateDiagnosticAssignmentExport(entry.kind, entry.content);
+      } catch (error) {
+        issues.push(issue(error.code ?? "DIAGNOSTIC_ASSIGNMENT_POLICY_INVALID", path,
+          error.message ?? "Diagnostic Assignment policy export is invalid."));
       }
     }
     if (entry.kind === "schema") validateJsonSchemaSubset(entry.content, path, issues);

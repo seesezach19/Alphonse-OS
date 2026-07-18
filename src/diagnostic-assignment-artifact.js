@@ -7,17 +7,16 @@ import { sha256Digest } from "./canonical-json.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRYPOINTS = [
-  "src/diagnostic-evidence-package-service.js",
-  "src/diagnostic-evidence-selector.js",
-  "src/diagnostic-evidence-collection-persistence.js"
+  "src/diagnostic-assignment-service.js",
+  "src/diagnostic-assignment-contracts.js",
+  "src/diagnostic-assignment-persistence.js",
+  "src/diagnostic-evidence-package-service.js"
 ];
 const BOUND_FILES = [
   "package.json",
   "package-lock.json",
-  "diagnostic-migrations/014_correlation_projections.sql",
-  "diagnostic-migrations/015_correlation_integrity_hardening.sql",
-  "diagnostic-migrations/016_effect_interpretation_and_behavior_cases.sql",
   "diagnostic-migrations/017_evidence_collection_and_packages.sql",
+  "diagnostic-migrations/018_independent_diagnostic_verification.sql",
   "diagnostic-migrations/019_model_free_diagnostic_assignments.sql"
 ];
 
@@ -39,12 +38,12 @@ function relativeModuleSpecifiers(source) {
 function projectPath(absolutePath) {
   const relative = path.relative(PROJECT_ROOT, absolutePath).replaceAll(path.sep, "/");
   if (relative.startsWith("../") || path.isAbsolute(relative)) {
-    throw new Error(`Diagnostic evidence artifact dependency escapes the project root: ${absolutePath}`);
+    throw new Error(`Diagnostic assignment artifact dependency escapes the project root: ${absolutePath}`);
   }
   return relative;
 }
 
-export function collectDiagnosticEvidenceModuleClosure(entrypoints = ENTRYPOINTS, readFile = readFileSync) {
+export function collectDiagnosticAssignmentModuleClosure(entrypoints = ENTRYPOINTS, readFile = readFileSync) {
   const pending = entrypoints.map((entry) => path.resolve(PROJECT_ROOT, entry));
   const visited = new Set();
   while (pending.length) {
@@ -65,21 +64,21 @@ function fileEntry(relativePath, readFile) {
   return { path: relativePath, size_bytes: bytes.length, digest: rawDigest(bytes) };
 }
 
-export function buildDiagnosticEvidenceArtifactManifest({
+export function buildDiagnosticAssignmentArtifactManifest({
   readFile = readFileSync,
   nodeVersion = process.version
 } = {}) {
   return {
-    schema_version: "alphonse.diagnostic-evidence-stage-artifact-manifest.v0.1",
+    schema_version: "alphonse.diagnostic-assignment-stage-artifact-manifest.v0.1",
     entrypoints: [...ENTRYPOINTS],
-    module_closure: collectDiagnosticEvidenceModuleClosure(ENTRYPOINTS, readFile)
+    module_closure: collectDiagnosticAssignmentModuleClosure(ENTRYPOINTS, readFile)
       .map((relativePath) => fileEntry(relativePath, readFile)),
     bound_files: BOUND_FILES.map((relativePath) => fileEntry(relativePath, readFile)),
     runtime: { node_version: nodeVersion, module_format: "node-esm-source" }
   };
 }
 
-export const DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MANIFEST =
-  Object.freeze(buildDiagnosticEvidenceArtifactManifest());
-export const DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_DIGEST =
-  sha256Digest(DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MANIFEST);
+export const DIAGNOSTIC_ASSIGNMENT_STAGE_ARTIFACT_MANIFEST =
+  Object.freeze(buildDiagnosticAssignmentArtifactManifest());
+export const DIAGNOSTIC_ASSIGNMENT_STAGE_ARTIFACT_DIGEST =
+  sha256Digest(DIAGNOSTIC_ASSIGNMENT_STAGE_ARTIFACT_MANIFEST);

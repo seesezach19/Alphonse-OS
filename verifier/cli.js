@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { VERIFIER_ARTIFACT_DIGEST, VERIFIER_ARTIFACT_MANIFEST } from "./artifact.js";
 import { canonicalize, sha256Digest } from "./canonical.js";
 import { verifyIndependentDiagnosticBundle } from "./verify.js";
+import { verifyDiagnosticAssignmentMaterial } from "./assignment.js";
 
 const [inputPath, outputPath] = process.argv.slice(2);
 if (!inputPath || !outputPath) {
@@ -29,6 +30,16 @@ try {
     artifact_manifest: VERIFIER_ARTIFACT_MANIFEST,
     image_digest: process.env.VERIFIER_IMAGE_DIGEST ?? "unreported"
   });
+  if (parsed.assignment_verification_material) {
+    const assignment = verifyDiagnosticAssignmentMaterial(
+      parsed.assignment_verification_material, input);
+    delete report.report_digest;
+    report.stages.push({ stage: "diagnostic_assignment", recomputed_digest: assignment.assignment_digest,
+      published_digest: assignment.assignment_digest, matches: true,
+      recomputed_id: assignment.assignment_id, published_id: assignment.assignment_id });
+    report.assignment_verification = assignment;
+    report.report_digest = sha256Digest(report);
+  }
 } catch (error) {
   exitCode = 1;
   report = {

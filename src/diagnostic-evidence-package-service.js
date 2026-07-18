@@ -27,6 +27,7 @@ import {
 } from "./diagnostic-evidence-selector.js";
 import { KernelError } from "./errors.js";
 import { prepareStageArtifactArchive, recordStageArtifactArchive } from "./stage-artifact-archive.js";
+import { getAssignmentPolicyActivation } from "./diagnostic-assignment-persistence.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ACTIVATION_EXPORT_VERSION = "0.1.0";
@@ -380,11 +381,27 @@ export function createDiagnosticEvidencePackageService({
   }
 
   async function processCollection(input, now = new Date()) {
-    exact(input, "input", ["case_id"]);
+    const withAssignmentPolicy = Object.hasOwn(input ?? {}, "assignment_policy_activation_id");
+    exact(input, "input", withAssignmentPolicy
+      ? ["case_id", "assignment_policy_activation_id"] : ["case_id"]);
     const caseId = uuid(input.case_id, "case_id");
+    const assignmentPolicyActivationId = withAssignmentPolicy
+      ? uuid(input.assignment_policy_activation_id, "assignment_policy_activation_id") : null;
     const existingPackage = await getPackageRowByCase(caseId);
     if (existingPackage) {
       await verifyPackageRow(existingPackage, artifactStore);
+      if (assignmentPolicyActivationId) {
+        const frozenTransition = (await pool.query(
+          `SELECT payload FROM diagnostic_transitions
+           WHERE installation_id=$1 AND aggregate_type='diagnostic_case' AND aggregate_id=$2
+             AND transition_type='diagnostic.evidence_package.frozen'`,
+          [installationId, caseId]
+        )).rows[0];
+        if (frozenTransition?.payload?.assignment_policy_activation_id !== assignmentPolicyActivationId) {
+          throw new KernelError(409, "DIAGNOSTIC_ASSIGNMENT_POLICY_HISTORY_DIVERGENCE",
+            "Frozen package transition is already bound to a different Assignment Policy history.");
+        }
+      }
       const verificationBundle = verificationBundleWriter
         ? await verificationBundleWriter.sealBundle(existingPackage.evidence_package_id, STAGE_AUTHOR,
           existingPackage.frozen_at) : null;
@@ -436,6 +453,17 @@ export function createDiagnosticEvidencePackageService({
         || policyActivation.selection_rules_digest !== DIAGNOSTIC_EVIDENCE_SELECTION_RULES_DIGEST) {
       throw new KernelError(409, "DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MISMATCH",
         "Activated evidence policy differs from the running deterministic packaging stage.");
+    }
+    const assignmentPolicyActivation = assignmentPolicyActivationId
+      ? await getAssignmentPolicyActivation(pool, {
+        installationId, environmentId, assignmentPolicyActivationId
+      }) : null;
+    if (assignmentPolicyActivation
+        && (assignmentPolicyActivation.deployment_id !== policyActivation.deployment_id
+          || assignmentPolicyActivation.package_version_id !== policyActivation.package_version_id
+          || assignmentPolicyActivation.package_artifact_digest !== policyActivation.package_artifact_digest)) {
+      throw new KernelError(409, "DIAGNOSTIC_ASSIGNMENT_POLICY_SCOPE_MISMATCH",
+        "Assignment Policy must come from the exact deployment and package used for evidence selection.");
     }
     const observationEvidence = await verifiedObservationEvidence(projection);
     const selection = selectDiagnosticEvidence({
@@ -679,7 +707,9 @@ export function createDiagnosticEvidencePackageService({
         [installationId, commandId, sha256Digest({
           case_id: caseId,
           lease_digest: collection.row.lease_digest,
-          semantic_digest: semanticDigest
+          semantic_digest: semanticDigest,
+          assignment_policy_activation_id: assignmentPolicyActivation?.assignment_policy_activation_id ?? null,
+          assignment_policy_activation_digest: assignmentPolicyActivation?.activation_digest ?? null
         }), STAGE_AUTHOR, { evidence_package_id: evidencePackageId,
           semantic_digest: semanticDigest, package_artifact_digest: stored.artifact_digest }, frozenAt]
       );
@@ -691,7 +721,11 @@ export function createDiagnosticEvidencePackageService({
                  'service',$6,$7,$8)`,
         [transitionId, installationId, String(node.next_sequence), caseId, commandId, STAGE_AUTHOR,
           { evidence_package_id: evidencePackageId, semantic_digest: semanticDigest,
-            package_artifact_digest: stored.artifact_digest, freeze_reason: decision.reason }, frozenAt]
+            package_artifact_digest: stored.artifact_digest, freeze_reason: decision.reason,
+            ...(assignmentPolicyActivation ? {
+              assignment_policy_activation_id: assignmentPolicyActivation.assignment_policy_activation_id,
+              assignment_policy_activation_digest: assignmentPolicyActivation.activation_digest
+            } : {}) }, frozenAt]
       );
       await client.query(
         `INSERT INTO diagnostic_outbox

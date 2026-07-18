@@ -35,6 +35,7 @@ import { createDiagnosticCorrelationService } from "./diagnostic-correlation-ser
 import { createDiagnosticEffectEvaluationService } from "./diagnostic-effect-evaluation-service.js";
 import { createDiagnosticEvidencePackageService } from "./diagnostic-evidence-package-service.js";
 import { createIndependentDiagnosticVerificationService } from "./independent-diagnostic-verification-service.js";
+import { createDiagnosticAssignmentService } from "./diagnostic-assignment-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
 import { createPackageService } from "./package-service.js";
@@ -156,6 +157,7 @@ let diagnosticCorrelationService = null;
 let diagnosticEffectEvaluationService = null;
 let diagnosticEvidencePackageService = null;
 let diagnosticIndependentVerificationService = null;
+let diagnosticAssignmentService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -397,6 +399,15 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     verificationBundleWriter: diagnosticIndependentVerificationService,
     resolveDeploymentExports: resolveDeployedExports
   });
+  diagnosticAssignmentService = createDiagnosticAssignmentService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    installationId,
+    environmentId,
+    packageReader: diagnosticEvidencePackageService,
+    resolveDeploymentExports: resolveDeployedExports
+  });
+  diagnosticAssignmentService.start();
 }
 const upgradeService = createUpgradeService(database, identityIntent, packageService, deploymentService,
   installationId, environmentId, dataPlaneReceiptSecret);
@@ -586,6 +597,14 @@ function requireDiagnosticEvidencePackaging() {
       "Deterministic evidence collection and packaging are not configured.");
   }
   return diagnosticEvidencePackageService;
+}
+
+function requireDiagnosticAssignment() {
+  if (!diagnosticAssignmentService) {
+    throw new KernelError(503, "DIAGNOSTIC_ASSIGNMENT_SERVICE_UNAVAILABLE",
+      "Diagnostic Assignment Service is not configured.");
+  }
+  return diagnosticAssignmentService;
 }
 
 function requireIndependentDiagnosticVerification() {
@@ -930,6 +949,53 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { evidence_package: await service.getPackage(
       pathId(url.pathname, "/diagnostic/v0/evidence-packages/")) });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/assignment-policy-activations") {
+    const service = requireDiagnosticAssignment();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.assignment_policy_activation.activate");
+    return sendCommandResult(response, await service.activatePolicy(await readJson(request, 64 * 1024), actor.id));
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/assignment-policy-activations\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticAssignment();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { assignment_policy_activation: await service.getPolicyActivation(
+      pathId(url.pathname, "/diagnostic/v0/assignment-policy-activations/")) });
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/assignments\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticAssignment();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnostic_assignment: await service.getAssignment(
+      pathId(url.pathname, "/diagnostic/v0/assignments/")) });
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/evidence-packages\/[^/]+\/assignment$/.test(url.pathname)) {
+    const service = requireDiagnosticAssignment();
+    authenticateBootstrapOperator(request);
+    const evidencePackageId = decodeURIComponent(url.pathname.split("/").at(-2));
+    return sendJson(response, 200, { diagnostic_assignment: await service.getAssignmentForPackage(
+      evidencePackageId) });
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/evidence-packages\/[^/]+\/assignment-status$/.test(url.pathname)) {
+    const service = requireDiagnosticAssignment();
+    authenticateBootstrapOperator(request);
+    const evidencePackageId = decodeURIComponent(url.pathname.split("/").at(-2));
+    return sendJson(response, 200, { assignment_processing: await service.getProcessingStatusForPackage(
+      evidencePackageId) });
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/assignment-verification-material\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticAssignment();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { assignment_verification_material: await service.getVerificationMaterial(
+      pathId(url.pathname, "/diagnostic/v0/assignment-verification-material/")) });
   }
 
   if (request.method === "GET"

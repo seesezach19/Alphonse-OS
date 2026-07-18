@@ -25,7 +25,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through11 = process.argv.includes("--through-11");
+const through12 = process.argv.includes("--through-12");
+const through11 = through12 || process.argv.includes("--through-11");
 const through10 = through11 || process.argv.includes("--through-10");
 const through09 = through10 || process.argv.includes("--through-09");
 const through08 = through09 || process.argv.includes("--through-08");
@@ -40,7 +41,8 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 
-async function runOfflineVerifier({ imageTag, imageDigest, verificationBundle, label }) {
+async function runOfflineVerifier({ imageTag, imageDigest, verificationBundle,
+  assignmentVerificationMaterial = null, label }) {
   const directory = await mkdtemp(path.join(os.tmpdir(), `alphonse-ticket11-${label}-`));
   const inputDirectory = path.join(directory, "input");
   const outputDirectory = path.join(directory, "output");
@@ -51,7 +53,10 @@ async function runOfflineVerifier({ imageTag, imageDigest, verificationBundle, l
   await chmod(outputDirectory, 0o777);
   const inputPath = path.join(inputDirectory, "bundle.json");
   const outputPath = path.join(outputDirectory, "report.json");
-  await writeFile(inputPath, `${JSON.stringify({ independent_verification_bundle: verificationBundle })}\n`);
+  await writeFile(inputPath, `${JSON.stringify({ independent_verification_bundle: verificationBundle,
+    ...(assignmentVerificationMaterial ? {
+      assignment_verification_material: assignmentVerificationMaterial
+    } : {}) })}\n`);
   const result = spawnSync("docker", ["run", "--rm", "--network", "none", "--read-only",
     "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "64",
     "--memory", "256m", "--cpus", "1", "-e", `VERIFIER_IMAGE_DIGEST=${imageDigest}`,
@@ -729,6 +734,7 @@ try {
         }
 
         let evidencePolicyActivation = null;
+        let assignmentPolicyActivation = null;
         if (through10) {
           const evidencePolicyActivationId = randomUUID();
           const policyActivated = await post("/diagnostic/v0/evidence-policy-activations", {
@@ -757,6 +763,30 @@ try {
             "src/diagnostic-evidence-selector.js", "src/diagnostic-evidence-contracts.js",
             "src/diagnostic-evidence-collection-persistence.js"]) {
             assert.ok(evidenceStageFiles.includes(required), required);
+          }
+          if (through12) {
+            const assignmentPolicyActivationId = randomUUID();
+            const assignmentPolicyActivated = await post("/diagnostic/v0/assignment-policy-activations", {
+              assignment_policy_activation_id: assignmentPolicyActivationId,
+              deployment_id: deployment.deployment_id,
+              assignment_policy_export_id: deployment.diagnostic_assignment_policy_export.export_id
+            });
+            assert.equal(assignmentPolicyActivated.response.status, 201,
+              JSON.stringify(assignmentPolicyActivated.body));
+            assignmentPolicyActivation = assignmentPolicyActivated.body.assignment_policy_activation;
+            assert.equal(assignmentPolicyActivation.assignment_policy_activation_id,
+              assignmentPolicyActivationId);
+            assert.equal(assignmentPolicyActivation.authority_granted, "none");
+            assert.equal(assignmentPolicyActivation.assignment_policy.document.disclosure.before_claim, "none");
+            assert.equal(assignmentPolicyActivation.stage.artifact_manifest.schema_version,
+              "alphonse.diagnostic-assignment-stage-artifact-manifest.v0.1");
+            const assignmentStageFiles = assignmentPolicyActivation.stage.artifact_manifest.module_closure
+              .map((entry) => entry.path);
+            for (const required of ["src/diagnostic-assignment-service.js",
+              "src/diagnostic-assignment-projector.js", "src/diagnostic-assignment-contracts.js",
+              "src/diagnostic-assignment-persistence.js"]) {
+              assert.ok(assignmentStageFiles.includes(required), required);
+            }
           }
         }
 
@@ -911,10 +941,15 @@ try {
         } finally { await immutableDerived.end(); }
         let evidencePackage = null;
         let independentVerification = null;
+        let diagnosticAssignment = null;
+        let assignmentVerificationMaterial = null;
         let finalCollection = initialCollection;
         if (through10) {
           const frozen = await post("/diagnostic/v0/evidence-collections/process", {
-            case_id: diagnosticCase.case_id
+            case_id: diagnosticCase.case_id,
+            ...(assignmentPolicyActivation ? {
+              assignment_policy_activation_id: assignmentPolicyActivation.assignment_policy_activation_id
+            } : {})
           });
           assert.equal(frozen.response.status, 201, JSON.stringify(frozen.body));
           evidencePackage = frozen.body.evidence_package;
@@ -965,7 +1000,10 @@ try {
           assert.match(evidencePackage.package_artifact_digest, /^sha256:[0-9a-f]{64}$/u);
 
           const packageReplay = await post("/diagnostic/v0/evidence-collections/process", {
-            case_id: diagnosticCase.case_id
+            case_id: diagnosticCase.case_id,
+            ...(assignmentPolicyActivation ? {
+              assignment_policy_activation_id: assignmentPolicyActivation.assignment_policy_activation_id
+            } : {})
           });
           assert.equal(packageReplay.response.status, 200, JSON.stringify(packageReplay.body));
           assert.equal(packageReplay.body.evidence_package.evidence_package_id,
@@ -1049,6 +1087,96 @@ try {
             await packagePrivileged.end();
           }
 
+          if (through12) {
+            const rotatedPolicy = await post("/diagnostic/v0/assignment-policy-activations", {
+              assignment_policy_activation_id: randomUUID(),
+              deployment_id: deployment.deployment_id,
+              assignment_policy_export_id: deployment.diagnostic_assignment_policy_export.export_id
+            });
+            assert.equal(rotatedPolicy.response.status, 201, JSON.stringify(rotatedPolicy.body));
+            assert.notEqual(rotatedPolicy.body.assignment_policy_activation.assignment_policy_activation_id,
+              assignmentPolicyActivation.assignment_policy_activation_id);
+
+            const assignmentRead = await eventually(async () => {
+              const value = await kernel(`/diagnostic/v0/evidence-packages/${
+                evidencePackage.evidence_package_id}/assignment`);
+              return value.response.status === 200 ? value : null;
+            }, "model-free assignment creation");
+            diagnosticAssignment = assignmentRead.body.diagnostic_assignment;
+            assert.equal(diagnosticAssignment.evidence_package_id, evidencePackage.evidence_package_id);
+            assert.equal(diagnosticAssignment.assignment_policy_activation_id,
+              assignmentPolicyActivation.assignment_policy_activation_id,
+              "delayed assignment consumption must use the policy pinned at package freeze");
+            assert.equal(diagnosticAssignment.state.current, "unclaimed");
+            assert.equal(diagnosticAssignment.state.revision, "0");
+            assert.equal(diagnosticAssignment.authority_granted, "none");
+            assert.equal(diagnosticAssignment.worker_bound, false);
+            assert.equal(diagnosticAssignment.execution_capability_created, false);
+            assert.equal(diagnosticAssignment.model_request_created, false);
+            assert.equal(diagnosticAssignment.assignment.initial_state, "unclaimed");
+            assert.equal(diagnosticAssignment.assignment.authority.authority_granted, "none");
+            assert.deepEqual(diagnosticAssignment.assignment.authority.granted_capabilities, []);
+            assert.equal(diagnosticAssignment.assignment.authority.evidence_disclosed, false);
+            assert.equal(diagnosticAssignment.assignment.authority.model_contacted, false);
+            assert.equal(diagnosticAssignment.assignment.temporal.available_at, evidencePackage.frozen_at);
+            assert.equal(diagnosticAssignment.assignment.temporal.expires_at,
+              new Date(Date.parse(evidencePackage.frozen_at) + 3_600_000).toISOString());
+            const mechanismValues = diagnosticAssignment.assignment.assignment_policy.output_schema
+              .properties.best_supported_hypothesis.properties.mechanism.enum;
+            assert.ok(mechanismValues.length > 4);
+            assert.ok(mechanismValues.includes("identity_scope_mismatch"));
+            assert.ok(mechanismValues.includes("unknown"));
+            assert.equal(Object.hasOwn(diagnosticAssignment.assignment.assignment_policy.instruction,
+              "expected_answer"), false);
+
+            const assignmentStatusRead = await kernel(`/diagnostic/v0/evidence-packages/${
+              evidencePackage.evidence_package_id}/assignment-status`);
+            assert.equal(assignmentStatusRead.response.status, 200,
+              JSON.stringify(assignmentStatusRead.body));
+            assert.equal(assignmentStatusRead.body.assignment_processing.status, "assignment_created");
+            assert.equal(assignmentStatusRead.body.assignment_processing.assignment_id,
+              diagnosticAssignment.assignment_id);
+            assert.equal(assignmentStatusRead.body.assignment_processing.assignment_state, "unclaimed");
+            assert.equal(assignmentStatusRead.body.assignment_processing.authority_granted, "none");
+
+            const assignmentById = await kernel(`/diagnostic/v0/assignments/${diagnosticAssignment.assignment_id}`);
+            assert.equal(assignmentById.response.status, 200, JSON.stringify(assignmentById.body));
+            assert.equal(assignmentById.body.diagnostic_assignment.assignment_digest,
+              diagnosticAssignment.assignment_digest);
+            const verificationMaterialRead = await kernel(`/diagnostic/v0/assignment-verification-material/${
+              diagnosticAssignment.assignment_id}`);
+            assert.equal(verificationMaterialRead.response.status, 200,
+              JSON.stringify(verificationMaterialRead.body));
+            assignmentVerificationMaterial = verificationMaterialRead.body.assignment_verification_material;
+            assert.equal(assignmentVerificationMaterial.assurance_boundary.verifier_required_for_creation, false);
+            assert.equal(assignmentVerificationMaterial.assurance_boundary.model_request_created, false);
+            assert.equal(assignmentVerificationMaterial.assignment.assignment_id,
+              diagnosticAssignment.assignment_id);
+
+            const assignmentDb = new pg.Client({ connectionString:
+              "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+            await assignmentDb.connect();
+            try {
+              await assert.rejects(assignmentDb.query(
+                "UPDATE diagnostic_assignments SET created_by='tampered' WHERE assignment_id=$1",
+                [diagnosticAssignment.assignment_id]), /immutable records cannot be updated/u);
+              await assert.rejects(assignmentDb.query(
+                `UPDATE diagnostic_assignment_states
+                 SET state='unclaimed',state_revision=1,updated_at=now() WHERE assignment_id=$1`,
+                [diagnosticAssignment.assignment_id]), /assignment state transition is invalid/u);
+              const counts = await assignmentDb.query(
+                `SELECT
+                  (SELECT COUNT(*)::int FROM diagnostic_assignments) AS assignments,
+                  (SELECT COUNT(*)::int FROM diagnostic_assignment_stage_records) AS stage_records,
+                  (SELECT COUNT(*)::int FROM diagnostic_assignment_nondeterminism_conflicts) AS conflicts,
+                  (SELECT COUNT(*)::int FROM diagnostic_diagnosis_requests) AS diagnosis_requests`
+              );
+              assert.deepEqual(counts.rows[0], {
+                assignments: 1, stage_records: 1, conflicts: 0, diagnosis_requests: 0
+              });
+            } finally { await assignmentDb.end(); }
+          }
+
           if (through11) {
             const bundleRead = await kernel(`/diagnostic/v0/independent-verification-bundles/${
               evidencePackage.evidence_package_id}`);
@@ -1073,7 +1201,9 @@ try {
             assert.match(verifierImageDigest, /^sha256:[0-9a-f]{64}$/u);
 
             const valid = await runOfflineVerifier({ imageTag: verifierImage,
-              imageDigest: verifierImageDigest, verificationBundle, label: "valid" });
+              imageDigest: verifierImageDigest, verificationBundle,
+              assignmentVerificationMaterial: through12 ? assignmentVerificationMaterial : null,
+              label: "valid" });
             assert.equal(valid.status, 0, valid.stderr);
             assert.equal(valid.report.result, "verified", JSON.stringify(valid.report));
             assert.equal(valid.report.support, "DETERMINISTICALLY_RECOMPUTED");
@@ -1087,6 +1217,13 @@ try {
               "independently_verified");
             assert.ok(valid.report.stages.length >= 10);
             assert.ok(valid.report.stages.every((stage) => stage.matches));
+            if (through12) {
+              assert.equal(valid.report.assignment_verification.assignment_id,
+                diagnosticAssignment.assignment_id);
+              assert.equal(valid.report.assignment_verification.assignment_digest,
+                diagnosticAssignment.assignment_digest);
+              assert.equal(valid.report.assignment_verification.state, "unclaimed");
+            }
             assert.equal(valid.report.material_availability.length,
               Number(projection.committed_intake_cutoff));
             assert.ok(valid.report.material_availability.every((material) =>
@@ -1101,7 +1238,9 @@ try {
             }
             resealVerificationBundle(reordered);
             const reorderedResult = await runOfflineVerifier({ imageTag: verifierImage,
-              imageDigest: verifierImageDigest, verificationBundle: reordered, label: "physical-reorder" });
+              imageDigest: verifierImageDigest, verificationBundle: reordered,
+              assignmentVerificationMaterial: through12 ? assignmentVerificationMaterial : null,
+              label: "physical-reorder" });
             assert.equal(reorderedResult.status, 0, reorderedResult.stderr);
             assert.equal(reorderedResult.report.result, "verified", JSON.stringify(reorderedResult.report));
             assertVerificationReportDigest(reorderedResult.report);
@@ -1111,7 +1250,8 @@ try {
               mutate(changed.bundle);
               resealVerificationBundle(changed);
               const checked = await runOfflineVerifier({ imageTag: verifierImage,
-                imageDigest: verifierImageDigest, verificationBundle: changed, label });
+                imageDigest: verifierImageDigest, verificationBundle: changed,
+                assignmentVerificationMaterial: through12 ? assignmentVerificationMaterial : null, label });
               assert.equal(checked.status, 1, `${label} unexpectedly verified\n${checked.stderr}`);
               assert.equal(checked.report.result, "failed");
               assert.equal(checked.report.failure.code, expectedCode, JSON.stringify(checked.report));
@@ -1153,12 +1293,40 @@ try {
               const nodes = bundle.published_outputs_to_compare.correlation_projection.semantic_projection.graph.nodes;
               [nodes[0], nodes[1]] = [nodes[1], nodes[0]];
             }, "VERIFIER_PUBLISHED_OUTPUT_MISMATCH");
+            if (through12) {
+              const assertRejectedAssignmentMutation = async (label, mutate, expectedCode) => {
+                const changed = structuredClone(assignmentVerificationMaterial);
+                mutate(changed);
+                const checked = await runOfflineVerifier({ imageTag: verifierImage,
+                  imageDigest: verifierImageDigest, verificationBundle,
+                  assignmentVerificationMaterial: changed, label });
+                assert.equal(checked.status, 1, `${label} unexpectedly verified\n${checked.stderr}`);
+                assert.equal(checked.report.failure.code, expectedCode, JSON.stringify(checked.report));
+                assert.equal(checked.report.authority_effects_created, 0);
+                assert.equal(checked.report.production_events_emitted, 0);
+                assertVerificationReportDigest(checked.report);
+              };
+              await assertRejectedAssignmentMutation("assignment-output", (material) => {
+                material.assignment.assignment_document.temporal.expires_at =
+                  "2099-01-01T00:00:00.000Z";
+              }, "VERIFIER_ASSIGNMENT_OUTPUT_MISMATCH");
+              await assertRejectedAssignmentMutation("assignment-policy-substitution", (material) => {
+                material.assignment_policy_activation.policy_document.assignment_ttl_seconds += 1;
+              }, "VERIFIER_ASSIGNMENT_POLICY_INTEGRITY_VIOLATION");
+              await assertRejectedAssignmentMutation("assignment-authority-state", (material) => {
+                material.assignment_state.state = "claimed";
+              }, "VERIFIER_ASSIGNMENT_AUTHORITY_VIOLATION");
+              await assertRejectedAssignmentMutation("assignment-creation-transition", (material) => {
+                material.assignment_creation.transition.payload.authority_granted = "diagnostic";
+              }, "VERIFIER_ASSIGNMENT_CREATION_HISTORY_MISMATCH");
+            }
             independentVerification = { verifierImageDigest, report: valid.report,
-              adversarial_cases: 9, physical_reorder_verified: true };
+              adversarial_cases: through12 ? 13 : 9, physical_reorder_verified: true };
           }
         }
-        interpretation = { activation, evidencePolicyActivation, effectProjection, evaluation, trigger,
-          diagnosticCase, finalCollection, evidencePackage, independentVerification };
+        interpretation = { activation, evidencePolicyActivation, assignmentPolicyActivation,
+          effectProjection, evaluation, trigger, diagnosticCase, finalCollection, evidencePackage,
+          diagnosticAssignment, assignmentVerificationMaterial, independentVerification };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -1179,12 +1347,14 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through11 ? "canonical-diagnostic-proof-11"
+    schema_version: "0.1.0", ticket: through12 ? "canonical-diagnostic-proof-12"
+      : through11 ? "canonical-diagnostic-proof-11"
       : through10 ? "canonical-diagnostic-proof-10"
       : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through11 ? "independently_recomputed_diagnostic_lineage"
+    status: "passed", completed_capability: through12 ? "model_free_unclaimed_diagnostic_assignment"
+      : through11 ? "independently_recomputed_diagnostic_lineage"
       : through10 ? "frozen_content_addressed_evidence_package"
       : through09 ? "deterministic_committed_effect_violation_case"
       : through08 ? "immutable_cross_stream_correlation_projection"
@@ -1220,7 +1390,13 @@ try {
         "tokenization_ed25519_independently_verified", "hmac_assurance_ceiling_explicit",
         "full_lineage_through_package_pins_and_release_recomputed",
         "physical_row_order_independent", "resealed_tampering_failed_closed",
-        "verification_created_no_authority_effects"] : [])],
+        "verification_created_no_authority_effects"] : []),
+      ...(through12 ? ["assignment_policy_pinned_before_delivery",
+        "mutable_outbox_not_semantic_authority", "durable_assignment_inbox_and_stage_record",
+        "deterministic_assignment_identity", "immutable_assignment_facts",
+        "separate_fenced_unclaimed_state", "frozen_event_time_controls_expiry",
+        "answer_free_neutral_worker_contract", "assignment_created_before_verifier_run",
+        "assignment_independently_recomputed", "no_dispatch_worker_model_or_execution_authority"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
@@ -1247,6 +1423,14 @@ try {
       extendedResult?.interpretation?.independentVerification?.verifierImageDigest ?? null,
     independent_verification_adversarial_cases:
       extendedResult?.interpretation?.independentVerification?.adversarial_cases ?? 0,
+    diagnostic_assignment_count:
+      extendedResult?.interpretation?.diagnosticAssignment ? 1 : 0,
+    diagnostic_assignment_id:
+      extendedResult?.interpretation?.diagnosticAssignment?.assignment_id ?? null,
+    diagnostic_assignment_digest:
+      extendedResult?.interpretation?.diagnosticAssignment?.assignment_digest ?? null,
+    diagnostic_assignment_state:
+      extendedResult?.interpretation?.diagnosticAssignment?.state.current ?? null,
     model_requests: 0, worker_run_created: false
   }, null, 2)}\n`);
 } catch (error) {
