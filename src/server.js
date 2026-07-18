@@ -34,6 +34,7 @@ import { createDiagnosticTokenizationProofService } from "./diagnostic-tokenizat
 import { createDiagnosticCorrelationService } from "./diagnostic-correlation-service.js";
 import { createDiagnosticEffectEvaluationService } from "./diagnostic-effect-evaluation-service.js";
 import { createDiagnosticEvidencePackageService } from "./diagnostic-evidence-package-service.js";
+import { createIndependentDiagnosticVerificationService } from "./independent-diagnostic-verification-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
 import { createPackageService } from "./package-service.js";
@@ -154,6 +155,7 @@ let diagnosticTokenizationProofService = null;
 let diagnosticCorrelationService = null;
 let diagnosticEffectEvaluationService = null;
 let diagnosticEvidencePackageService = null;
+let diagnosticIndependentVerificationService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -350,6 +352,7 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
   });
   diagnosticCorrelationService = createDiagnosticCorrelationService({
     database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
     installationId,
     environmentId,
     tokenizationVerifier: diagnosticTokenizationProofService,
@@ -367,9 +370,21 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
   });
   diagnosticEffectEvaluationService = createDiagnosticEffectEvaluationService({
     database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
     installationId,
     environmentId,
     correlationReader: diagnosticCorrelationService,
+    resolveDeploymentExports: resolveDeployedExports
+  });
+  diagnosticIndependentVerificationService = createIndependentDiagnosticVerificationService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    installationId,
+    environmentId,
+    tokenizationVerificationIdentity: {
+      service_key_id: tokenizationServiceKeyId ?? null,
+      public_key_der_base64: tokenizationServicePublicKeyDer ?? null
+    },
     resolveDeploymentExports: resolveDeployedExports
   });
   diagnosticEvidencePackageService = createDiagnosticEvidencePackageService({
@@ -379,6 +394,7 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     environmentId,
     correlationReader: diagnosticCorrelationService,
     effectReader: diagnosticEffectEvaluationService,
+    verificationBundleWriter: diagnosticIndependentVerificationService,
     resolveDeploymentExports: resolveDeployedExports
   });
 }
@@ -570,6 +586,14 @@ function requireDiagnosticEvidencePackaging() {
       "Deterministic evidence collection and packaging are not configured.");
   }
   return diagnosticEvidencePackageService;
+}
+
+function requireIndependentDiagnosticVerification() {
+  if (!diagnosticIndependentVerificationService) {
+    throw new KernelError(503, "INDEPENDENT_DIAGNOSTIC_VERIFICATION_UNAVAILABLE",
+      "Independent diagnostic verification is not configured.");
+  }
+  return diagnosticIndependentVerificationService;
 }
 
 function observationAuthentication(request, body) {
@@ -906,6 +930,14 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { evidence_package: await service.getPackage(
       pathId(url.pathname, "/diagnostic/v0/evidence-packages/")) });
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/independent-verification-bundles\/[^/]+$/.test(url.pathname)) {
+    const service = requireIndependentDiagnosticVerification();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { independent_verification_bundle: await service.getBundle(
+      pathId(url.pathname, "/diagnostic/v0/independent-verification-bundles/")) });
   }
 
   if (request.method === "GET" && url.pathname === "/diagnostic/v0/bootstrap") {

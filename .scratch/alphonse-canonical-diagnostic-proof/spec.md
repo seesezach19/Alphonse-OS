@@ -692,26 +692,34 @@ three structured diagnoses to identify the supported scope mismatch without unsu
 
 ### Independent Verification Surface
 
-- Add a role-scoped read API that exports one immutable Independent Diagnostic Verification Bundle for an exact
-  package or stage lineage.
+- Add a role-scoped read API used by a one-shot acquisition process to export one immutable Independent Diagnostic
+  Verification Bundle for an exact package lineage. The acquisition process seals the bundle and exits.
 - The bundle contains every preserved accepted receipt, authenticated conflict, and retained rejection at every
   contiguous Diagnostic Committed Intake Position from `1..cutoff`, including exact canonical bytes or an immutable
   erasure tombstone. It is not limited to inputs selected by the production Stage Worker.
-- It also contains exact schemas, contracts, signed Tokenization Result Receipt bytes and Tokenization Service
+- It separates raw `independent_inputs` from `published_outputs_to_compare`; published manifests never determine
+  eligibility. It also contains exact schemas, contracts, signed Tokenization Result Receipt bytes and Tokenization Service
   verification identities, Observation and Tokenization Grant Activation Snapshots and Application Receipts, stream
   coverage, projector, interpreter, evaluator and selection rule artifacts, and published canonical input manifests.
 - The API returns inputs and published results; it does not call the Stage Worker or return a precomputed verifier
   answer.
-- Acceptance Verifier runs in a separate container and code path with its own image and verifier artifact digest.
+- Acceptance Verifier runs offline in a separate container and code path with its own image and verifier artifact
+  digest. It has no network or credentials and reads only the sealed bundle written by acquisition.
 - The verifier first checks that positions `1..cutoff` are complete and contiguous, then independently determines
   which outcomes are eligible under the pinned rules. Any omitted position, unexplained tombstone, or eligible input
   absent from a published stage manifest fails verification.
-- The verifier independently recomputes canonical input digests, correlation edges and unresolved relationships,
-  normalized effects, evaluation result, selected receipt manifest, package semantic digest, and deterministic stage
-  identities, then compares them with published immutable records.
+- The verifier independently recomputes canonical input digests, coverage, correlation edges and unresolved
+  relationships, normalized effects, evaluation result, trigger, case, D0 Claim Envelopes, selected receipt manifest,
+  package semantic digest and ID, CAS wrapper, lease release, retention pins, and deterministic stage identities, then
+  compares them with published immutable records.
 - The verifier has no database, Stage Worker, write, packaging, dispatch, tokenization, or model access.
-- Shared protocol and canonicalization primitives may be reused, but projection, interpretation, evaluation, and
-  selection recomputation must not delegate to the production Stage Worker implementation.
+- Separately versioned protocol and canonicalization primitives may be reused, but projection, interpretation,
+  evaluation, claim, selection, packaging, and release recomputation must not import, execute, or delegate to the
+  production Stage Worker implementation.
+- Exact activated stage archives are preserved and hashed for provenance but never executed by the verifier.
+- The verifier independently verifies public-key Tokenization Result Receipt signatures. Observer and grant HMACs are
+  reported as accepted by the originating service and not independently reverified; verifier signing secrets remain
+  excluded.
 
 ## Testing Decisions
 

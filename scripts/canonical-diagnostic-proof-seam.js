@@ -7,6 +7,7 @@ const requiredRoles = [
   "test_orchestrator",
   "runtime_supervisor",
   "scenario_stimulus",
+  "verification_bundle_acquirer",
   "acceptance_verifier"
 ];
 
@@ -63,7 +64,13 @@ export function assertRoleManifests(roles) {
 
   const verifier = roles.acceptance_verifier;
   assert.equal(verifier.read_only, true);
-  assert.ok(verifier.permissions.every((permission) => permission.endsWith(".read")));
+  assert.deepEqual(verifier.credentials, []);
+  assert.deepEqual(verifier.network, []);
+  assert.deepEqual(verifier.permissions, ["verification-bundle.read", "verification-report.write"]);
+
+  const acquirer = roles.verification_bundle_acquirer;
+  assert.deepEqual(acquirer.permissions, ["diagnostic-verification-bundle.read", "kernel-audit.read"]);
+  assert.deepEqual(acquirer.mounts, [{ name: "verification-bundle", mode: "write_only" }]);
 
   const supervisor = roles.runtime_supervisor;
   assert.deepEqual(supervisor.credentials, []);

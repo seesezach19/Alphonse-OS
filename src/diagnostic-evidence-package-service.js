@@ -26,6 +26,7 @@ import {
   selectDiagnosticEvidence
 } from "./diagnostic-evidence-selector.js";
 import { KernelError } from "./errors.js";
+import { prepareStageArtifactArchive, recordStageArtifactArchive } from "./stage-artifact-archive.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ACTIVATION_EXPORT_VERSION = "0.1.0";
@@ -218,6 +219,7 @@ export function createDiagnosticEvidencePackageService({
   environmentId,
   correlationReader,
   effectReader,
+  verificationBundleWriter = null,
   resolveDeploymentExports
 }) {
   const { pool } = database;
@@ -285,9 +287,13 @@ export function createDiagnosticEvidencePackageService({
     };
     const activationDigest = sha256Digest(document);
     const activatedAt = new Date(now).toISOString();
+    const preparedStageArchive = await prepareStageArtifactArchive(
+      artifactStore, DIAGNOSTIC_EVIDENCE_STAGE_ARTIFACT_MANIFEST);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await recordStageArtifactArchive({ client, installationId, prepared: preparedStageArchive,
+        archivedAt: activatedAt });
       const existing = (await client.query(
         `SELECT * FROM diagnostic_evidence_policy_activations
          WHERE installation_id=$1 AND evidence_policy_activation_id=$2 FOR SHARE`,
@@ -379,10 +385,14 @@ export function createDiagnosticEvidencePackageService({
     const existingPackage = await getPackageRowByCase(caseId);
     if (existingPackage) {
       await verifyPackageRow(existingPackage, artifactStore);
+      const verificationBundle = verificationBundleWriter
+        ? await verificationBundleWriter.sealBundle(existingPackage.evidence_package_id, STAGE_AUTHOR,
+          existingPackage.frozen_at) : null;
       const collection = await loadEvidenceCollection(pool, installationId, caseId);
       return { replayed: true, result: {
         collection: collection.view,
-        evidence_package: packageRowView(existingPackage)
+        evidence_package: packageRowView(existingPackage),
+        independent_verification_bundle: verificationBundle?.result.independent_verification_bundle ?? null
       } };
     }
 
@@ -548,8 +558,11 @@ export function createDiagnosticEvidencePackageService({
             "Exact collection inputs and policy produced different package semantics.");
         }
         await client.query("COMMIT");
+        const verificationBundle = verificationBundleWriter
+          ? await verificationBundleWriter.sealBundle(row.evidence_package_id, STAGE_AUTHOR, row.frozen_at) : null;
         return { replayed: true, result: { collection: (await loadEvidenceCollection(
-          pool, installationId, caseId)).view, evidence_package: packageRowView(row) } };
+          pool, installationId, caseId)).view, evidence_package: packageRowView(row),
+        independent_verification_bundle: verificationBundle?.result.independent_verification_bundle ?? null } };
       }
       await extendEvidenceCollectionReferences({
         client,
@@ -692,9 +705,12 @@ export function createDiagnosticEvidencePackageService({
         [installationId, frozenAt]
       );
       await client.query("COMMIT");
+      const verificationBundle = verificationBundleWriter
+        ? await verificationBundleWriter.sealBundle(evidencePackageId, STAGE_AUTHOR, frozenAt) : null;
       return { replayed: false, result: {
         collection: (await loadEvidenceCollection(pool, installationId, caseId)).view,
         evidence_package: packageRowView(packageRow),
+        independent_verification_bundle: verificationBundle?.result.independent_verification_bundle ?? null,
         readiness: decision
       } };
     } catch (error) {

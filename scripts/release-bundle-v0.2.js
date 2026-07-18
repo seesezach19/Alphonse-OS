@@ -7,11 +7,12 @@ import { createDeterministicTar } from "./release-bundle.js";
 const RELEASE_VERSION = "0.2.0";
 const TEXT_EXTENSIONS = new Set([".js", ".json", ".md", ".sql", ".yaml", ".yml", ".ps1", ".sh"]);
 const STATIC_FILES = ["package.json", "package-lock.json"];
-const TREES = ["src", "migrations", "diagnostic-migrations", "docs", "runtime"];
+const TREES = ["src", "verifier", "migrations", "diagnostic-migrations", "docs", "runtime"];
 const PACKAGE_TREE = "packages/n8n-operational-package";
 const PACKAGE_EXCLUSIONS = new Set(["packages/n8n-operational-package/compose.customer.yaml"]);
 const RELEASE_FILES = {
   "release/v0.2.0/Dockerfile": "Dockerfile",
+  "Dockerfile.verifier": "Dockerfile.verifier",
   "release/v0.2.0/compose.yaml": "compose.yaml",
   "release/v0.2.0/install-local.ps1": "install-local.ps1",
   "release/v0.2.0/install-local.sh": "install-local.sh",

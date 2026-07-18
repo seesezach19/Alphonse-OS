@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import pg from "pg";
@@ -25,7 +25,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through10 = process.argv.includes("--through-10");
+const through11 = process.argv.includes("--through-11");
+const through10 = through11 || process.argv.includes("--through-10");
 const through09 = through10 || process.argv.includes("--through-09");
 const through08 = through09 || process.argv.includes("--through-08");
 const through07 = through08 || process.argv.includes("--through-07");
@@ -37,6 +38,42 @@ function run(command, args, options = {}) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed\n${result.stdout}\n${result.stderr}`);
   return result.stdout;
+}
+
+async function runOfflineVerifier({ imageTag, imageDigest, verificationBundle, label }) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), `alphonse-ticket11-${label}-`));
+  const inputDirectory = path.join(directory, "input");
+  const outputDirectory = path.join(directory, "output");
+  await mkdir(inputDirectory);
+  await mkdir(outputDirectory);
+  await chmod(directory, 0o755);
+  await chmod(inputDirectory, 0o755);
+  await chmod(outputDirectory, 0o777);
+  const inputPath = path.join(inputDirectory, "bundle.json");
+  const outputPath = path.join(outputDirectory, "report.json");
+  await writeFile(inputPath, `${JSON.stringify({ independent_verification_bundle: verificationBundle })}\n`);
+  const result = spawnSync("docker", ["run", "--rm", "--network", "none", "--read-only",
+    "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "64",
+    "--memory", "256m", "--cpus", "1", "-e", `VERIFIER_IMAGE_DIGEST=${imageDigest}`,
+    "-v", `${inputDirectory}:/input:ro`, "-v", `${outputDirectory}:/output:rw`, imageTag,
+    "/input/bundle.json", "/output/report.json"], {
+    cwd: root, env: environment, encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+    timeout: 2 * 60_000, windowsHide: true
+  });
+  if (result.error) throw result.error;
+  const report = JSON.parse(await readFile(outputPath, "utf8"));
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr, report };
+}
+
+function resealVerificationBundle(verificationBundle) {
+  verificationBundle.bundle_digest = sha256Digest(verificationBundle.bundle);
+  return verificationBundle;
+}
+
+function assertVerificationReportDigest(report) {
+  const material = structuredClone(report);
+  delete material.report_digest;
+  assert.equal(report.report_digest, sha256Digest(material), "verification report digest must be self-consistent");
 }
 const compose = (...args) => run("docker", ["compose", "--profile", "canonical-tokenization",
   "--profile", "canonical-ingress", "--profile", "canonical-destination", "--profile", "canonical-runtime", ...args]);
@@ -422,6 +459,7 @@ try {
     }, "two CRM ledger observations", 60_000);
     assert.equal(new Set(requests.requests.map((item) => item.logical_operation_id)).size, 1);
     assert.equal(new Set(requests.requests.map((item) => item.idempotency_key_equality_token)).size, 2);
+    const requestReceiptCoverage = [];
     for (const crmRequest of requests.requests) {
       const source = recovered.deliveries.find((item) => item.delivery_id === crmRequest.delivery_id);
       assert.ok(source, "CRM request must cite one observed delivery.");
@@ -430,9 +468,19 @@ try {
       const receipt = await kernel(`/diagnostic/v0/observation-receipts/${crmRequest.observation_receipt_id}`);
       assert.equal(receipt.body.observation_receipt.principal_id, "observer:crm-request");
       assert.equal(receipt.body.observation_receipt.observation_type, "destination.request");
-      assert.equal(receipt.body.observation_receipt.coverage.coverage_status, "complete_through_high_water");
-      assert.deepEqual(receipt.body.observation_receipt.coverage.missing_ranges, []);
+      const coverage = receipt.body.observation_receipt.coverage;
+      requestReceiptCoverage.push(coverage);
+      assert.ok(["complete_through_high_water", "incomplete"].includes(coverage.coverage_status));
+      if (coverage.coverage_status === "complete_through_high_water") {
+        assert.deepEqual(coverage.missing_ranges, []);
+      } else {
+        assert.ok(coverage.missing_ranges.length > 0,
+          "historically incomplete coverage must preserve its exact missing range");
+      }
     }
+    assert.ok(requestReceiptCoverage.some((coverage) =>
+      coverage.coverage_status === "complete_through_high_water" && coverage.missing_ranges.length === 0),
+    "one accepted request receipt must establish that the out-of-order gap was eventually filled");
     const firstRequest = requests.requests[0];
     const firstDelivery = recovered.deliveries.find((item) => item.delivery_id === firstRequest.delivery_id);
     const changedKeyReplay = await request("http://127.0.0.1:43700", "/v0/crm/leads", {
@@ -862,6 +910,7 @@ try {
           assert.deepEqual(counts.rows[0], { effects: 1, evaluations: 1, triggers: 1, cases: 1 });
         } finally { await immutableDerived.end(); }
         let evidencePackage = null;
+        let independentVerification = null;
         let finalCollection = initialCollection;
         if (through10) {
           const frozen = await post("/diagnostic/v0/evidence-collections/process", {
@@ -946,13 +995,15 @@ try {
                 (SELECT COUNT(*)::int FROM diagnostic_evidence_collection_leases) AS leases,
                 (SELECT COUNT(*)::int FROM diagnostic_evidence_collection_lease_releases) AS releases,
                 (SELECT COUNT(*)::int FROM diagnostic_artifact_retention_pins) AS pins,
-                (SELECT COUNT(*)::int FROM diagnostic_diagnosis_requests) AS diagnosis_requests`
+                (SELECT COUNT(*)::int FROM diagnostic_diagnosis_requests) AS diagnosis_requests,
+                (SELECT COUNT(*)::int FROM diagnostic_independent_verification_bundles) AS verification_bundles`
             );
             assert.equal(packageCounts.rows[0].packages, 1);
             assert.equal(packageCounts.rows[0].leases, 1);
             assert.equal(packageCounts.rows[0].releases, 1);
             assert.ok(packageCounts.rows[0].pins >= finalCollection.references.length + 1);
             assert.equal(packageCounts.rows[0].diagnosis_requests, 0);
+            assert.equal(packageCounts.rows[0].verification_bundles, 1);
           } finally { await packageDb.end(); }
 
           const packagePrivileged = new pg.Client({ connectionString:
@@ -997,9 +1048,117 @@ try {
             ).catch(() => {});
             await packagePrivileged.end();
           }
+
+          if (through11) {
+            const bundleRead = await kernel(`/diagnostic/v0/independent-verification-bundles/${
+              evidencePackage.evidence_package_id}`);
+            assert.equal(bundleRead.response.status, 200, JSON.stringify(bundleRead.body));
+            const verificationBundle = bundleRead.body.independent_verification_bundle;
+            assert.equal(verificationBundle.evidence_package_id, evidencePackage.evidence_package_id);
+            assert.equal(verificationBundle.bundle.target.committed_intake_cutoff,
+              projection.committed_intake_cutoff);
+            assert.equal(verificationBundle.bundle.target.expected_bundle_scope,
+              "complete_installation_prefix_through_cutoff");
+            assert.equal(verificationBundle.bundle.assurance_boundary.authority, "none");
+            assert.equal(verificationBundle.bundle.assurance_boundary.hostile_host_resistance_claimed, false);
+            assert.equal(verificationBundle.bundle.independent_inputs.positions.length,
+              Number(projection.committed_intake_cutoff));
+
+            const verifierImage = `alphonse-independent-diagnostic-verifier:ticket-11-${process.pid}`;
+            run("docker", ["build", "--file", "Dockerfile.verifier", "--tag", verifierImage, "."], {
+              timeout: 8 * 60_000
+            });
+            const verifierImageDigest = run("docker", ["image", "inspect", "--format={{.Id}}", verifierImage])
+              .trim();
+            assert.match(verifierImageDigest, /^sha256:[0-9a-f]{64}$/u);
+
+            const valid = await runOfflineVerifier({ imageTag: verifierImage,
+              imageDigest: verifierImageDigest, verificationBundle, label: "valid" });
+            assert.equal(valid.status, 0, valid.stderr);
+            assert.equal(valid.report.result, "verified", JSON.stringify(valid.report));
+            assert.equal(valid.report.support, "DETERMINISTICALLY_RECOMPUTED");
+            assert.equal(valid.report.authority, "none");
+            assert.equal(valid.report.authority_effects_created, 0);
+            assert.equal(valid.report.production_events_emitted, 0);
+            assert.equal(valid.report.verifier.image_digest, verifierImageDigest);
+            assert.equal(valid.report.cryptographic_assurance.observer_hmac_signature,
+              "accepted_by_diagnostic_plane_not_independently_reverified");
+            assert.equal(valid.report.cryptographic_assurance.tokenization_result_signature,
+              "independently_verified");
+            assert.ok(valid.report.stages.length >= 10);
+            assert.ok(valid.report.stages.every((stage) => stage.matches));
+            assert.equal(valid.report.material_availability.length,
+              Number(projection.committed_intake_cutoff));
+            assert.ok(valid.report.material_availability.every((material) =>
+              material.material_state === "exact_material"));
+            assertVerificationReportDigest(valid.report);
+
+            const reordered = structuredClone(verificationBundle);
+            for (const field of ["positions", "accepted_receipts", "schema_activations", "schema_exports",
+              "tokenization_result_receipts", "observation_grant_snapshots",
+              "observation_grant_application_receipts"]) {
+              reordered.bundle.independent_inputs[field].reverse();
+            }
+            resealVerificationBundle(reordered);
+            const reorderedResult = await runOfflineVerifier({ imageTag: verifierImage,
+              imageDigest: verifierImageDigest, verificationBundle: reordered, label: "physical-reorder" });
+            assert.equal(reorderedResult.status, 0, reorderedResult.stderr);
+            assert.equal(reorderedResult.report.result, "verified", JSON.stringify(reorderedResult.report));
+            assertVerificationReportDigest(reorderedResult.report);
+
+            const assertRejectedMutation = async (label, mutate, expectedCode) => {
+              const changed = structuredClone(verificationBundle);
+              mutate(changed.bundle);
+              resealVerificationBundle(changed);
+              const checked = await runOfflineVerifier({ imageTag: verifierImage,
+                imageDigest: verifierImageDigest, verificationBundle: changed, label });
+              assert.equal(checked.status, 1, `${label} unexpectedly verified\n${checked.stderr}`);
+              assert.equal(checked.report.result, "failed");
+              assert.equal(checked.report.failure.code, expectedCode, JSON.stringify(checked.report));
+              assert.equal(checked.report.authority, "none");
+              assert.equal(checked.report.authority_effects_created, 0);
+              assert.equal(checked.report.production_events_emitted, 0);
+              assertVerificationReportDigest(checked.report);
+            };
+            await assertRejectedMutation("missing-prefix-position", (bundle) => {
+              bundle.independent_inputs.positions.pop();
+            }, "VERIFIER_PREFIX_NOT_CONTIGUOUS");
+            await assertRejectedMutation("cutoff-substitution", (bundle) => {
+              bundle.target.committed_intake_cutoff = String(BigInt(bundle.target.committed_intake_cutoff) + 1n);
+            }, "VERIFIER_PREFIX_NOT_CONTIGUOUS");
+            await assertRejectedMutation("accepted-envelope-bytes", (bundle) => {
+              bundle.independent_inputs.accepted_receipts[0].envelope_bytes = {
+                encoding: "base64", bytes: Buffer.from("{}", "utf8").toString("base64")
+              };
+            }, "VERIFIER_ACCEPTED_RECEIPT_INTEGRITY_VIOLATION");
+            await assertRejectedMutation("omitted-eligible-receipt", (bundle) => {
+              bundle.independent_inputs.accepted_receipts.shift();
+            }, "VERIFIER_ACCEPTED_RECEIPT_MISSING");
+            await assertRejectedMutation("unexplained-erasure-tombstone", (bundle) => {
+              bundle.independent_inputs.positions[0].material.state = "governed_erasure_tombstone";
+            }, "VERIFIER_UNVERIFIABLE_MATERIAL");
+            await assertRejectedMutation("stage-source-bytes", (bundle) => {
+              bundle.independent_inputs.stage_artifact_archives[0].archive.files[0].bytes_base64 =
+                Buffer.from("tampered", "utf8").toString("base64");
+            }, "VERIFIER_STAGE_ARCHIVE_INTEGRITY_VIOLATION");
+            await assertRejectedMutation("published-semantic-digest", (bundle) => {
+              bundle.published_outputs_to_compare.correlation_projection.semantic_digest =
+                `sha256:${"0".repeat(64)}`;
+            }, "VERIFIER_PUBLISHED_OUTPUT_MISMATCH");
+            await assertRejectedMutation("changed-projector-rules", (bundle) => {
+              bundle.published_outputs_to_compare.correlation_registration.projector_rules_digest =
+                `sha256:${"1".repeat(64)}`;
+            }, "VERIFIER_CORRELATION_REGISTRATION_INTEGRITY_VIOLATION");
+            await assertRejectedMutation("published-graph-order", (bundle) => {
+              const nodes = bundle.published_outputs_to_compare.correlation_projection.semantic_projection.graph.nodes;
+              [nodes[0], nodes[1]] = [nodes[1], nodes[0]];
+            }, "VERIFIER_PUBLISHED_OUTPUT_MISMATCH");
+            independentVerification = { verifierImageDigest, report: valid.report,
+              adversarial_cases: 9, physical_reorder_verified: true };
+          }
         }
         interpretation = { activation, evidencePolicyActivation, effectProjection, evaluation, trigger,
-          diagnosticCase, finalCollection, evidencePackage };
+          diagnosticCase, finalCollection, evidencePackage, independentVerification };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -1020,11 +1179,13 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through10 ? "canonical-diagnostic-proof-10"
+    schema_version: "0.1.0", ticket: through11 ? "canonical-diagnostic-proof-11"
+      : through10 ? "canonical-diagnostic-proof-10"
       : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through10 ? "frozen_content_addressed_evidence_package"
+    status: "passed", completed_capability: through11 ? "independently_recomputed_diagnostic_lineage"
+      : through10 ? "frozen_content_addressed_evidence_package"
       : through09 ? "deterministic_committed_effect_violation_case"
       : through08 ? "immutable_cross_stream_correlation_projection"
       : through07 ? "bound_runtime_and_separate_crm_observation" : "journaled_duplicate_ingress_observation",
@@ -1052,7 +1213,14 @@ try {
         "matched_effect_typed_ancestor_selection", "complete_disclosure_accounting",
         "authenticated_provenance_dependencies_selected", "content_addressed_worker_package",
         "collection_lease_replaced_by_retention_pins", "immutable_package_exact_replay",
-        "stored_package_corruption_not_replay", "no_assignment_dispatch_worker_or_model"] : [])],
+        "stored_package_corruption_not_replay", "no_assignment_dispatch_worker_or_model"] : []),
+      ...(through11 ? ["complete_prefix_independently_recomputed",
+        "exact_stage_source_archives_verified_without_execution",
+        "offline_verifier_image_identity_reported", "networkless_read_only_verifier",
+        "tokenization_ed25519_independently_verified", "hmac_assurance_ceiling_explicit",
+        "full_lineage_through_package_pins_and_release_recomputed",
+        "physical_row_order_independent", "resealed_tampering_failed_closed",
+        "verification_created_no_authority_effects"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
@@ -1071,6 +1239,14 @@ try {
       extendedResult?.interpretation?.evidencePackage?.semantic_digest ?? null,
     evidence_package_artifact_digest:
       extendedResult?.interpretation?.evidencePackage?.package_artifact_digest ?? null,
+    independent_verification_result:
+      extendedResult?.interpretation?.independentVerification?.report.result ?? null,
+    independent_verification_report_digest:
+      extendedResult?.interpretation?.independentVerification?.report.report_digest ?? null,
+    independent_verifier_image_digest:
+      extendedResult?.interpretation?.independentVerification?.verifierImageDigest ?? null,
+    independent_verification_adversarial_cases:
+      extendedResult?.interpretation?.independentVerification?.adversarial_cases ?? 0,
     model_requests: 0, worker_run_created: false
   }, null, 2)}\n`);
 } catch (error) {

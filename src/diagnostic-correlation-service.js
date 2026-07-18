@@ -16,6 +16,7 @@ import {
 import { verifyCorrelationAcceptedInputs } from "./correlation-input-integrity.js";
 import { verifyCorrelationOutcomeMaterials } from "./diagnostic-intake-outcome-contracts.js";
 import { KernelError } from "./errors.js";
+import { prepareStageArtifactArchive, recordStageArtifactArchive } from "./stage-artifact-archive.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -243,6 +244,7 @@ export function classifyCorrelationProjectionReplay(existing, projected) {
 
 export function createDiagnosticCorrelationService({
   database,
+  artifactStore = null,
   installationId,
   environmentId,
   resolveDeployment,
@@ -303,9 +305,15 @@ export function createDiagnosticCorrelationService({
     };
     const registrationDigest = sha256Digest(document);
     const registeredAt = new Date(now).toISOString();
+    const preparedStageArchive = artifactStore
+      ? await prepareStageArtifactArchive(artifactStore, CORRELATION_PROJECTOR_ARTIFACT_MANIFEST) : null;
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      if (preparedStageArchive) {
+        await recordStageArtifactArchive({ client, installationId, prepared: preparedStageArchive,
+          archivedAt: registeredAt });
+      }
       const lockKeys = [
         `correlation-registration:${installationId}:digest:${registrationDigest}`,
         `correlation-registration:${installationId}:id:${input.registration_id}`

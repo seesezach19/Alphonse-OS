@@ -31,6 +31,7 @@ import {
   DIAGNOSTIC_EFFECT_PROJECTION_SCHEMA
 } from "./diagnostic-effect-projector.js";
 import { KernelError } from "./errors.js";
+import { prepareStageArtifactArchive, recordStageArtifactArchive } from "./stage-artifact-archive.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STAGE_ACTIVATION_SCHEMA = "alphonse.diagnostic-interpretation-activation.v0.1";
@@ -280,6 +281,7 @@ function caseView(row, trigger, claims) {
 
 export function createDiagnosticEffectEvaluationService({
   database,
+  artifactStore = null,
   installationId,
   environmentId,
   correlationReader,
@@ -357,9 +359,15 @@ export function createDiagnosticEffectEvaluationService({
     };
     const activationDigest = sha256Digest(document);
     const activatedAt = new Date(now).toISOString();
+    const preparedStageArchive = artifactStore
+      ? await prepareStageArtifactArchive(artifactStore, DIAGNOSTIC_EFFECT_STAGE_ARTIFACT_MANIFEST) : null;
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      if (preparedStageArchive) {
+        await recordStageArtifactArchive({ client, installationId, prepared: preparedStageArchive,
+          archivedAt: activatedAt });
+      }
       const existing = (await client.query(
         "SELECT * FROM diagnostic_interpretation_activations WHERE installation_id=$1 AND activation_id=$2 FOR SHARE",
         [installationId, activationId]

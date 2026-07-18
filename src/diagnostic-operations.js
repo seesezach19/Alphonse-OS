@@ -657,6 +657,15 @@ const descriptors = [
     resultKey: "evidence_package",
     issues: ["DIAGNOSTIC_EVIDENCE_PACKAGE_NOT_FOUND"]
   }),
+  readDescriptor({
+    operationId: "diagnostic.independent_verification_bundle.get",
+    summary: "Acquire one sealed complete-prefix verification bundle without invoking a production recomputation.",
+    path: "/diagnostic/v0/independent-verification-bundles/{evidence_package_id}",
+    idName: "evidence_package_id",
+    resultKey: "independent_verification_bundle",
+    issues: ["INDEPENDENT_VERIFICATION_BUNDLE_NOT_FOUND",
+      "INDEPENDENT_VERIFICATION_BUNDLE_INTEGRITY_VIOLATION"]
+  }),
   commandDescriptor({
     operationId: "diagnostic.case.report_failure",
     summary: "Open one authority-free Diagnostic Case from an explicit authenticated failure report.",

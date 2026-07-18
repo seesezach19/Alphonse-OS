@@ -65,15 +65,29 @@
       "read_only": false,
       "enforcement_claim": "configured_exclusion_under_trusted_host"
     },
-    "acceptance_verifier": {
+    "verification_bundle_acquirer": {
       "process_class": "one_shot",
       "credentials": ["diagnostic-read-only", "kernel-audit-read-only"],
       "mounts": [
+        { "name": "verification-bundle", "mode": "write_only" }
+      ],
+      "network": ["diagnostic-read-api", "kernel-audit-read-api"],
+      "permissions": ["diagnostic-verification-bundle.read", "kernel-audit.read"],
+      "docker_socket": false,
+      "secret_store": false,
+      "read_only": false,
+      "enforcement_claim": "configured_exclusion_under_trusted_host"
+    },
+    "acceptance_verifier": {
+      "process_class": "one_shot_offline",
+      "credentials": [],
+      "mounts": [
+        { "name": "verification-bundle", "mode": "read_only" },
         { "name": "hidden-assertions", "mode": "read_only" },
         { "name": "verification-report", "mode": "write_only" }
       ],
-      "network": ["diagnostic-read-api", "kernel-audit-read-api"],
-      "permissions": ["diagnostic-status.read", "kernel-audit.read"],
+      "network": [],
+      "permissions": ["verification-bundle.read", "verification-report.write"],
       "docker_socket": false,
       "secret_store": false,
       "read_only": true,

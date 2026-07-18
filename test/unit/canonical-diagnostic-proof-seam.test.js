@@ -22,14 +22,18 @@ test("acceptance roles declare distinct configured authority boundaries", () => 
     "runtime_supervisor",
     "scenario_stimulus",
     "test_orchestrator",
-    "trusted_bootstrap"
+    "trusted_bootstrap",
+    "verification_bundle_acquirer"
   ]);
   assert.equal(manifests.scenario_stimulus.request_limit, 2);
   assert.deepEqual(manifests.scenario_stimulus.network, ["customer-ingress"]);
   assert.equal(manifests.acceptance_verifier.read_only, true);
   assert.equal(manifests.runtime_supervisor.docker_socket, false);
   assert.equal(manifests.runtime_supervisor.secret_store, false);
-  for (const role of ["test_orchestrator", "runtime_supervisor", "scenario_stimulus", "acceptance_verifier"]) {
+  assert.deepEqual(manifests.acceptance_verifier.credentials, []);
+  assert.deepEqual(manifests.acceptance_verifier.network, []);
+  for (const role of ["test_orchestrator", "runtime_supervisor", "scenario_stimulus",
+    "verification_bundle_acquirer", "acceptance_verifier"]) {
     assert.equal(manifests[role].credentials.includes("observer-hmac"), false);
     assert.equal(manifests[role].credentials.includes("tokenization-secret"), false);
   }

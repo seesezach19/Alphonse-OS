@@ -8,6 +8,7 @@
     "diagnostic_plane": { "version": "0.2.0", "entrypoint": "src/diagnostic-service.js" },
     "diagnostic_cli": { "version": "0.2.0", "entrypoint": "src/diagnostic-cli.js" },
     "verification_runner": { "version": "0.2.0", "entrypoint": "src/verification-runner-process.js" },
+    "independent_diagnostic_verifier": { "version": "0.1.0", "entrypoint": "verifier/cli.js" },
     "n8n_operational_package": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/operational-package.json" },
     "n8n_runtime_adapter": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/runtime-adapter-manifest.json" },
     "n8n_repair_delivery_adapter": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/repair-delivery-adapter-manifest.json" },
@@ -68,7 +69,8 @@
     "014_correlation_projections.sql",
     "015_correlation_integrity_hardening.sql",
     "016_effect_interpretation_and_behavior_cases.sql",
-    "017_evidence_collection_and_packages.sql"
+    "017_evidence_collection_and_packages.sql",
+    "018_independent_diagnostic_verification.sql"
   ],
   "qualification": [
     "v0.2_release_policy",
