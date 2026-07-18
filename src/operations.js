@@ -1003,6 +1003,61 @@ descriptors.push(
   }
 );
 
+descriptors.push(
+  {
+    operation_id: "kernel.diagnostic_dispatch.authorize",
+    version: "0.1.0",
+    summary: "Authorize one exact eligible diagnostic worker and runtime proposal without launching it or issuing model credentials.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner_or_exact_trusted_operator",
+    effect_class: "single_use_diagnostic_dispatch_authority",
+    idempotency: "command_id_and_exact_dispatch_candidate",
+    transport: { method: "POST", path: "/kernel/v0/diagnostic-dispatch-authorizations" },
+    input_schema: {
+      type: "object",
+      required: ["command_id", "operation_id", "input"],
+      additionalProperties: false,
+      properties: {
+        command_id: { type: "string", minLength: 1, maxLength: 160 },
+        operation_id: { const: "kernel.diagnostic_dispatch.authorize" },
+        input: { type: "object", required: ["candidate"], additionalProperties: false,
+          properties: { candidate: { type: "object" } } }
+      }
+    },
+    output_schema: { type: "object", required: ["diagnostic_dispatch_authorization", "transition"] },
+    supported_modes: ["live"],
+    preconditions: ["assignment_unclaimed_and_current", "material_currently_available",
+      "worker_passport_active_and_exact", "zero_external_effect_authority",
+      "runtime_model_broker_data_and_resource_boundaries_match"],
+    outcomes: ["diagnostic_dispatch_authorized", "command_replayed"],
+    issues: ["DIAGNOSTIC_DISPATCH_ASSIGNMENT_NOT_ELIGIBLE",
+      "DIAGNOSTIC_DISPATCH_MATERIAL_UNAVAILABLE", "DIAGNOSTIC_DISPATCH_PASSPORT_INELIGIBLE",
+      "DIAGNOSTIC_DISPATCH_RUNTIME_POLICY_MISMATCH", "DIAGNOSTIC_DISPATCH_RESOURCE_LIMIT_EXCEEDED"],
+    emitted_events: ["kernel.diagnostic_dispatch.authorized"],
+    next_operations: ["kernel.diagnostic_dispatch_authorization.get", "diagnostic.assignment.claim"]
+  },
+  {
+    operation_id: "kernel.diagnostic_dispatch_authorization.get",
+    version: "0.1.0",
+    summary: "Inspect immutable Kernel issuance without pretending Diagnostic Plane consumption is Kernel state.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/kernel/v0/diagnostic-dispatch-authorizations/{dispatch_authorization_id}" },
+    input_schema: { type: "object", required: ["dispatch_authorization_id"],
+      properties: { dispatch_authorization_id: { type: "string", format: "uuid" } } },
+    output_schema: { type: "object", required: ["diagnostic_dispatch_authorization"] },
+    supported_modes: ["live"],
+    preconditions: [],
+    outcomes: ["diagnostic_dispatch_authorization_returned"],
+    issues: ["DIAGNOSTIC_DISPATCH_AUTHORIZATION_NOT_FOUND",
+      "DIAGNOSTIC_DISPATCH_AUTHORIZATION_INTEGRITY_VIOLATION"],
+    emitted_events: [],
+    next_operations: ["diagnostic.assignment.claim"]
+  }
+);
+
 export function listOperationDescriptors() {
   return structuredClone(descriptors);
 }

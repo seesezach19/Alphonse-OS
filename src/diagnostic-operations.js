@@ -823,6 +823,55 @@ const descriptors = [
     resultKey: "diagnostic_assignment",
     issues: ["DIAGNOSTIC_ASSIGNMENT_NOT_FOUND", "DIAGNOSTIC_ASSIGNMENT_INTEGRITY_VIOLATION"]
   }),
+  {
+    operation_id: "diagnostic.assignment.claim",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Atomically consume one signed Kernel authorization, claim one exact Assignment, and create one not-yet-launched Worker Run.",
+    visibility: "public",
+    authority_class: "exact_signed_kernel_dispatch_authorization_and_bound_dispatcher",
+    effect_class: "diagnostic_assignment_claim_and_worker_run_binding",
+    idempotency: "command_id_and_exact_signed_authorization",
+    transport: { method: "POST", path: "/diagnostic/v0/assignments/{assignment_id}/claim" },
+    input_schema: {
+      type: "object",
+      required: ["command_id", "operation_id", "input"],
+      additionalProperties: false,
+      properties: {
+        command_id: { type: "string", minLength: 1, maxLength: 160 },
+        operation_id: { const: "diagnostic.assignment.claim" },
+        input: {
+          type: "object",
+          required: ["assignment_id", "signed_authorization"],
+          additionalProperties: false,
+          properties: {
+            assignment_id: { type: "string", format: "uuid" },
+            signed_authorization: { type: "object" }
+          }
+        }
+      }
+    },
+    output_schema: { type: "object", required: ["diagnostic_assignment_claim", "transition"] },
+    supported_modes: ["live"],
+    preconditions: ["assignment_unclaimed_and_current", "material_currently_available",
+      "authorization_signature_current_and_exact", "dispatcher_and_runner_audiences_match"],
+    outcomes: ["assignment_claimed", "worker_run_bound_not_launched", "command_replayed",
+      "competing_claim_rejected"],
+    issues: ["DIAGNOSTIC_DISPATCH_AUTHORIZATION_INVALID",
+      "DIAGNOSTIC_DISPATCH_AUTHORIZATION_EXPIRED",
+      "DIAGNOSTIC_DISPATCH_AUTHORIZATION_BINDING_MISMATCH",
+      "DIAGNOSTIC_ASSIGNMENT_CLAIM_CONFLICT",
+      "DIAGNOSTIC_EVIDENCE_PACKAGE_MATERIAL_UNAVAILABLE"],
+    emitted_events: ["diagnostic.assignment.claimed"],
+    next_operations: ["diagnostic.worker_run.get"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.worker_run.get",
+    summary: "Inspect one immutable claimed Worker Run boundary and its separately fenced launch state.",
+    path: "/diagnostic/v0/worker-runs/{worker_run_id}",
+    idName: "worker_run_id",
+    resultKey: "diagnostic_worker_run",
+    issues: ["DIAGNOSTIC_WORKER_RUN_NOT_FOUND", "DIAGNOSTIC_WORKER_RUN_INTEGRITY_VIOLATION"]
+  }),
   readDescriptor({
     operationId: "diagnostic.evidence_package_assignment.get",
     summary: "Inspect the deterministic initial Assignment created from one frozen Evidence Package event.",

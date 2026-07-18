@@ -48,6 +48,8 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.assignment_policy_activation.activate",
     "diagnostic.assignment_policy_activation.get",
     "diagnostic.assignment.get",
+    "diagnostic.assignment.claim",
+    "diagnostic.worker_run.get",
     "diagnostic.evidence_package_assignment.get",
     "diagnostic.evidence_package_assignment_status.get",
     "diagnostic.assignment_verification_material.get",
@@ -103,6 +105,19 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     assert.ok(Array.isArray(operation.emitted_events));
     assert.ok(Array.isArray(operation.next_operations));
   }
+});
+
+test("Diagnostic dispatch consumes exact Kernel authority without launching work", () => {
+  const claim = getDiagnosticOperationDescriptor("diagnostic.assignment.claim");
+  assert.equal(claim.authority_class,
+    "exact_signed_kernel_dispatch_authorization_and_bound_dispatcher");
+  assert.equal(claim.effect_class, "diagnostic_assignment_claim_and_worker_run_binding");
+  assert.ok(claim.preconditions.includes("material_currently_available"));
+  assert.ok(claim.outcomes.includes("worker_run_bound_not_launched"));
+  assert.doesNotMatch(JSON.stringify(claim), /provider_credential|ambient_egress/i);
+
+  const run = getDiagnosticOperationDescriptor("diagnostic.worker_run.get");
+  assert.equal(run.effect_class, "read_only");
 });
 
 test("Diagnostic Worker protocol is advisory, provenance-bound, and authority-free", () => {

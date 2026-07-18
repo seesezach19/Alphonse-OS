@@ -36,6 +36,8 @@ import { createDiagnosticEffectEvaluationService } from "./diagnostic-effect-eva
 import { createDiagnosticEvidencePackageService } from "./diagnostic-evidence-package-service.js";
 import { createIndependentDiagnosticVerificationService } from "./independent-diagnostic-verification-service.js";
 import { createDiagnosticAssignmentService } from "./diagnostic-assignment-service.js";
+import { createDiagnosticDispatchAuthorizationService } from "./diagnostic-dispatch-authorization-service.js";
+import { createDiagnosticDispatchService } from "./diagnostic-dispatch-service.js";
 import { createDiagnosticMaterialAvailabilityService } from "./diagnostic-material-availability-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
@@ -127,6 +129,13 @@ const tokenizationGrantApplicationSecret = process.env.TOKENIZATION_GRANT_APPLIC
 const tokenizationServiceKeyId = process.env.TOKENIZATION_SERVICE_SIGNING_KEY_ID;
 const tokenizationServicePublicKeyDer = process.env.TOKENIZATION_SERVICE_PUBLIC_KEY_DER_BASE64;
 const diagnosticTokenizationResultToken = process.env.DIAGNOSTIC_TOKENIZATION_RESULT_TOKEN;
+const diagnosticDispatchSigningKeyId = process.env.KERNEL_DIAGNOSTIC_DISPATCH_SIGNING_KEY_ID
+  ?? "local-diagnostic-dispatch-key-v1";
+const diagnosticDispatchSigningSecret = process.env.KERNEL_DIAGNOSTIC_DISPATCH_SIGNING_SECRET;
+const diagnosticDispatcherAudience = process.env.DIAGNOSTIC_DISPATCHER_AUDIENCE
+  ?? "diagnostic-dispatcher:v0.1";
+const diagnosticRunnerAudiences = JSON.parse(process.env.DIAGNOSTIC_RUNNER_AUDIENCES
+  ?? JSON.stringify(["diagnostic-runner:v0.1"]));
 
 if (!databaseUrl) throw new Error("DATABASE_URL is required.");
 if (!bootstrapToken) throw new Error("KERNEL_BOOTSTRAP_TOKEN is required.");
@@ -160,10 +169,15 @@ let diagnosticEvidencePackageService = null;
 let diagnosticIndependentVerificationService = null;
 let diagnosticAssignmentService = null;
 let diagnosticMaterialAvailabilityService = null;
+let diagnosticDispatchService = null;
+let diagnosticDispatchAuthorizationService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
     throw new Error("Diagnostic Runtime Adapter binding is required when the Diagnostic Plane is configured.");
+  }
+  if (!diagnosticDispatchSigningSecret) {
+    throw new Error("Diagnostic dispatch signing configuration is required with the Diagnostic Plane.");
   }
   diagnosticDatabase = createDiagnosticDatabase(diagnosticDatabaseUrl);
   await diagnosticDatabase.migrate();
@@ -424,6 +438,27 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     resolveDeploymentExports: resolveDeployedExports,
     materialAuthority: diagnosticMaterialAvailabilityService
   });
+  diagnosticDispatchService = createDiagnosticDispatchService({
+    database: diagnosticDatabase,
+    installationId,
+    environmentId,
+    materialAuthority: diagnosticMaterialAvailabilityService,
+    signingKeyId: diagnosticDispatchSigningKeyId,
+    signingSecret: diagnosticDispatchSigningSecret,
+    dispatcherAudience: diagnosticDispatcherAudience,
+    allowedRunnerAudiences: diagnosticRunnerAudiences
+  });
+  diagnosticDispatchAuthorizationService = createDiagnosticDispatchAuthorizationService({
+    database,
+    identityIntent,
+    eligibilityReader: diagnosticDispatchService,
+    installationId,
+    environmentId,
+    signingKeyId: diagnosticDispatchSigningKeyId,
+    signingSecret: diagnosticDispatchSigningSecret,
+    dispatcherAudience: diagnosticDispatcherAudience,
+    allowedRunnerAudiences: diagnosticRunnerAudiences
+  });
   diagnosticEvidencePackageService.startRevisionMonitor();
   diagnosticAssignmentService.start();
 }
@@ -631,6 +666,22 @@ function requireDiagnosticAssignment() {
       "Diagnostic Assignment Service is not configured.");
   }
   return diagnosticAssignmentService;
+}
+
+function requireDiagnosticDispatch() {
+  if (!diagnosticDispatchService) {
+    throw new KernelError(503, "DIAGNOSTIC_DISPATCH_SERVICE_UNAVAILABLE",
+      "Diagnostic dispatch and claim service is not configured.");
+  }
+  return diagnosticDispatchService;
+}
+
+function requireDiagnosticDispatchAuthority() {
+  if (!diagnosticDispatchAuthorizationService) {
+    throw new KernelError(503, "DIAGNOSTIC_DISPATCH_AUTHORITY_UNAVAILABLE",
+      "Kernel Diagnostic Dispatch Authority is not configured.");
+  }
+  return diagnosticDispatchAuthorizationService;
 }
 
 function requireIndependentDiagnosticVerification() {
@@ -1046,6 +1097,26 @@ async function route(request, response) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { diagnostic_assignment: await service.getAssignment(
       pathId(url.pathname, "/diagnostic/v0/assignments/")) });
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/assignments\/[^/]+\/claim$/.test(url.pathname)) {
+    const service = requireDiagnosticDispatch();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.assignment.claim");
+    const body = await readJson(request, 256 * 1024);
+    const assignmentId = decodeURIComponent(url.pathname.split("/").at(-2));
+    if (body?.input?.assignment_id !== assignmentId) {
+      throw new KernelError(409, "DIAGNOSTIC_DISPATCH_ASSIGNMENT_ROUTE_MISMATCH",
+        "Route Assignment ID must match the claim command input.");
+    }
+    return sendCommandResult(response, await service.claim(body, actor));
+  }
+
+  if (request.method === "GET" && /^\/diagnostic\/v0\/worker-runs\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticDispatch();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnostic_worker_run: await service.getWorkerRun(
+      pathId(url.pathname, "/diagnostic/v0/worker-runs/")) });
   }
 
   if (request.method === "GET"
@@ -1520,6 +1591,22 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname === "/kernel/v0/environments/current") {
     return sendJson(response, 200, serializeEnvironment(await database.getEnvironment(installationId, environmentId)));
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/diagnostic-dispatch-authorizations") {
+    const service = requireDiagnosticDispatchAuthority();
+    const actor = await authenticateDiagnosticOwner(request, "kernel.diagnostic_dispatch.authorize");
+    return sendCommandResult(response,
+      await service.authorize(await readJson(request, 256 * 1024), actor));
+  }
+
+  if (request.method === "GET"
+      && /^\/kernel\/v0\/diagnostic-dispatch-authorizations\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticDispatchAuthority();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnostic_dispatch_authorization:
+      await service.getAuthorization(pathId(url.pathname,
+        "/kernel/v0/diagnostic-dispatch-authorizations/")) });
   }
 
   if (request.method === "POST" && url.pathname === "/kernel/v0/commands") {

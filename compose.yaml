@@ -81,6 +81,10 @@ services:
       TOKENIZATION_SERVICE_SIGNING_KEY_ID: local-tokenization-service-ed25519-v1
       TOKENIZATION_SERVICE_PUBLIC_KEY_DER_BASE64: MCowBQYDK2VwAyEAd3J+TM4tUSgFYA35F1emcJ2zGrmunrS8ynmYe6aCCYE=
       DIAGNOSTIC_TOKENIZATION_RESULT_TOKEN: local-tokenization-result-submission-token
+      KERNEL_DIAGNOSTIC_DISPATCH_SIGNING_KEY_ID: local-diagnostic-dispatch-key-v1
+      KERNEL_DIAGNOSTIC_DISPATCH_SIGNING_SECRET: local-diagnostic-dispatch-signing-secret-with-sufficient-length-v1
+      DIAGNOSTIC_DISPATCHER_AUDIENCE: diagnostic-dispatcher:v0.1
+      DIAGNOSTIC_RUNNER_AUDIENCES: '["diagnostic-runner:v0.1"]'
       VERIFICATION_RUNNER_ID: 00000000-0000-4000-8000-000000000700
       VERIFICATION_RUNNER_VERSION: 0.2.0
       VERIFICATION_FIXTURE_VERSION: inventory-v1

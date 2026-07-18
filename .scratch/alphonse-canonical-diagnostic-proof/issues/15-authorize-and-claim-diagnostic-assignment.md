@@ -6,18 +6,22 @@ authority to the unclaimed Diagnostic Assignment and one Worker Run without laun
 **Blocked by:** 12 - Create the model-free unclaimed diagnostic assignment; 14 - Erase evidence and enforce material
 availability.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Accept a dispatch candidate binding assignment and package digests, worker Principal and Passport, Worker Run,
+- [x] Accept a dispatch candidate binding assignment and package digests, worker Principal and Passport, Worker Run,
       image, isolation, mount, network, model, broker, resources, classification, egress, and expiry.
-- [ ] Have Kernel verify assignment state and expiry, exact digests, active Passport scope, zero external-effect
+- [x] Have Kernel verify assignment state and expiry, exact digests, active Passport scope, zero external-effect
       authority, runner controls, data and model policy, resource ceilings, and evidence availability.
-- [ ] Issue one short-lived, audience-bound, single-use Diagnostic Dispatch Authorization containing an unguessable
+- [x] Issue one short-lived, audience-bound, single-use Diagnostic Dispatch Authorization containing an unguessable
       nonce and every authorized runtime boundary.
-- [ ] Keep Kernel authority state limited to Diagnostic Plane identifiers and digests rather than evidence bytes.
-- [ ] Atomically consume authorization, transition assignment `unclaimed -> claimed`, and create the exact Worker Run
+- [x] Keep Kernel authority state limited to Diagnostic Plane identifiers and digests rather than evidence bytes.
+- [x] Atomically consume authorization, transition assignment `unclaimed -> claimed`, and create the exact Worker Run
       record through the Diagnostic Plane claim endpoint.
-- [ ] Permit only one competing claimant and make stale, replayed, expired, mismatched, or already-consumed authority
+- [x] Permit only one competing claimant and make stale, replayed, expired, mismatched, or already-consumed authority
       fail before any launch or broker access.
-- [ ] Require a new immutable assignment and authority decision for retry rather than returning work to `unclaimed`.
-- [ ] Confirm this checkpoint creates no container, model-broker token, provider request, or diagnosis.
+- [x] Require a new immutable assignment and authority decision for retry rather than returning work to `unclaimed`.
+- [x] Confirm this checkpoint creates no container, model-broker token, provider request, or diagnosis.
+
+Acceptance: `npm run test:canonical-proof:ticket-15` passes on fresh Docker volumes, including the material-fence race,
+two otherwise-valid competing authorizations, exactly one immutable consumption and Worker Run, stale and tampered
+authority denial, idempotent command replay, immutable records, and zero launch/model/broker/diagnosis effects.

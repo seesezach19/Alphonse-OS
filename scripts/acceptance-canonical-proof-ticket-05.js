@@ -25,9 +25,10 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
+const through15 = process.argv.includes("--through-15");
 const through14 = process.argv.includes("--through-14");
 const through13 = through14 || process.argv.includes("--through-13");
-const through12 = through13 || process.argv.includes("--through-12");
+const through12 = through15 || through13 || process.argv.includes("--through-12");
 const through11 = through12 || process.argv.includes("--through-11");
 const through10 = through11 || process.argv.includes("--through-10");
 const through09 = through10 || process.argv.includes("--through-09");
@@ -950,6 +951,7 @@ try {
         let replacementVerificationMaterial = null;
         let lateObservationCounts = null;
         let materialErasure = null;
+        let dispatchClaim = null;
         let finalCollection = initialCollection;
         if (through10) {
           const frozen = await post("/diagnostic/v0/evidence-collections/process", {
@@ -1823,11 +1825,310 @@ try {
               physical_reorder_verified: true };
           }
         }
+        if (through15) {
+          assert.ok(diagnosticAssignment, "Ticket 15 requires the exact Test 1 Assignment");
+          assert.equal(diagnosticAssignment.state.current, "unclaimed");
+          const requirements = diagnosticAssignment.assignment.work_requirements;
+          const model = {
+            provider: "openai",
+            model: "frontier-diagnostic",
+            version: "pinned-v1",
+            capability_class: requirements.model.capability_class
+          };
+          const broker = {
+            broker_id: "model-broker:customer-local",
+            policy_id: "broker-policy:canonical-diagnostic",
+            policy_version: "0.1.0",
+            audience: "diagnostic-model-broker:v0.1",
+            max_requests: 1,
+            max_input_units: 20000,
+            max_output_units: 4000,
+            access_delivery: "after_claim_only"
+          };
+          const dataPolicy = {
+            classification: requirements.data_classification,
+            residency: "customer_controlled_installation",
+            evidence_scope: requirements.disclosure.evidence_scope,
+            provider_training: requirements.disclosure.provider_training
+          };
+          const egressPolicy = {
+            mode: requirements.network.mode,
+            general_egress: false,
+            allowed_destination_audience: broker.audience
+          };
+          const runtime = {
+            kind: requirements.runtime.kind,
+            image: {
+              reference: `local/alphonse-diagnostic-worker@sha256:${"a".repeat(64)}`,
+              digest: `sha256:${"a".repeat(64)}`
+            },
+            runner: {
+              runner_id: "diagnostic-runner:canonical",
+              runner_version: "0.1.0",
+              audience: "diagnostic-runner:v0.1"
+            },
+            isolation: structuredClone(requirements.isolation),
+            mounts: structuredClone(requirements.mounts),
+            network: structuredClone(requirements.network)
+          };
+          const passportRuntime = { ...structuredClone(runtime),
+            resources: structuredClone(requirements.resources) };
+          const passportModel = { ...structuredClone(model), broker: structuredClone(broker) };
+          const passportProfile = {
+            diagnostic_worker_profile: {
+              schema_version: "alphonse.diagnostic-worker-passport-profile.v0.1",
+              passport_class: requirements.required_passport_class,
+              capabilities: structuredClone(requirements.required_worker_capabilities),
+              prohibitions: structuredClone(requirements.prohibitions),
+              data_policy: structuredClone(dataPolicy),
+              egress_policy: structuredClone(egressPolicy)
+            }
+          };
+
+          const kernelDb = new pg.Client({ connectionString:
+            "postgresql://alphonse:local-development-only@127.0.0.1:45505/alphonse_kernel" });
+          await kernelDb.connect();
+          let sponsorPrincipalId;
+          try {
+            sponsorPrincipalId = (await kernelDb.query(
+              "SELECT principal_id FROM kernel_principals WHERE principal_type='human' LIMIT 1"
+            )).rows[0].principal_id;
+          } finally { await kernelDb.end(); }
+          const workerPrincipal = await post("/kernel/v0/principals", command(
+            "kernel.principal.create", {
+              principal_type: "agent",
+              display_name: "Canonical Diagnostic Interpreter"
+            }));
+          assert.equal(workerPrincipal.response.status, 201, JSON.stringify(workerPrincipal.body));
+          const now = Date.now();
+          const assignmentExpiry = Date.parse(diagnosticAssignment.assignment.temporal.expires_at);
+          const passportExpiry = Math.min(assignmentExpiry, now + 30 * 60_000);
+          const runExpiry = Math.min(passportExpiry, now + 15 * 60_000);
+          assert.ok(runExpiry > now + 5 * 60_000,
+            "Assignment must leave enough time for short-lived dispatch proof");
+          const workerPassport = await post("/kernel/v0/agent-passports", command(
+            "kernel.agent_passport.issue", {
+              agent_principal_id: workerPrincipal.body.principal.principal_id,
+              sponsor_principal_id: sponsorPrincipalId,
+              runtime: passportRuntime,
+              model_configuration: passportModel,
+              package_skill_configuration: passportProfile,
+              agent_authentication_token:
+                "canonical-diagnostic-worker-passport-token-ticket-15-0001",
+              permitted_intent_classes: ["diagnostic_analysis"],
+              provenance: { source: "canonical-diagnostic-proof-ticket-15" },
+              valid_from: new Date(now - 60_000).toISOString(),
+              expires_at: new Date(passportExpiry).toISOString()
+            }));
+          assert.equal(workerPassport.response.status, 201, JSON.stringify(workerPassport.body));
+          const passport = workerPassport.body.passport;
+          const assignmentBinding = {
+            assignment_id: diagnosticAssignment.assignment_id,
+            assignment_digest: diagnosticAssignment.assignment_digest,
+            evidence_package_id: diagnosticAssignment.evidence_package_id,
+            evidence_package_semantic_digest:
+              diagnosticAssignment.assignment.evidence_package.semantic_digest,
+            evidence_package_artifact_digest:
+              diagnosticAssignment.assignment.evidence_package.package_artifact_digest,
+            assignment_policy_activation_id:
+              diagnosticAssignment.assignment_policy_activation_id,
+            assignment_policy_activation_digest:
+              diagnosticAssignment.assignment.assignment_policy.activation_digest
+          };
+          const candidateBase = {
+            schema_version: "alphonse.diagnostic-dispatch-candidate.v0.1",
+            assignment: assignmentBinding,
+            worker: {
+              principal_id: passport.agent_principal_id,
+              passport_id: passport.passport_id,
+              passport_configuration_digest: passport.configuration_digest,
+              passport_class: requirements.required_passport_class
+            },
+            runtime,
+            model,
+            broker,
+            resources: structuredClone(requirements.resources),
+            data_policy: dataPolicy,
+            egress_policy: egressPolicy,
+            dispatcher_audience: "diagnostic-dispatcher:v0.1",
+            authorization_expires_at: new Date(now + 3 * 60_000).toISOString()
+          };
+          const invalidAudience = await post("/kernel/v0/diagnostic-dispatch-authorizations",
+            command("kernel.diagnostic_dispatch.authorize", {
+              candidate: { ...structuredClone(candidateBase),
+                worker_run: { worker_run_id: randomUUID(),
+                  expires_at: new Date(runExpiry).toISOString() },
+                dispatcher_audience: "diagnostic-dispatcher:untrusted" }
+            }));
+          assert.equal(invalidAudience.response.status, 409, JSON.stringify(invalidAudience.body));
+          assert.equal(invalidAudience.body.error.code, "DIAGNOSTIC_DISPATCH_AUDIENCE_MISMATCH");
+
+          const authorize = async () => post("/kernel/v0/diagnostic-dispatch-authorizations",
+            command("kernel.diagnostic_dispatch.authorize", {
+              candidate: { ...structuredClone(candidateBase),
+                worker_run: { worker_run_id: randomUUID(),
+                  expires_at: new Date(runExpiry).toISOString() } }
+            }));
+          const authorizationResults = [await authorize(), await authorize()];
+          for (const authorized of authorizationResults) {
+            assert.equal(authorized.response.status, 201, JSON.stringify(authorized.body));
+            const value = authorized.body.diagnostic_dispatch_authorization;
+            assert.equal(value.issuance_state, "issued");
+            assert.equal(value.consumption_state, "diagnostic_plane_owned_not_mirrored");
+            assert.equal(value.authority.external_business_effects, "none");
+            assert.equal(value.authority.broker_token, "not_created");
+            assert.equal(value.authority.container_launch, "not_performed");
+            const read = await kernel(`/kernel/v0/diagnostic-dispatch-authorizations/${
+              value.dispatch_authorization_id}`);
+            assert.equal(read.response.status, 200, JSON.stringify(read.body));
+            assert.equal(read.body.diagnostic_dispatch_authorization.authorization_digest,
+              value.authorization_digest);
+          }
+
+          const firstSigned = authorizationResults[0].body
+            .diagnostic_dispatch_authorization.signed_authorization;
+          const tamperedSigned = structuredClone(firstSigned);
+          const finalCharacter = tamperedSigned.signature.at(-1);
+          tamperedSigned.signature = `${tamperedSigned.signature.slice(0, -1)}${
+            finalCharacter === "0" ? "1" : "0"}`;
+          const tamperedClaim = await post(`/diagnostic/v0/assignments/${
+            diagnosticAssignment.assignment_id}/claim`, command("diagnostic.assignment.claim", {
+            assignment_id: diagnosticAssignment.assignment_id,
+            signed_authorization: tamperedSigned
+          }));
+          assert.equal(tamperedClaim.response.status, 403, JSON.stringify(tamperedClaim.body));
+          assert.equal(tamperedClaim.body.error.code,
+            "DIAGNOSTIC_DISPATCH_AUTHORIZATION_INVALID");
+
+          const claimCommands = authorizationResults.map((authorized) => command(
+            "diagnostic.assignment.claim", {
+              assignment_id: diagnosticAssignment.assignment_id,
+              signed_authorization:
+                authorized.body.diagnostic_dispatch_authorization.signed_authorization
+            }));
+          const materialDb = new pg.Client({ connectionString:
+            "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+          await materialDb.connect();
+          let claimResults;
+          try {
+            const installation = (await materialDb.query(
+              "SELECT installation_id FROM diagnostic_nodes LIMIT 1"
+            )).rows[0].installation_id;
+            await materialDb.query("BEGIN");
+            await materialDb.query(
+              "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+              [`diagnostic-material-mutation:${installation}`]
+            );
+            let settledClaims = 0;
+            const pendingClaims = claimCommands.map((claimCommand) => post(
+              `/diagnostic/v0/assignments/${diagnosticAssignment.assignment_id}/claim`,
+              claimCommand).then((value) => { settledClaims += 1; return value; }));
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            assert.equal(settledClaims, 0,
+              "assignment claim must wait on the material mutation fence");
+            await materialDb.query("ROLLBACK");
+            claimResults = await Promise.all(pendingClaims);
+          } finally {
+            await materialDb.query("ROLLBACK").catch(() => {});
+            await materialDb.end();
+          }
+          const winningIndex = claimResults.findIndex((result) => result.response.status === 201);
+          const losingIndex = winningIndex === 0 ? 1 : 0;
+          assert.notEqual(winningIndex, -1, JSON.stringify(claimResults.map((item) => item.body)));
+          assert.equal(claimResults.filter((result) => result.response.status === 201).length, 1);
+          assert.equal(claimResults[losingIndex].response.status, 409,
+            JSON.stringify(claimResults[losingIndex].body));
+          assert.equal(claimResults[losingIndex].body.error.code,
+            "DIAGNOSTIC_ASSIGNMENT_CLAIM_CONFLICT");
+          const winningClaim = claimResults[winningIndex].body.diagnostic_assignment_claim;
+          assert.equal(winningClaim.assignment.state, "claimed");
+          assert.equal(winningClaim.worker_run.state.current, "claimed_not_launched");
+          assert.equal(winningClaim.container_created, false);
+          assert.equal(winningClaim.broker_token_created, false);
+          assert.equal(winningClaim.provider_request_created, false);
+          assert.equal(winningClaim.model_request_created, false);
+          assert.equal(winningClaim.diagnosis_created, false);
+
+          const replayedClaim = await post(`/diagnostic/v0/assignments/${
+            diagnosticAssignment.assignment_id}/claim`, claimCommands[winningIndex]);
+          assert.equal(replayedClaim.response.status, 200, JSON.stringify(replayedClaim.body));
+          assert.equal(replayedClaim.response.headers.get("idempotent-replayed"), "true");
+          assert.equal(replayedClaim.body.diagnostic_assignment_claim.worker_run.worker_run_id,
+            winningClaim.worker_run.worker_run_id);
+          const staleClaim = await post(`/diagnostic/v0/assignments/${
+            diagnosticAssignment.assignment_id}/claim`, command("diagnostic.assignment.claim", {
+            assignment_id: diagnosticAssignment.assignment_id,
+            signed_authorization: authorizationResults[losingIndex].body
+              .diagnostic_dispatch_authorization.signed_authorization
+          }));
+          assert.equal(staleClaim.response.status, 409, JSON.stringify(staleClaim.body));
+          assert.equal(staleClaim.body.error.code, "DIAGNOSTIC_ASSIGNMENT_CLAIM_CONFLICT");
+
+          const [claimedAssignment, workerRun] = await Promise.all([
+            kernel(`/diagnostic/v0/assignments/${diagnosticAssignment.assignment_id}`),
+            kernel(`/diagnostic/v0/worker-runs/${winningClaim.worker_run.worker_run_id}`)
+          ]);
+          assert.equal(claimedAssignment.response.status, 200, JSON.stringify(claimedAssignment.body));
+          assert.equal(claimedAssignment.body.diagnostic_assignment.state.current, "claimed");
+          assert.equal(claimedAssignment.body.diagnostic_assignment.state.revision, "1");
+          assert.equal(workerRun.response.status, 200, JSON.stringify(workerRun.body));
+          assert.equal(workerRun.body.diagnostic_worker_run.state.current, "claimed_not_launched");
+          assert.equal(workerRun.body.diagnostic_worker_run.launch_state, "not_launched");
+          assert.equal(workerRun.body.diagnostic_worker_run.broker_token_created, false);
+
+          const diagnosticDb = new pg.Client({ connectionString:
+            "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+          await diagnosticDb.connect();
+          try {
+            const counts = (await diagnosticDb.query(
+              `SELECT
+                (SELECT COUNT(*)::int FROM diagnostic_dispatch_authorization_consumptions) AS consumptions,
+                (SELECT COUNT(*)::int FROM diagnostic_worker_runs) AS worker_runs,
+                (SELECT COUNT(*)::int FROM diagnostic_diagnosis_requests) AS diagnosis_requests`
+            )).rows[0];
+            assert.deepEqual(counts, { consumptions: 1, worker_runs: 1, diagnosis_requests: 0 });
+            await assert.rejects(diagnosticDb.query(
+              "UPDATE diagnostic_dispatch_authorization_consumptions SET consumed_by_id='tampered' WHERE dispatch_authorization_id=$1",
+              [winningClaim.dispatch_authorization_id]), /immutable records cannot be updated/u);
+            await assert.rejects(diagnosticDb.query(
+              "UPDATE diagnostic_assignment_states SET state='unclaimed',state_revision=2 WHERE assignment_id=$1",
+              [diagnosticAssignment.assignment_id]), /assignment state transition is invalid/u);
+          } finally { await diagnosticDb.end(); }
+          const authorityDb = new pg.Client({ connectionString:
+            "postgresql://alphonse:local-development-only@127.0.0.1:45505/alphonse_kernel" });
+          await authorityDb.connect();
+          try {
+            const count = (await authorityDb.query(
+              "SELECT COUNT(*)::int AS authorizations FROM kernel_diagnostic_dispatch_authorizations"
+            )).rows[0];
+            assert.deepEqual(count, { authorizations: 2 });
+            await assert.rejects(authorityDb.query(
+              "UPDATE kernel_diagnostic_dispatch_authorizations SET dispatcher_audience='tampered' WHERE dispatch_authorization_id=$1",
+              [winningClaim.dispatch_authorization_id]),
+            /immutable Kernel record cannot be updated/u);
+          } finally { await authorityDb.end(); }
+
+          diagnosticAssignment = claimedAssignment.body.diagnostic_assignment;
+          dispatchClaim = {
+            dispatch_authorization_id: winningClaim.dispatch_authorization_id,
+            authorization_digest: winningClaim.authorization_digest,
+            worker_run_id: winningClaim.worker_run.worker_run_id,
+            assignment_state: diagnosticAssignment.state.current,
+            worker_run_state: workerRun.body.diagnostic_worker_run.state.current,
+            material_fence_observed: true,
+            competing_claim_rejected: true,
+            replay_idempotent: true,
+            authority_rows: 2,
+            consumption_rows: 1,
+            model_requests: 0,
+            adversarial_cases: 8
+          };
+        }
         interpretation = { activation, evidencePolicyActivation, assignmentPolicyActivation,
           effectProjection, evaluation, trigger, diagnosticCase, finalCollection, evidencePackage,
           diagnosticAssignment, assignmentVerificationMaterial, evidenceRevision,
           replacementAssignment, replacementVerificationMaterial, lateObservationCounts,
-          independentVerification, materialErasure };
+          independentVerification, materialErasure, dispatchClaim };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -1848,7 +2149,8 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through14 ? "canonical-diagnostic-proof-14"
+    schema_version: "0.1.0", ticket: through15 ? "canonical-diagnostic-proof-15"
+      : through14 ? "canonical-diagnostic-proof-14"
       : through13 ? "canonical-diagnostic-proof-13"
       : through12 ? "canonical-diagnostic-proof-12"
       : through11 ? "canonical-diagnostic-proof-11"
@@ -1856,7 +2158,9 @@ try {
       : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through14 ? "revoked_visible_and_verifiably_erased_material"
+    status: "passed", completed_capability: through15
+      ? "signed_single_use_diagnostic_dispatch_and_atomic_claim"
+      : through14 ? "revoked_visible_and_verifiably_erased_material"
       : through13 ? "material_evidence_revision_and_bounded_reassignment"
       : through12 ? "model_free_unclaimed_diagnostic_assignment"
       : through11 ? "independently_recomputed_diagnostic_lineage"
@@ -1918,7 +2222,14 @@ try {
         "new_verification_and_revision_authority_blocked",
         "crash_after_byte_loss_recovers_as_already_absent",
         "local_cas_deletion_verified_by_tombstone", "deletion_completion_is_idempotent",
-        "universal_deletion_not_established"] : [])],
+        "universal_deletion_not_established"] : []),
+      ...(through15 ? ["exact_dispatch_candidate_kernel_validated",
+        "active_closed_worker_passport_bound", "signed_short_lived_audience_bound_authorization",
+        "kernel_issuance_does_not_claim_cross_plane_consumption",
+        "diagnostic_plane_atomic_single_use_consumption", "material_fence_blocks_claim",
+        "one_competing_claimant_wins", "claimed_worker_run_not_launched",
+        "no_container_broker_token_provider_request_model_request_or_diagnosis",
+        "claim_replay_is_idempotent", "immutable_authority_and_consumption_records"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
@@ -1979,7 +2290,21 @@ try {
       extendedResult?.interpretation?.materialErasure?.adversarial_cases ?? 0,
     universal_deletion_established:
       extendedResult?.interpretation?.materialErasure?.universal_deletion_established ?? null,
-    model_requests: 0, worker_run_created: false
+    dispatch_authorization_id:
+      extendedResult?.interpretation?.dispatchClaim?.dispatch_authorization_id ?? null,
+    dispatch_authorization_digest:
+      extendedResult?.interpretation?.dispatchClaim?.authorization_digest ?? null,
+    diagnostic_worker_run_id:
+      extendedResult?.interpretation?.dispatchClaim?.worker_run_id ?? null,
+    diagnostic_worker_run_state:
+      extendedResult?.interpretation?.dispatchClaim?.worker_run_state ?? null,
+    diagnostic_dispatch_authority_rows:
+      extendedResult?.interpretation?.dispatchClaim?.authority_rows ?? 0,
+    diagnostic_dispatch_consumption_rows:
+      extendedResult?.interpretation?.dispatchClaim?.consumption_rows ?? 0,
+    diagnostic_dispatch_adversarial_cases:
+      extendedResult?.interpretation?.dispatchClaim?.adversarial_cases ?? 0,
+    model_requests: 0, worker_run_created: Boolean(extendedResult?.interpretation?.dispatchClaim)
   }, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`\n--- Ticket 05 service logs ---\n${compose("logs", "--no-color",

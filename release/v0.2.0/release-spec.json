@@ -50,7 +50,8 @@
     "019_upgrade_verification_reattestation.sql",
     "020_environment_restore.sql",
     "021_support_coordination.sql",
-    "022_grant_authority_application.sql"
+    "022_grant_authority_application.sql",
+    "023_diagnostic_dispatch_authority.sql"
   ],
   "diagnostic_migrations": [
     "001_bootstrap.sql",
@@ -73,7 +74,8 @@
     "018_independent_diagnostic_verification.sql",
     "019_model_free_diagnostic_assignments.sql",
     "020_material_evidence_revisions.sql",
-    "021_material_availability_and_erasure.sql"
+    "021_material_availability_and_erasure.sql",
+    "022_diagnostic_dispatch_claims.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

@@ -32,6 +32,17 @@ test("returned descriptors cannot mutate the catalog", () => {
   assert.notEqual(getOperationDescriptor("kernel.environment.profile.update").summary, "mutated");
 });
 
+test("Kernel dispatch authority is exact, single-use, and does not claim consumption", () => {
+  const authorize = getOperationDescriptor("kernel.diagnostic_dispatch.authorize");
+  assert.equal(authorize.effect_class, "single_use_diagnostic_dispatch_authority");
+  assert.ok(authorize.preconditions.includes("zero_external_effect_authority"));
+  assert.ok(authorize.outcomes.includes("diagnostic_dispatch_authorized"));
+
+  const read = getOperationDescriptor("kernel.diagnostic_dispatch_authorization.get");
+  assert.equal(read.effect_class, "read_only");
+  assert.match(read.summary, /without pretending Diagnostic Plane consumption/u);
+});
+
 test("governed context descriptors expose exact identifiers and grant fields", () => {
   const issue = getOperationDescriptor("kernel.context_access_grant.issue");
   assert.ok(issue.input_schema.properties.input.required.includes("passport_id"));
