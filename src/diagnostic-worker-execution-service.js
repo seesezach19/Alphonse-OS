@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
 import {
-  claimIdsFromWorkerInput,
+  citationIndexFromWorkerInput,
   DIAGNOSTIC_BROKER_GRANT_SCHEMA,
   DIAGNOSTIC_BROKER_RECEIPT_SCHEMA,
   DIAGNOSTIC_WORKER_INPUT_SCHEMA,
@@ -170,7 +170,7 @@ function validateRuntimeBoundary(attestation, runtimeBoundary, inputDigest, phas
 
 export function createDiagnosticWorkerExecutionService({ database, artifactStore,
   materialAuthority, installationId, environmentId, brokerGrantSigning,
-  brokerReceiptSigning, runnerSigning }) {
+  brokerReceiptSigning, runnerSigning, consistencyEvaluator = null }) {
   const { pool, executeCommand } = database;
 
   async function loadRun(client, workerRunId, forUpdate = false) {
@@ -283,6 +283,10 @@ export function createDiagnosticWorkerExecutionService({ database, artifactStore
             external_business_effects: "none", repair: "none" }
         };
         const signedGrant = signDiagnosticRuntimeDocument(grant, brokerGrantSigning);
+        const consistencyConfiguration = consistencyEvaluator
+          ? await consistencyEvaluator.recordLaunchConfiguration(client, {
+            run, inputDocument: input, acceptedAt
+          }) : null;
         await client.query(
           `INSERT INTO diagnostic_worker_run_launches
             (launch_id,installation_id,environment_id,worker_run_id,worker_run_digest,
@@ -310,6 +314,7 @@ export function createDiagnosticWorkerExecutionService({ database, artifactStore
             worker_run_digest: run.worker_run_digest, input_digest: inputDigest,
             worker_input: input, signed_broker_grant: signedGrant,
             runtime_boundary: runtimeBoundary, issued_at: acceptedAt, expires_at: expiresAt,
+            consistency_configuration: consistencyConfiguration,
             state: "launching", provider_credential_disclosed: false,
             external_business_effect_authority: "none"
           } }
@@ -426,7 +431,7 @@ export function createDiagnosticWorkerExecutionService({ database, artifactStore
           fail(400, "DIAGNOSTIC_WORKER_OUTPUT_INVALID", "Worker output envelope is unsupported.");
         }
         const diagnosis = validateDiagnosticWorkerOutput(envelope.diagnosis,
-          claimIdsFromWorkerInput(launch.input_document));
+          citationIndexFromWorkerInput(launch.input_document));
         const brokerVerified = verifyBrokerReceipt(envelope.signed_broker_receipt,
           brokerReceiptSigning);
         const receipt = brokerVerified.document;
@@ -474,6 +479,21 @@ export function createDiagnosticWorkerExecutionService({ database, artifactStore
             outputDigest, receipt.receipt_id, receipt, envelope.signed_broker_receipt,
             sha256Digest(envelope.signed_broker_receipt), actor.type, actor.id, acceptedAt]
         );
+        const consistencyScore = consistencyEvaluator
+          ? await consistencyEvaluator.recordDiagnosisScore(client, {
+            run,
+            launch,
+            completion: {
+              completion_id: completionId,
+              diagnosis_id: diagnosisId,
+              diagnosis_digest: sha256Digest(diagnosis),
+              output_file_digest: outputDigest,
+              completed_at: acceptedAt
+            },
+            diagnosis,
+            brokerReceipt: receipt,
+            finalAttestation: verifiedFinal.document
+          }) : null;
         await transitionState(client, run, state, "completed", transitionId, acceptedAt);
         return {
           aggregateType: "diagnostic_worker_run", aggregateId: workerRunId,
@@ -493,6 +513,7 @@ export function createDiagnosticWorkerExecutionService({ database, artifactStore
               signed_receipt_digest: sha256Digest(envelope.signed_broker_receipt),
               requests: 1, provider_credential_location: "model_broker_only" },
             runtime_provenance: verifiedFinal.document,
+            consistency_score: consistencyScore,
             output_file_digest: outputDigest, output_size_bytes: bytes.length,
             external_business_effects: 0, repair_authority: "none"
           } }
@@ -507,7 +528,8 @@ export function createDiagnosticWorkerExecutionService({ database, artifactStore
       "SELECT * FROM diagnostic_worker_run_launches WHERE worker_run_id=$1", [workerRunId]
     )).rows[0];
     if (!launch) return null;
-    const [start, completion, diagnosis, state] = await Promise.all([
+    const [start, completion, diagnosis, state, consistencyConfiguration, consistencyScore] =
+      await Promise.all([
       pool.query("SELECT * FROM diagnostic_worker_run_starts WHERE worker_run_id=$1", [workerRunId])
         .then((result) => result.rows[0] ?? null),
       pool.query("SELECT * FROM diagnostic_worker_run_completions WHERE worker_run_id=$1", [workerRunId])
@@ -515,7 +537,11 @@ export function createDiagnosticWorkerExecutionService({ database, artifactStore
       pool.query("SELECT * FROM diagnostic_worker_run_diagnoses WHERE worker_run_id=$1", [workerRunId])
         .then((result) => result.rows[0] ?? null),
       pool.query("SELECT * FROM diagnostic_worker_run_states WHERE worker_run_id=$1", [workerRunId])
-        .then((result) => result.rows[0])
+        .then((result) => result.rows[0]),
+      pool.query("SELECT * FROM diagnostic_worker_run_configurations WHERE worker_run_id=$1",
+        [workerRunId]).then((result) => result.rows[0] ?? null),
+      pool.query("SELECT * FROM diagnostic_consistency_scores WHERE worker_run_id=$1",
+        [workerRunId]).then((result) => result.rows[0] ?? null)
     ]);
     if (sha256Digest(launch.input_document) !== launch.input_digest
         || sha256Digest(launch.broker_grant_document) !== launch.broker_grant_digest
@@ -551,6 +577,16 @@ export function createDiagnosticWorkerExecutionService({ database, artifactStore
         document: diagnosis.diagnosis_document,
         broker_receipt_id: diagnosis.broker_receipt_id,
         signed_broker_receipt_digest: diagnosis.signed_broker_receipt_digest } : null,
+      consistency: consistencyConfiguration ? {
+        consistency_test_id: consistencyConfiguration.consistency_test_id,
+        configuration_digest: consistencyConfiguration.configuration_digest,
+        limitations: consistencyConfiguration.limitation_document.limitations,
+        score: consistencyScore ? {
+          score_id: consistencyScore.score_id,
+          passed: consistencyScore.passed,
+          score_digest: consistencyScore.score_digest
+        } : null
+      } : null,
       external_business_effect_authority: "none"
     };
   }

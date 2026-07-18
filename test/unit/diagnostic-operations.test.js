@@ -53,6 +53,8 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.worker_run.launch_authorize",
     "diagnostic.worker_run.started",
     "diagnostic.worker_run.complete",
+    "diagnostic.consistency_test.register",
+    "diagnostic.consistency_test.get",
     "diagnostic.evidence_package_assignment.get",
     "diagnostic.evidence_package_assignment_status.get",
     "diagnostic.assignment_verification_material.get",

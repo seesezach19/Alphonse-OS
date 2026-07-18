@@ -24,8 +24,9 @@ test("V0.2 release is byte-reproducible and content-addressed", async () => {
 test("V0.2 manifest pins the complete headless Debug Loop", async () => {
   const release = await buildV02Release(root);
   assert.deepEqual(Object.keys(release.manifest.components).sort(), [
-    "diagnostic_cli", "diagnostic_model_broker", "diagnostic_plane", "diagnostic_runner",
-    "diagnostic_worker", "event_reporter", "independent_diagnostic_verifier", "kernel",
+    "diagnostic_cli", "diagnostic_consistency_evaluator", "diagnostic_model_broker",
+    "diagnostic_plane", "diagnostic_runner", "diagnostic_worker", "event_reporter",
+    "independent_diagnostic_verifier", "kernel",
     "n8n_operational_package", "n8n_repair_delivery_adapter", "n8n_runtime_adapter",
     "reference_workflow", "verification_runner"
   ]);
@@ -37,7 +38,7 @@ test("V0.2 manifest pins the complete headless Debug Loop", async () => {
   assert.equal(release.manifest.compatible_n8n.customer_owned, true);
   assert.equal(release.manifest.payload_files.filter((item) => item.path.startsWith("migrations/")).length, 23);
   assert.equal(release.manifest.payload_files
-    .filter((item) => item.path.startsWith("diagnostic-migrations/")).length, 23);
+    .filter((item) => item.path.startsWith("diagnostic-migrations/")).length, 24);
 });
 
 test("V0.2 release excludes credentials, development state, test authority, and n8n binaries", async () => {

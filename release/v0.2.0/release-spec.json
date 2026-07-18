@@ -10,6 +10,7 @@
     "diagnostic_model_broker": { "version": "0.1.0", "entrypoint": "src/diagnostic-model-broker-server.js" },
     "diagnostic_runner": { "version": "0.1.0", "entrypoint": "src/diagnostic-runner.js" },
     "diagnostic_worker": { "version": "0.1.0", "entrypoint": "runtime/diagnostic-worker/worker.js" },
+    "diagnostic_consistency_evaluator": { "version": "0.1.0", "entrypoint": "src/diagnostic-consistency-service.js" },
     "verification_runner": { "version": "0.2.0", "entrypoint": "src/verification-runner-process.js" },
     "independent_diagnostic_verifier": { "version": "0.1.0", "entrypoint": "verifier/cli.js" },
     "n8n_operational_package": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/operational-package.json" },
@@ -79,7 +80,8 @@
     "020_material_evidence_revisions.sql",
     "021_material_availability_and_erasure.sql",
     "022_diagnostic_dispatch_claims.sql",
-    "023_diagnostic_worker_execution.sql"
+    "023_diagnostic_worker_execution.sql",
+    "024_diagnostic_consistency_tests.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

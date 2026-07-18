@@ -75,7 +75,11 @@ function fixture() {
     provider: "openai",
     model: "frontier-diagnostic",
     version: "pinned-v1",
-    capability_class: "diagnostic_reasoning"
+    capability_class: "diagnostic_reasoning",
+    snapshot: { identifier: "pinned-v1", verification: "unverifiable" },
+    reasoning: { effort: "fixed" },
+    sampling: { temperature: 0, top_p: 1 },
+    seed: { value: null, verification: "not_supported" }
   };
   const broker = {
     broker_id: "model-broker:customer-local",

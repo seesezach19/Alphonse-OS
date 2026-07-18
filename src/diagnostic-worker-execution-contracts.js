@@ -1,6 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import { DIAGNOSTIC_CONSISTENCY_REQUIRED_CITATION_ROLES } from
+  "./diagnostic-consistency-contracts.js";
 import { KernelError } from "./errors.js";
 
 export const DIAGNOSTIC_BROKER_GRANT_SCHEMA =
@@ -16,7 +18,6 @@ export const DIAGNOSTIC_WORKER_OUTPUT_ENVELOPE_SCHEMA =
 export const SIGNED_DIAGNOSTIC_DOCUMENT_SCHEMA =
   "alphonse.signed-diagnostic-runtime-document.v0.1";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const SIGNATURE = /^hmac-sha256:[0-9a-f]{64}$/;
 const SUPPORT = new Set([
@@ -134,41 +135,99 @@ export function verifyRunnerAttestation(value, signing) {
   return verifySignedDiagnosticRuntimeDocument(value, signing, DIAGNOSTIC_RUNNER_ATTESTATION_SCHEMA);
 }
 
-function validateClaimReferences(value, path, allowedClaimIds, minimum = 0) {
-  const claims = stringList(value, path, { minimum, maximum: 64, itemMaximum: 100 });
-  for (const claimId of claims) {
-    if (!UUID.test(claimId) || !allowedClaimIds.has(claimId)) {
-      fail("DIAGNOSTIC_WORKER_CITATION_INVALID",
-        `${path} must cite only claim IDs present in the exact assigned Evidence Package.`, 409,
-        { claim_id: claimId });
-    }
-  }
-  return claims;
+function citationKey(value) {
+  return canonicalize(value);
 }
 
-export function validateDiagnosticWorkerOutput(value, allowedClaimIds) {
+function validateCitationReferences(value, path, allowedCitations, minimum = 0) {
+  if (!Array.isArray(value) || value.length < minimum || value.length > 64) {
+    fail("DIAGNOSTIC_WORKER_CITATION_INVALID",
+      `${path} must contain ${minimum} to 64 exact package citations.`, 409);
+  }
+  const citations = value.map((entry, index) => {
+    exact(entry, `${path}[${index}]`, [
+      "role", "reference_type", "reference_id", "reference_digest"
+    ]);
+    const checked = {
+      role: string(entry.role, `${path}[${index}].role`, 100),
+      reference_type: string(entry.reference_type, `${path}[${index}].reference_type`, 100),
+      reference_id: string(entry.reference_id, `${path}[${index}].reference_id`, 240),
+      reference_digest: string(entry.reference_digest,
+        `${path}[${index}].reference_digest`, 80)
+    };
+    if (!DIAGNOSTIC_CONSISTENCY_REQUIRED_CITATION_ROLES.includes(checked.role)
+        || !DIGEST.test(checked.reference_digest)
+        || !allowedCitations.has(citationKey(checked))) {
+      fail("DIAGNOSTIC_WORKER_CITATION_INVALID",
+        `${path} must cite only exact typed references present in the assigned Evidence Package.`, 409,
+        { citation: checked });
+    }
+    return checked;
+  });
+  const keys = citations.map(citationKey);
+  if (new Set(keys).size !== keys.length) {
+    fail("DIAGNOSTIC_WORKER_CITATION_INVALID", `${path} citations must be unique.`, 409);
+  }
+  return citations;
+}
+
+export function validateDiagnosticWorkerOutput(value, allowedCitations) {
   exact(value, "diagnosis", [
-    "best_supported_hypothesis", "supporting_claims", "counterevidence", "alternatives",
-    "not_established", "falsifiers", "next_best_observation"
+    "causal_summary", "best_supported_hypothesis", "identity_cardinality",
+    "supporting_evidence", "counterevidence", "alternatives", "not_established",
+    "falsifiers", "recommended_investigations", "actions_taken"
   ]);
   exact(value.best_supported_hypothesis, "diagnosis.best_supported_hypothesis", [
-    "mechanism", "scope", "support", "confidence"
+    "mechanism", "observed_identity_scope", "required_identity_scope", "support", "confidence",
+    "implementation_location"
   ]);
+  exact(value.best_supported_hypothesis.implementation_location,
+    "diagnosis.best_supported_hypothesis.implementation_location", ["status", "component_id"]);
+  const implementationStatus = string(value.best_supported_hypothesis.implementation_location.status,
+    "diagnosis.best_supported_hypothesis.implementation_location.status", 40);
+  if (!new Set(["proven", "not_proven", "ambiguous", "unknown"]).has(implementationStatus)) {
+    fail("DIAGNOSTIC_WORKER_OUTPUT_INVALID",
+      "diagnosis implementation location status is outside the neutral taxonomy.");
+  }
+  let implementationComponent = null;
+  if (implementationStatus === "proven") {
+    implementationComponent = string(value.best_supported_hypothesis.implementation_location.component_id,
+      "diagnosis.best_supported_hypothesis.implementation_location.component_id", 200);
+  } else if (value.best_supported_hypothesis.implementation_location.component_id !== null) {
+    fail("DIAGNOSTIC_WORKER_OUTPUT_INVALID",
+      "An unproven implementation location cannot name a component.");
+  }
   const hypothesis = {
     mechanism: string(value.best_supported_hypothesis.mechanism,
       "diagnosis.best_supported_hypothesis.mechanism", 100),
-    scope: string(value.best_supported_hypothesis.scope,
-      "diagnosis.best_supported_hypothesis.scope", 100),
+    observed_identity_scope: string(value.best_supported_hypothesis.observed_identity_scope,
+      "diagnosis.best_supported_hypothesis.observed_identity_scope", 100),
+    required_identity_scope: string(value.best_supported_hypothesis.required_identity_scope,
+      "diagnosis.best_supported_hypothesis.required_identity_scope", 100),
     support: string(value.best_supported_hypothesis.support,
       "diagnosis.best_supported_hypothesis.support", 100),
     confidence: string(value.best_supported_hypothesis.confidence,
-      "diagnosis.best_supported_hypothesis.confidence", 20)
+      "diagnosis.best_supported_hypothesis.confidence", 20),
+    implementation_location: { status: implementationStatus, component_id: implementationComponent }
   };
-  if (!MECHANISMS.has(hypothesis.mechanism) || !SCOPES.has(hypothesis.scope)
+  if (!MECHANISMS.has(hypothesis.mechanism)
+      || !SCOPES.has(hypothesis.observed_identity_scope)
+      || !SCOPES.has(hypothesis.required_identity_scope)
       || !SUPPORT.has(hypothesis.support)
       || !new Set(["high", "medium", "low"]).has(hypothesis.confidence)) {
     fail("DIAGNOSTIC_WORKER_OUTPUT_INVALID",
       "diagnosis.best_supported_hypothesis uses values outside the closed neutral taxonomy.");
+  }
+  exact(value.identity_cardinality, "diagnosis.identity_cardinality",
+    ["deliveries", "logical_operations"]);
+  const cardinality = {};
+  for (const field of ["deliveries", "logical_operations"]) {
+    const count = value.identity_cardinality[field];
+    if (!Number.isSafeInteger(count) || count < 1 || count > 1000) {
+      fail("DIAGNOSTIC_WORKER_OUTPUT_INVALID",
+        `diagnosis.identity_cardinality.${field} must be between 1 and 1000.`);
+    }
+    cardinality[field] = count;
   }
   const alternatives = value.alternatives;
   if (!Array.isArray(alternatives) || alternatives.length > 20) {
@@ -187,47 +246,110 @@ export function validateDiagnosticWorkerOutput(value, allowedClaimIds) {
       reason: string(entry.reason, `diagnosis.alternatives[${index}].reason`)
     };
   });
-  let nextBestObservation = null;
-  if (value.next_best_observation !== null) {
-    exact(value.next_best_observation, "diagnosis.next_best_observation", ["type", "purpose"]);
-    nextBestObservation = {
-      type: string(value.next_best_observation.type, "diagnosis.next_best_observation.type", 500),
-      purpose: string(value.next_best_observation.purpose,
-        "diagnosis.next_best_observation.purpose")
-    };
+  if (!Array.isArray(value.recommended_investigations)
+      || value.recommended_investigations.length < 1
+      || value.recommended_investigations.length > 20) {
+    fail("DIAGNOSTIC_WORKER_OUTPUT_INVALID",
+      "diagnosis.recommended_investigations must contain 1 to 20 entries.");
+  }
+  const recommendations = value.recommended_investigations.map((entry, index) => {
+    exact(entry, `diagnosis.recommended_investigations[${index}]`, ["type", "purpose"]);
+    return { type: string(entry.type, `diagnosis.recommended_investigations[${index}].type`, 200),
+      purpose: string(entry.purpose,
+        `diagnosis.recommended_investigations[${index}].purpose`) };
+  });
+  if (new Set(recommendations.map((entry) => entry.type)).size !== recommendations.length) {
+    fail("DIAGNOSTIC_WORKER_OUTPUT_INVALID",
+      "diagnosis.recommended_investigations types must be unique.");
+  }
+  if (!Array.isArray(value.actions_taken) || value.actions_taken.length !== 0) {
+    fail("DIAGNOSTIC_WORKER_OUTPUT_INVALID",
+      "Diagnostic Workers must report an exact empty actions_taken array.");
+  }
+  const supportingEvidence = validateCitationReferences(value.supporting_evidence,
+    "diagnosis.supporting_evidence", allowedCitations, 5);
+  const citedRoles = new Set(supportingEvidence.map((citation) => citation.role));
+  if (DIAGNOSTIC_CONSISTENCY_REQUIRED_CITATION_ROLES.some((role) => !citedRoles.has(role))) {
+    fail("DIAGNOSTIC_WORKER_CITATION_INVALID",
+      "Supporting evidence must cover every required package material role.", 409,
+      { required_roles: DIAGNOSTIC_CONSISTENCY_REQUIRED_CITATION_ROLES,
+        received_roles: [...citedRoles].sort() });
   }
   return {
+    causal_summary: string(value.causal_summary, "diagnosis.causal_summary"),
     best_supported_hypothesis: hypothesis,
-    supporting_claims: validateClaimReferences(value.supporting_claims,
-      "diagnosis.supporting_claims", allowedClaimIds, 1),
-    counterevidence: validateClaimReferences(value.counterevidence,
-      "diagnosis.counterevidence", allowedClaimIds),
+    identity_cardinality: cardinality,
+    supporting_evidence: supportingEvidence,
+    counterevidence: validateCitationReferences(value.counterevidence,
+      "diagnosis.counterevidence", allowedCitations),
     alternatives: checkedAlternatives,
     not_established: stringList(value.not_established, "diagnosis.not_established",
       { minimum: 1, maximum: 32 }),
     falsifiers: stringList(value.falsifiers, "diagnosis.falsifiers",
       { minimum: 1, maximum: 32 }),
-    next_best_observation: nextBestObservation
+    recommended_investigations: recommendations,
+    actions_taken: []
   };
 }
 
-export function claimIdsFromWorkerInput(input) {
+export function citationIndexFromWorkerInput(input) {
   if (input?.schema_version !== DIAGNOSTIC_WORKER_INPUT_SCHEMA) {
     fail("DIAGNOSTIC_WORKER_INPUT_INVALID", "Worker input schema is unsupported.", 409);
   }
-  const claims = input.evidence_package_artifact?.semantic_package?.material?.document
-    ?.deterministic_interpretation?.case_claims;
-  if (!Array.isArray(claims) || claims.length === 0) {
-    fail("DIAGNOSTIC_WORKER_INPUT_INVALID",
-      "Worker input does not contain the frozen package claim manifest.", 409);
+  const semantic = input.evidence_package_artifact?.semantic_package;
+  const material = semantic?.material?.document;
+  const citations = [];
+  const observationRoles = new Map([
+    ["source.delivery", "source_delivery"],
+    ["destination.request", "destination_request"]
+  ]);
+  for (const observation of material?.authenticated_evidence?.observations ?? []) {
+    const role = observationRoles.get(observation.observation_type);
+    if (role) citations.push({
+      role,
+      reference_type: "diagnostic_observation_receipt",
+      reference_id: observation.receipt_id,
+      reference_digest: observation.receipt_digest
+    });
   }
-  const ids = claims.map((claim) => claim?.claim_id);
-  if (ids.some((claimId) => typeof claimId !== "string" || !UUID.test(claimId))
-      || new Set(ids).size !== ids.length) {
-    fail("DIAGNOSTIC_WORKER_INPUT_INVALID",
-      "Worker input claim manifest contains invalid or duplicate claim IDs.", 409);
+  if (semantic?.lineage?.correlation_projection_id && semantic.lineage.correlation_semantic_digest) {
+    citations.push({
+      role: "correlation_projection",
+      reference_type: "correlation_projection",
+      reference_id: semantic.lineage.correlation_projection_id,
+      reference_digest: semantic.lineage.correlation_semantic_digest
+    });
   }
-  return new Set(ids);
+  if (semantic?.lineage?.effect_projection_id && semantic.lineage.effect_semantic_digest) {
+    citations.push({
+      role: "interpreted_effect",
+      reference_type: "diagnostic_effect_projection",
+      reference_id: semantic.lineage.effect_projection_id,
+      reference_digest: semantic.lineage.effect_semantic_digest
+    });
+  }
+  for (const dependency of material?.governed_dependencies ?? []) {
+    if (dependency.dependency_type === "behavior_contract") citations.push({
+      role: "behavior_contract",
+      reference_type: "behavior_contract",
+      reference_id: dependency.dependency_id,
+      reference_digest: dependency.dependency_digest
+    });
+  }
+  if (citations.length === 0
+      || citations.some((citation) => typeof citation.reference_id !== "string"
+        || !DIGEST.test(citation.reference_digest ?? ""))) {
+    fail("DIAGNOSTIC_WORKER_INPUT_INVALID",
+      "Worker input does not contain a valid typed package citation manifest.", 409);
+  }
+  const keys = citations.map(citationKey);
+  if (new Set(keys).size !== keys.length
+      || DIAGNOSTIC_CONSISTENCY_REQUIRED_CITATION_ROLES.some((role) =>
+        !citations.some((citation) => citation.role === role))) {
+    fail("DIAGNOSTIC_WORKER_INPUT_INVALID",
+      "Worker input citation manifest is incomplete or duplicated.", 409);
+  }
+  return new Map(citations.map((citation) => [citationKey(citation), citation]));
 }
 
 export function validateDiagnosticOutputFileBoundary(scan, bytes, maximumBytes) {

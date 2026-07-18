@@ -234,8 +234,7 @@ export function createDiagnosticDispatchService({ database, installationId, envi
     const runtimeBoundaryDigest = sha256Digest({ runtime: authorization.runtime,
       resources: authorization.resources, data_policy: authorization.data_policy,
       egress_policy: authorization.egress_policy });
-    const model = { provider: authorization.model.provider, model: authorization.model.model,
-      version: authorization.model.version, capability_class: authorization.model.capability_class };
+    const { configuration_digest: ignoredConfigurationDigest, ...model } = authorization.model;
     const broker = { broker_id: authorization.broker.broker_id,
       policy_id: authorization.broker.policy_id,
       policy_version: authorization.broker.policy_version,

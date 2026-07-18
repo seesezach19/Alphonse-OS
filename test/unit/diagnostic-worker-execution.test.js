@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
-import { sha256Digest } from "../../src/canonical-json.js";
+import { canonicalize, sha256Digest } from "../../src/canonical-json.js";
 import { diagnosticWorkerCreateArguments } from "../../src/diagnostic-runner.js";
 import {
   DIAGNOSTIC_BROKER_GRANT_SCHEMA,
@@ -16,21 +16,46 @@ import {
 
 const signing = { keyId: "diagnostic-key:v1",
   secret: "unit-test-diagnostic-runtime-secret-with-at-least-32-bytes" };
-const claimId = "00000000-0000-4000-8000-000000000161";
+const citations = [
+  { role: "behavior_contract", reference_type: "behavior_contract",
+    reference_id: "behavior-contract:unit", reference_digest: `sha256:${"1".repeat(64)}` },
+  { role: "correlation_projection", reference_type: "correlation_projection",
+    reference_id: "00000000-0000-4000-8000-000000000161",
+    reference_digest: `sha256:${"2".repeat(64)}` },
+  { role: "destination_request", reference_type: "diagnostic_observation_receipt",
+    reference_id: "00000000-0000-4000-8000-000000000162",
+    reference_digest: `sha256:${"3".repeat(64)}` },
+  { role: "interpreted_effect", reference_type: "diagnostic_effect_projection",
+    reference_id: "00000000-0000-4000-8000-000000000163",
+    reference_digest: `sha256:${"4".repeat(64)}` },
+  { role: "source_delivery", reference_type: "diagnostic_observation_receipt",
+    reference_id: "00000000-0000-4000-8000-000000000164",
+    reference_digest: `sha256:${"5".repeat(64)}` }
+];
+const citationIndex = new Map(citations.map((citation) => [canonicalize(citation), citation]));
 
 function diagnosis() {
   return {
+    causal_summary: "Two delivery attempts represent one logical operation, so delivery-scoped identity is too narrow.",
     best_supported_hypothesis: {
-      mechanism: "identity_scope_mismatch", scope: "logical_operation",
-      support: "BEST_SUPPORTED_HYPOTHESIS", confidence: "high"
+      mechanism: "identity_scope_mismatch",
+      observed_identity_scope: "delivery",
+      required_identity_scope: "logical_operation",
+      support: "BEST_SUPPORTED_HYPOTHESIS",
+      confidence: "high",
+      implementation_location: { status: "not_proven", component_id: null }
     },
-    supporting_claims: [claimId],
+    identity_cardinality: { deliveries: 2, logical_operations: 1 },
+    supporting_evidence: structuredClone(citations),
     counterevidence: [],
     alternatives: [{ hypothesis: "delivery-scoped identity", status: "supported",
       reason: "delivery attempts are distinct while the logical operation is shared" }],
     not_established: ["implementation location is NOT_ESTABLISHED"],
     falsifiers: ["a logical-operation key already governed both requests"],
-    next_best_observation: { type: "idempotency_key_scope", purpose: "distinguish scopes" }
+    recommended_investigations: [
+      { type: "idempotency_key_scope", purpose: "distinguish delivery and operation scopes" }
+    ],
+    actions_taken: []
   };
 }
 
@@ -52,18 +77,18 @@ test("runtime documents are exact-digest signed and schema bound", () => {
   assert.equal(verifyRunnerAttestation(runner, signing).document.phase, "started");
 });
 
-test("diagnosis validation uses the closed taxonomy and resolves exact package claim IDs", () => {
-  const checked = validateDiagnosticWorkerOutput(diagnosis(), new Set([claimId]));
+test("diagnosis validation uses the closed taxonomy and resolves exact typed package citations", () => {
+  const checked = validateDiagnosticWorkerOutput(diagnosis(), citationIndex);
   assert.equal(checked.best_supported_hypothesis.mechanism, "identity_scope_mismatch");
-  assert.deepEqual(checked.supporting_claims, [claimId]);
+  assert.deepEqual(checked.supporting_evidence, citations);
 
   const inventedCitation = diagnosis();
-  inventedCitation.supporting_claims = ["00000000-0000-4000-8000-000000000999"];
-  assert.throws(() => validateDiagnosticWorkerOutput(inventedCitation, new Set([claimId])),
+  inventedCitation.supporting_evidence[0].reference_id = "behavior-contract:invented";
+  assert.throws(() => validateDiagnosticWorkerOutput(inventedCitation, citationIndex),
     (error) => error.code === "DIAGNOSTIC_WORKER_CITATION_INVALID");
   const extraField = diagnosis();
   extraField.fixture_answer = "identity_scope_mismatch";
-  assert.throws(() => validateDiagnosticWorkerOutput(extraField, new Set([claimId])),
+  assert.throws(() => validateDiagnosticWorkerOutput(extraField, citationIndex),
     (error) => error.code === "DIAGNOSTIC_WORKER_OUTPUT_INVALID");
 });
 

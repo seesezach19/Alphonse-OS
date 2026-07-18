@@ -8,6 +8,10 @@ import pg from "pg";
 
 import { buildN8nRevisionMaterial } from "../packages/n8n-operational-package/src/index.js";
 import { sha256Digest } from "../src/canonical-json.js";
+import {
+  DIAGNOSTIC_CONSISTENCY_POLICY_V0_1,
+  DIAGNOSTIC_CONSISTENCY_REQUIRED_CITATION_ROLES
+} from "../src/diagnostic-consistency-contracts.js";
 import { runDiagnosticWorker } from "../src/diagnostic-runner.js";
 import { createCanonicalProofDeployment } from "./canonical-proof-deployment-fixture.js";
 
@@ -26,7 +30,8 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
-const through16 = process.argv.includes("--through-16");
+const through17 = process.argv.includes("--through-17");
+const through16 = through17 || process.argv.includes("--through-16");
 const through15 = through16 || process.argv.includes("--through-15");
 const through14 = process.argv.includes("--through-14");
 const through13 = through14 || process.argv.includes("--through-13");
@@ -955,6 +960,7 @@ try {
         let materialErasure = null;
         let dispatchClaim = null;
         let workerExecution = null;
+        let consistencyTest = null;
         let finalCollection = initialCollection;
         if (through10) {
           const frozen = await post("/diagnostic/v0/evidence-collections/process", {
@@ -1843,8 +1849,13 @@ try {
           const model = {
             provider: through16 ? "reference-provider" : "openai",
             model: through16 ? "synthetic-diagnostic-fixture" : "frontier-diagnostic",
-            version: through16 ? "ticket-16-v1" : "pinned-v1",
-            capability_class: requirements.model.capability_class
+            version: through16 ? "ticket-17-v1" : "pinned-v1",
+            capability_class: requirements.model.capability_class,
+            snapshot: { identifier: through16 ? "ticket-17-v1" : "pinned-v1",
+              verification: through16 ? "broker_asserted" : "unverifiable" },
+            reasoning: { effort: "fixed" },
+            sampling: { temperature: 0, top_p: 1 },
+            seed: { value: null, verification: "not_supported" }
           };
           const broker = {
             broker_id: "model-broker:customer-local",
@@ -2205,15 +2216,21 @@ try {
             assert.equal(completion.diagnosis.implementation_location_established, false);
             assert.deepEqual(completion.diagnosis.document.best_supported_hypothesis, {
               mechanism: "identity_scope_mismatch",
-              scope: "logical_operation",
+              observed_identity_scope: "delivery",
+              required_identity_scope: "logical_operation",
               support: "BEST_SUPPORTED_HYPOTHESIS",
-              confidence: "high"
+              confidence: "high",
+              implementation_location: { status: "not_proven", component_id: null }
             });
             assert.ok(completion.diagnosis.document.alternatives.some((entry) =>
               entry.hypothesis.includes("delivery attempts") && entry.status === "supported"));
             assert.ok(completion.diagnosis.document.not_established.some((entry) =>
               entry.includes("implementation location") && entry.includes("NOT_ESTABLISHED")));
-            assert.ok(completion.diagnosis.document.supporting_claims.length > 0);
+            assert.deepEqual(completion.diagnosis.document.identity_cardinality,
+              { deliveries: 2, logical_operations: 1 });
+            assert.deepEqual([...new Set(completion.diagnosis.document.supporting_evidence
+              .map((citation) => citation.role))].sort(),
+            DIAGNOSTIC_CONSISTENCY_REQUIRED_CITATION_ROLES);
             assert.equal(completion.runtime_provenance.network.internal, true);
             assert.ok([1, 2].includes(
               completion.runtime_provenance.network.attached_container_ids.length));
@@ -2264,6 +2281,260 @@ try {
               external_business_effects: 0,
               provider_limitation: "synthetic-reference-provider"
             };
+
+            if (through17) {
+              const consistencyTestId = randomUUID();
+              const packageBinding = {
+                evidence_package_id: diagnosticAssignment.evidence_package_id,
+                semantic_digest: diagnosticAssignment.assignment.evidence_package.semantic_digest,
+                artifact_digest:
+                  diagnosticAssignment.assignment.evidence_package.package_artifact_digest
+              };
+              const hiddenRubric = {
+                schema_version: "alphonse.diagnostic-consistency-hidden-rubric.v0.1",
+                rubric_id: randomUUID(),
+                artifact: {
+                  artifact_id: "diagnostic-consistency-rubric:canonical",
+                  version: "v0.1"
+                },
+                expected_package: packageBinding,
+                expected_diagnosis: {
+                  mechanism: "identity_scope_mismatch",
+                  observed_identity_scope: "delivery",
+                  required_identity_scope: "logical_operation",
+                  support: "BEST_SUPPORTED_HYPOTHESIS",
+                  identity_cardinality: { deliveries: 2, logical_operations: 1 },
+                  implementation_location: { status: "not_proven", component_id: null }
+                },
+                required_citation_roles: DIAGNOSTIC_CONSISTENCY_REQUIRED_CITATION_ROLES,
+                scoring: { required_runs: 3, required_passes: 3,
+                  confidence_scale: { low: 25, medium: 50, high: 75 } }
+              };
+              const registered = await post("/diagnostic/v0/consistency-tests", command(
+                "diagnostic.consistency_test.register", {
+                  consistency_test_id: consistencyTestId,
+                  source_worker_run_id: workerRunId,
+                  policy: DIAGNOSTIC_CONSISTENCY_POLICY_V0_1,
+                  hidden_rubric: hiddenRubric
+                }));
+              assert.equal(registered.response.status, 201, JSON.stringify(registered.body));
+              const registration = registered.body.diagnostic_consistency_test;
+              assert.equal(registration.consistency_test_id, consistencyTestId);
+              assert.equal(registration.assignments.length, 3);
+              assert.deepEqual(registration.assignments.map((entry) => entry.ordinal),
+                ["2", "3", "4"]);
+              assert.ok(registration.assignments.every((entry) => entry.state === "unclaimed"));
+              assert.equal(registration.authority.dispatch, "not_granted");
+              assert.equal(registration.authority.model_requests, "not_granted");
+              assert.equal(Object.hasOwn(registration.rubric_commitment, "expected_diagnosis"),
+                false);
+
+              const registeredView = await kernel(
+                `/diagnostic/v0/consistency-tests/${consistencyTestId}`);
+              assert.equal(registeredView.response.status, 200,
+                JSON.stringify(registeredView.body));
+              assert.equal(registeredView.body.diagnostic_consistency_test
+                .rubric_commitment.rubric_document_exposed, false);
+              assert.equal(Object.hasOwn(registeredView.body.diagnostic_consistency_test,
+                "rubric_document"), false);
+
+              const executeConsistencyAssignment = async (registeredAssignment) => {
+                const assignmentRead = await kernel(
+                  `/diagnostic/v0/assignments/${registeredAssignment.assignment_id}`);
+                assert.equal(assignmentRead.response.status, 200,
+                  JSON.stringify(assignmentRead.body));
+                const assignment = assignmentRead.body.diagnostic_assignment;
+                assert.equal(assignment.state.current, "unclaimed");
+                const binding = {
+                  assignment_id: assignment.assignment_id,
+                  assignment_digest: assignment.assignment_digest,
+                  evidence_package_id: assignment.evidence_package_id,
+                  evidence_package_semantic_digest:
+                    assignment.assignment.evidence_package.semantic_digest,
+                  evidence_package_artifact_digest:
+                    assignment.assignment.evidence_package.package_artifact_digest,
+                  assignment_policy_activation_id: assignment.assignment_policy_activation_id,
+                  assignment_policy_activation_digest:
+                    assignment.assignment.assignment_policy.activation_digest
+                };
+                const candidate = {
+                  ...structuredClone(candidateBase),
+                  assignment: binding,
+                  worker_run: { worker_run_id: randomUUID(),
+                    expires_at: new Date(runExpiry).toISOString() },
+                  authorization_expires_at: new Date(Date.now() + 3 * 60_000).toISOString()
+                };
+                const authorized = await post("/kernel/v0/diagnostic-dispatch-authorizations",
+                  command("kernel.diagnostic_dispatch.authorize", { candidate }));
+                assert.equal(authorized.response.status, 201, JSON.stringify(authorized.body));
+                const claimed = await post(`/diagnostic/v0/assignments/${assignment.assignment_id
+                  }/claim`, command("diagnostic.assignment.claim", {
+                  assignment_id: assignment.assignment_id,
+                  signed_authorization: authorized.body.diagnostic_dispatch_authorization
+                    .signed_authorization
+                }));
+                assert.equal(claimed.response.status, 201, JSON.stringify(claimed.body));
+                const consistencyWorkerRunId = claimed.body.diagnostic_assignment_claim
+                  .worker_run.worker_run_id;
+                const launchResponse = await post(`/diagnostic/v0/worker-runs/${
+                  consistencyWorkerRunId}/launch-authorizations`, command(
+                  "diagnostic.worker_run.launch_authorize", {
+                    worker_run_id: consistencyWorkerRunId
+                  }));
+                assert.equal(launchResponse.response.status, 201,
+                  JSON.stringify(launchResponse.body));
+                const consistencyLaunch = launchResponse.body.diagnostic_worker_launch;
+                assert.equal(consistencyLaunch.consistency_configuration.consistency_test_id,
+                  consistencyTestId);
+                assert.deepEqual(consistencyLaunch.consistency_configuration.limitations, [
+                  "model_snapshot_not_provider_verified", "seed_not_provider_verified",
+                  "synthetic_reference_provider_not_model_quality_evidence"
+                ]);
+                assert.equal(Object.hasOwn(consistencyLaunch.worker_input, "consistency_test"),
+                  false);
+                assert.equal(Object.hasOwn(consistencyLaunch.worker_input, "hidden_rubric"), false);
+                assert.equal(Object.hasOwn(consistencyLaunch.worker_input.assignment,
+                  "consistency_test"), false);
+                const execution = await runDiagnosticWorker({
+                  launch: consistencyLaunch,
+                  workerImageReference,
+                  brokerImageReference,
+                  brokerGrantSigning,
+                  brokerReceiptSigning,
+                  runnerSigning,
+                  providerCredential:
+                    "local-reference-provider-credential-held-only-by-broker-v1",
+                  onStarted: async (signedStartAttestation) => {
+                    const start = await post(`/diagnostic/v0/worker-runs/${
+                      consistencyWorkerRunId}/started`, command(
+                      "diagnostic.worker_run.started", {
+                        worker_run_id: consistencyWorkerRunId,
+                        signed_start_attestation: signedStartAttestation
+                      }));
+                    assert.equal(start.response.status, 201, JSON.stringify(start.body));
+                  }
+                });
+                assert.equal(execution.broker_grant_replay_denied, true);
+                const completionResponse = await post(`/diagnostic/v0/worker-runs/${
+                  consistencyWorkerRunId}/completions`, command(
+                  "diagnostic.worker_run.complete", {
+                    worker_run_id: consistencyWorkerRunId,
+                    signed_final_attestation: execution.signed_final_attestation,
+                    output_bytes_base64: execution.output_bytes_base64
+                  }));
+                assert.equal(completionResponse.response.status, 201,
+                  JSON.stringify(completionResponse.body));
+                const consistencyCompletion = completionResponse.body
+                  .diagnostic_worker_completion;
+                assert.equal(consistencyCompletion.consistency_score.passed, true);
+                assert.equal(consistencyCompletion.external_business_effects, 0);
+                assert.deepEqual(consistencyCompletion.diagnosis.document
+                  .best_supported_hypothesis.implementation_location,
+                { status: "not_proven", component_id: null });
+                assert.deepEqual(consistencyCompletion.diagnosis.document.identity_cardinality,
+                  { deliveries: 2, logical_operations: 1 });
+                return {
+                  assignment_id: assignment.assignment_id,
+                  worker_run_id: consistencyWorkerRunId,
+                  diagnosis_id: consistencyCompletion.diagnosis.diagnosis_id,
+                  diagnosis_digest: consistencyCompletion.diagnosis.diagnosis_digest,
+                  configuration_digest:
+                    consistencyLaunch.consistency_configuration.configuration_digest,
+                  score: consistencyCompletion.consistency_score
+                };
+              };
+
+              const consistencyRuns = [];
+              for (const assignment of registration.assignments) {
+                consistencyRuns.push(await executeConsistencyAssignment(assignment));
+              }
+              assert.equal(new Set(consistencyRuns.map((entry) => entry.assignment_id)).size, 3);
+              assert.equal(new Set(consistencyRuns.map((entry) => entry.worker_run_id)).size, 3);
+              assert.equal(new Set(consistencyRuns.map((entry) => entry.diagnosis_id)).size, 3);
+              assert.equal(new Set(consistencyRuns.map((entry) =>
+                entry.configuration_digest)).size, 1);
+
+              const finalConsistencyView = await kernel(
+                `/diagnostic/v0/consistency-tests/${consistencyTestId}`);
+              assert.equal(finalConsistencyView.response.status, 200,
+                JSON.stringify(finalConsistencyView.body));
+              const finalConsistency = finalConsistencyView.body.diagnostic_consistency_test;
+              assert.equal(finalConsistency.state, "completed");
+              assert.equal(finalConsistency.assignments.length, 3);
+              assert.ok(finalConsistency.assignments.every((entry) => entry.score.passed));
+              assert.equal(finalConsistency.report.document.platform_reproducibility.result,
+                "passed");
+              assert.equal(finalConsistency.report.document.platform_reproducibility
+                .exact_configuration_count, 3);
+              assert.equal(finalConsistency.report.document.model_consistency.result, "passed");
+              assert.equal(finalConsistency.report.document.model_consistency.passed_runs, 3);
+              assert.equal(finalConsistency.report.document.diagnoses.length, 3);
+              assert.equal(finalConsistency.report.document.diagnoses_preserved_independently,
+                true);
+              assert.equal(finalConsistency.report.document.consensus_diagnosis_created, false);
+              assert.equal(finalConsistency.report.document.external_business_effects, 0);
+              assert.equal(finalConsistency.report.document.model_consistency.metrics
+                .confidence.population_variance, 0);
+              assert.equal(finalConsistency.report.document.model_consistency.metrics
+                .evidence_selection_overlap.summary.mean, 1);
+              assert.equal(finalConsistency.report.document.model_consistency.metrics
+                .unsupported_claim_count.total, 0);
+              assert.equal(finalConsistency.report.document.model_consistency.metrics
+                .recommended_investigation_convergence.summary.mean, 1);
+              assert.equal(finalConsistency.report.document.model_consistency.metrics
+                .prose_divergence.semantic_equivalence_inferred, false);
+              assert.deepEqual(finalConsistency.report.document.limitations, [
+                "model_snapshot_not_provider_verified", "seed_not_provider_verified",
+                "synthetic_reference_provider_not_model_quality_evidence"
+              ]);
+
+              const consistencyDb = new pg.Client({ connectionString:
+                "postgresql://alphonse_diagnostic:local-diagnostic-only@127.0.0.1:45505/alphonse_diagnostic" });
+              await consistencyDb.connect();
+              try {
+                const counts = (await consistencyDb.query(
+                  `SELECT
+                    (SELECT COUNT(*)::int FROM diagnostic_consistency_tests) AS tests,
+                    (SELECT COUNT(*)::int FROM diagnostic_consistency_test_assignments) AS assignments,
+                    (SELECT COUNT(*)::int FROM diagnostic_worker_run_configurations) AS configurations,
+                    (SELECT COUNT(*)::int FROM diagnostic_consistency_scores) AS scores,
+                    (SELECT COUNT(*)::int FROM diagnostic_consistency_reports) AS reports,
+                    (SELECT COUNT(*)::int FROM diagnostic_worker_run_diagnoses) AS diagnoses`
+                )).rows[0];
+                assert.deepEqual(counts, { tests: 1, assignments: 3, configurations: 3,
+                  scores: 3, reports: 1, diagnoses: 4 });
+                await assert.rejects(consistencyDb.query(
+                  "UPDATE diagnostic_consistency_tests SET registered_by_id='tampered' WHERE consistency_test_id=$1",
+                  [consistencyTestId]), /immutable records cannot be updated/u);
+                await assert.rejects(consistencyDb.query(
+                  "UPDATE diagnostic_worker_run_configurations SET configuration_digest=$2 WHERE consistency_test_id=$1",
+                  [consistencyTestId, `sha256:${"f".repeat(64)}`]),
+                /immutable records cannot be updated/u);
+                await assert.rejects(consistencyDb.query(
+                  "DELETE FROM diagnostic_consistency_scores WHERE consistency_test_id=$1",
+                  [consistencyTestId]), /immutable records cannot be updated or deleted/u);
+                await assert.rejects(consistencyDb.query(
+                  "UPDATE diagnostic_consistency_reports SET completed_at=now() WHERE consistency_test_id=$1",
+                  [consistencyTestId]), /immutable records cannot be updated/u);
+              } finally { await consistencyDb.end(); }
+              consistencyTest = {
+                consistency_test_id: consistencyTestId,
+                report_id: finalConsistency.report.report_id,
+                report_digest: finalConsistency.report.report_digest,
+                platform_result:
+                  finalConsistency.report.document.platform_reproducibility.result,
+                model_consistency_result:
+                  finalConsistency.report.document.model_consistency.result,
+                assignments: 3,
+                worker_runs: 3,
+                diagnoses: 3,
+                configuration_digest: consistencyRuns[0].configuration_digest,
+                model_requests: 3,
+                external_business_effects: 0,
+                provider_limitation: "synthetic-reference-provider"
+              };
+              workerExecution.model_requests += 3;
+            }
           }
 
           diagnosticAssignment = claimedAssignment.body.diagnostic_assignment;
@@ -2287,7 +2558,8 @@ try {
           effectProjection, evaluation, trigger, diagnosticCase, finalCollection, evidencePackage,
           diagnosticAssignment, assignmentVerificationMaterial, evidenceRevision,
           replacementAssignment, replacementVerificationMaterial, lateObservationCounts,
-          independentVerification, materialErasure, dispatchClaim, workerExecution };
+          independentVerification, materialErasure, dispatchClaim, workerExecution,
+          consistencyTest };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -2308,7 +2580,8 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through16 ? "canonical-diagnostic-proof-16"
+    schema_version: "0.1.0", ticket: through17 ? "canonical-diagnostic-proof-17"
+      : through16 ? "canonical-diagnostic-proof-16"
       : through15 ? "canonical-diagnostic-proof-15"
       : through14 ? "canonical-diagnostic-proof-14"
       : through13 ? "canonical-diagnostic-proof-13"
@@ -2318,7 +2591,9 @@ try {
       : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through16
+    status: "passed", completed_capability: through17
+      ? "three_run_diagnostic_semantic_consistency"
+      : through16
       ? "isolated_worker_brokered_model_and_ingested_diagnosis"
       : through15
       ? "signed_single_use_diagnostic_dispatch_and_atomic_claim"
@@ -2405,7 +2680,21 @@ try {
         "responsible_implementation_location_not_established",
         "signed_runtime_model_broker_and_output_provenance_ingested",
         "zero_external_business_effects_and_no_repair_authority",
-        "synthetic_provider_quality_limitation_explicit"] : [])],
+        "synthetic_provider_quality_limitation_explicit"] : []),
+      ...(through17 ? ["hidden_structured_rubric_committed_before_dispatch",
+        "three_fresh_authority_free_assignments",
+        "three_separately_authorized_isolated_worker_runs",
+        "identical_prelaunch_worker_configuration_digests",
+        "model_snapshot_and_seed_limitations_recorded",
+        "three_of_three_scope_mismatch_diagnoses_passed",
+        "two_deliveries_one_logical_operation_structurally_identified",
+        "all_typed_package_citation_roles_resolved",
+        "unsupported_implementation_claim_count_zero",
+        "recommendation_convergence_and_prose_divergence_measured",
+        "platform_reproducibility_separated_from_model_consistency",
+        "three_diagnoses_preserved_without_consensus_rewrite",
+        "zero_forbidden_effects_across_consistency_runs",
+        "synthetic_fixture_not_claimed_as_frontier_model_reliability"] : [])],
     mapping_count: final.mapping_count, delivery_count: final.delivery_count,
     observation_replay_count: final.observation_replay_count,
     runtime_observation_count: extendedResult?.runtime.reported_count ?? 0,
@@ -2497,6 +2786,26 @@ try {
     diagnostic_model_provider_limitation:
       extendedResult?.interpretation?.workerExecution?.provider_limitation ?? null,
     model_requests: extendedResult?.interpretation?.workerExecution?.model_requests ?? 0,
+    diagnostic_consistency_test_id:
+      extendedResult?.interpretation?.consistencyTest?.consistency_test_id ?? null,
+    diagnostic_consistency_report_id:
+      extendedResult?.interpretation?.consistencyTest?.report_id ?? null,
+    diagnostic_consistency_report_digest:
+      extendedResult?.interpretation?.consistencyTest?.report_digest ?? null,
+    diagnostic_consistency_platform_result:
+      extendedResult?.interpretation?.consistencyTest?.platform_result ?? null,
+    diagnostic_consistency_model_result:
+      extendedResult?.interpretation?.consistencyTest?.model_consistency_result ?? null,
+    diagnostic_consistency_assignment_count:
+      extendedResult?.interpretation?.consistencyTest?.assignments ?? 0,
+    diagnostic_consistency_worker_run_count:
+      extendedResult?.interpretation?.consistencyTest?.worker_runs ?? 0,
+    diagnostic_consistency_diagnosis_count:
+      extendedResult?.interpretation?.consistencyTest?.diagnoses ?? 0,
+    diagnostic_consistency_configuration_digest:
+      extendedResult?.interpretation?.consistencyTest?.configuration_digest ?? null,
+    diagnostic_consistency_external_business_effects:
+      extendedResult?.interpretation?.consistencyTest?.external_business_effects ?? null,
     worker_run_created: Boolean(extendedResult?.interpretation?.dispatchClaim)
   }, null, 2)}\n`);
 } catch (error) {

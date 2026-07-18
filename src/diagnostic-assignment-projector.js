@@ -23,7 +23,10 @@ export function buildDiagnosticAssignmentStageInput({
   sourceEvent,
   evidencePackage,
   assignmentPolicyActivation,
-  stageArtifactDigest
+  stageArtifactDigest,
+  ordinal = DIAGNOSTIC_ASSIGNMENT_RULES.initial_ordinal,
+  consistencyTest = null,
+  assignmentRulesDigest = DIAGNOSTIC_ASSIGNMENT_RULES_DIGEST
 }) {
   return {
     schema_version: DIAGNOSTIC_ASSIGNMENT_STAGE_INPUT_SCHEMA,
@@ -45,10 +48,11 @@ export function buildDiagnosticAssignmentStageInput({
       instruction_digest: assignmentPolicyActivation.instruction_digest,
       output_schema_digest: assignmentPolicyActivation.output_schema_digest
     },
-    ordinal: DIAGNOSTIC_ASSIGNMENT_RULES.initial_ordinal,
+    ordinal: String(ordinal),
+    ...(consistencyTest ? { consistency_test: structuredClone(consistencyTest) } : {}),
     stage: {
       artifact_digest: stageArtifactDigest,
-      assignment_rules_digest: DIAGNOSTIC_ASSIGNMENT_RULES_DIGEST
+      assignment_rules_digest: assignmentRulesDigest
     }
   };
 }
@@ -56,7 +60,9 @@ export function buildDiagnosticAssignmentStageInput({
 export function projectDiagnosticAssignment({
   stageInput,
   assignmentPolicy,
-  stageArtifactDigest
+  stageArtifactDigest,
+  stageAuthor = DIAGNOSTIC_ASSIGNMENT_STAGE_AUTHOR,
+  assignmentRulesDigest = DIAGNOSTIC_ASSIGNMENT_RULES_DIGEST
 }) {
   const stageInputDigest = sha256Digest(stageInput);
   const seriesIdentity = {
@@ -129,11 +135,13 @@ export function projectDiagnosticAssignment({
       model_contacted: false,
       provider_request_created: false
     },
+    ...(stageInput.consistency_test
+      ? { consistency_test: structuredClone(stageInput.consistency_test) } : {}),
     stage: {
-      component: DIAGNOSTIC_ASSIGNMENT_STAGE_AUTHOR,
+      component: stageAuthor,
       input_digest: stageInputDigest,
       artifact_digest: stageArtifactDigest,
-      assignment_rules_digest: DIAGNOSTIC_ASSIGNMENT_RULES_DIGEST,
+      assignment_rules_digest: assignmentRulesDigest,
       processing_profile: "D0"
     }
   };

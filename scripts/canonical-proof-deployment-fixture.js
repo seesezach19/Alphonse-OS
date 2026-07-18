@@ -5,7 +5,7 @@ import { sha256Digest } from "../src/canonical-json.js";
 import {
   DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA,
   DIAGNOSTIC_WORKER_INSTRUCTION_V0_1,
-  DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_1
+  DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_2
 } from "../src/diagnostic-assignment-contracts.js";
 
 export async function createCanonicalProofDeployment({ kernel, dataPlane, agentToken }) {
@@ -375,7 +375,7 @@ export async function createCanonicalProofDeployment({ kernel, dataPlane, agentT
       schema_version: DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA,
       policy_id: "policy:model-free-diagnostic-analysis",
       instruction: structuredClone(DIAGNOSTIC_WORKER_INSTRUCTION_V0_1),
-      output_schema: structuredClone(DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_1),
+      output_schema: structuredClone(DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_2),
       required_passport_class: "diagnostic_interpreter",
       required_worker_capabilities: [
         "read_exact_evidence_package", "produce_schema_validated_diagnostic_output"

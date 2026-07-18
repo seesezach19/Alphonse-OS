@@ -940,6 +940,45 @@ const descriptors = [
     emitted_events: ["diagnostic.worker_run.completed"],
     next_operations: ["diagnostic.worker_run.get"]
   },
+  {
+    operation_id: "diagnostic.consistency_test.register",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Commit one hidden rubric and create exactly three fresh authority-free assignments over a completed governed package.",
+    visibility: "public", authority_class: "authenticated_customer_owner",
+    effect_class: "diagnostic_test_registration_without_dispatch_authority",
+    idempotency: "command_id_and_exact_policy_rubric_source_run",
+    transport: { method: "POST", path: "/diagnostic/v0/consistency-tests" },
+    input_schema: commandEnvelope("diagnostic.consistency_test.register", {
+      type: "object",
+      required: ["consistency_test_id", "source_worker_run_id", "policy", "hidden_rubric"],
+      additionalProperties: false,
+      properties: {
+        consistency_test_id: { type: "string", format: "uuid" },
+        source_worker_run_id: { type: "string", format: "uuid" },
+        policy: { type: "object" },
+        hidden_rubric: { type: "object" }
+      }
+    }),
+    output_schema: { type: "object", required: ["diagnostic_consistency_test", "transition"] },
+    supported_modes: ["live"],
+    preconditions: ["completed_governed_source_run", "same_frozen_package_available",
+      "hidden_rubric_committed_before_dispatch"],
+    outcomes: ["rubric_committed", "three_unclaimed_assignments_created"],
+    issues: ["DIAGNOSTIC_CONSISTENCY_SOURCE_RUN_INCOMPLETE",
+      "DIAGNOSTIC_CONSISTENCY_ASSIGNMENT_SERIES_CONFLICT"],
+    emitted_events: ["diagnostic.consistency_test.registered",
+      "diagnostic.consistency_assignment.authorized", "diagnostic.assignment.created"],
+    next_operations: ["diagnostic.consistency_test.get", "kernel.diagnostic_dispatch.authorize"]
+  },
+  readDescriptor({
+    operationId: "diagnostic.consistency_test.get",
+    summary: "Inspect the rubric commitment, three independent assignment/run scores, and separate platform and model-consistency report.",
+    path: "/diagnostic/v0/consistency-tests/{consistency_test_id}",
+    idName: "consistency_test_id",
+    resultKey: "diagnostic_consistency_test",
+    issues: ["DIAGNOSTIC_CONSISTENCY_TEST_NOT_FOUND",
+      "DIAGNOSTIC_CONSISTENCY_INTEGRITY_VIOLATION"]
+  }),
   readDescriptor({
     operationId: "diagnostic.evidence_package_assignment.get",
     summary: "Inspect the deterministic initial Assignment created from one frozen Evidence Package event.",

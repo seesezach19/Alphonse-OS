@@ -40,6 +40,7 @@
     "test:canonical-proof:ticket-14": "node scripts/acceptance-canonical-proof-ticket-05.js --through-14",
     "test:canonical-proof:ticket-15": "node scripts/acceptance-canonical-proof-ticket-05.js --through-15",
     "test:canonical-proof:ticket-16": "node scripts/acceptance-canonical-proof-ticket-05.js --through-16",
+    "test:canonical-proof:ticket-17": "node scripts/acceptance-canonical-proof-ticket-05.js --through-17",
     "proof:canonical": "node scripts/acceptance-canonical-proof-ticket-02.js",
     "diagnostic:cli": "node src/diagnostic-cli.js",
     "local:up": "docker compose up --build --wait",

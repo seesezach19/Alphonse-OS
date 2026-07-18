@@ -98,6 +98,9 @@ reconciled read-only before any new apply attempt. Rollback requires a separate 
   broad certification of an agent or workflow.
 - Repair Worker submission and passing verification grant no promotion authority. Promotion remains an explicit Owner
   transition against an exact target revision.
+- A Diagnostic Consistency Test commits one hidden rubric before dispatch, requires three separately authorized Worker
+  Runs over one exact package and configuration digest, preserves their diagnoses independently, and reports platform
+  reproducibility separately from model consistency. It grants no repair or external-effect authority.
 
 ## Limitations
 
@@ -108,6 +111,9 @@ reconciled read-only before any new apply attempt. Rollback requires a separate 
 - The reference n8n Code node reads reporting configuration from its process environment. Treat all installed workflows
   as trusted code or replace this setup with a customer-approved credential mechanism.
 - Automatic anomaly detection, model-assisted diagnosis, automatic promotion, OTLP, SDKs, and a Console are not included.
+- The canonical three-run consistency proof uses a deterministic synthetic reference provider. It validates package,
+  runtime, configuration, rubric, ingestion, and scoring boundaries; it is not frontier-model quality or statistical
+  reliability evidence. Provider-unverified snapshot and seed controls remain explicit report limitations.
 - No real customer email, production inventory write, AWS operation, or other external business effect is configured.
 
 ## Stop

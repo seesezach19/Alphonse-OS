@@ -42,28 +42,45 @@ const EXPECTED_INSTRUCTION = {
 };
 const EXPECTED_OUTPUT_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
-  $id: "alphonse.diagnostic-worker-output.v0.1",
+  $id: "alphonse.diagnostic-worker-output.v0.2",
   type: "object",
   additionalProperties: false,
-  required: ["best_supported_hypothesis", "supporting_claims", "counterevidence", "alternatives",
-    "not_established", "falsifiers", "next_best_observation"],
+  required: ["causal_summary", "best_supported_hypothesis", "identity_cardinality",
+    "supporting_evidence", "counterevidence", "alternatives", "not_established",
+    "falsifiers", "recommended_investigations", "actions_taken"],
   properties: {
+    causal_summary: { type: "string", minLength: 1, maxLength: 2000 },
     best_supported_hypothesis: {
       type: "object", additionalProperties: false,
-      required: ["mechanism", "scope", "support", "confidence"],
+      required: ["mechanism", "observed_identity_scope", "required_identity_scope", "support",
+        "confidence", "implementation_location"],
       properties: {
         mechanism: { type: "string", enum: ["identity_scope_mismatch", "workflow_configuration_error",
           "provider_behavior_change", "observation_gap", "competing_supported_mechanism", "unknown"] },
-        scope: { type: "string", enum: ["logical_operation", "delivery", "workflow", "integration",
+        observed_identity_scope: { type: "string", enum: ["logical_operation", "delivery", "workflow", "integration",
+          "provider", "unknown"] },
+        required_identity_scope: { type: "string", enum: ["logical_operation", "delivery", "workflow", "integration",
           "provider", "unknown"] },
         support: { type: "string", enum: ["BEST_SUPPORTED_HYPOTHESIS", "PLAUSIBLE",
           "NOT_ESTABLISHED", "CONTRADICTED"] },
-        confidence: { type: "string", enum: ["high", "medium", "low"] }
+        confidence: { type: "string", enum: ["high", "medium", "low"] },
+        implementation_location: { type: "object", additionalProperties: false,
+          required: ["status", "component_id"], properties: {
+            status: { type: "string", enum: ["proven", "not_proven", "ambiguous", "unknown"] },
+            component_id: { type: ["string", "null"], maxLength: 200 }
+          } }
       }
     },
-    supporting_claims: { type: "array", items: { type: "string" }, uniqueItems: true },
-    counterevidence: { type: "array", items: { type: "string" }, uniqueItems: true },
-    alternatives: { type: "array", items: { type: "object", additionalProperties: false,
+    identity_cardinality: { type: "object", additionalProperties: false,
+      required: ["deliveries", "logical_operations"], properties: {
+        deliveries: { type: "integer", minimum: 1, maximum: 1000 },
+        logical_operations: { type: "integer", minimum: 1, maximum: 1000 }
+      } },
+    supporting_evidence: { type: "array", minItems: 5, maxItems: 64,
+      items: { $ref: "#/$defs/citation" } },
+    counterevidence: { type: "array", maxItems: 64, items: { $ref: "#/$defs/citation" } },
+    alternatives: { type: "array", maxItems: 20,
+      items: { type: "object", additionalProperties: false,
       required: ["hypothesis", "status", "reason"], properties: {
         hypothesis: { type: "string" },
         status: { type: "string", enum: ["supported", "weakened", "unresolved", "contradicted"] },
@@ -71,9 +88,24 @@ const EXPECTED_OUTPUT_SCHEMA = {
       } } },
     not_established: { type: "array", items: { type: "string" }, uniqueItems: true },
     falsifiers: { type: "array", items: { type: "string" }, uniqueItems: true },
-    next_best_observation: { type: ["object", "null"], additionalProperties: false,
-      required: ["type", "purpose"], properties: {
-        type: { type: "string" }, purpose: { type: "string" }
+    recommended_investigations: { type: "array", minItems: 1, maxItems: 20,
+      items: { type: "object", additionalProperties: false, required: ["type", "purpose"],
+        properties: {
+          type: { type: "string", minLength: 1, maxLength: 200 },
+          purpose: { type: "string", minLength: 1, maxLength: 2000 }
+        } } },
+    actions_taken: { type: "array", maxItems: 0 }
+  },
+  $defs: {
+    citation: { type: "object", additionalProperties: false,
+      required: ["role", "reference_type", "reference_id", "reference_digest"],
+      properties: {
+        role: { type: "string", enum: ["behavior_contract", "correlation_projection",
+          "destination_request", "interpreted_effect", "source_delivery"] },
+        reference_type: { type: "string", enum: ["behavior_contract", "correlation_projection",
+          "diagnostic_effect_projection", "diagnostic_observation_receipt"] },
+        reference_id: { type: "string", minLength: 1, maxLength: 240 },
+        reference_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
       } }
   }
 };

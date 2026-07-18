@@ -191,15 +191,45 @@ function validateRuntime(value, path) {
 }
 
 function validateModel(value, path) {
-  exact(value, path, ["provider", "model", "version", "capability_class"]);
+  exact(value, path, [
+    "provider", "model", "version", "capability_class", "snapshot", "reasoning", "sampling",
+    "seed"
+  ]);
   if (value.capability_class !== "diagnostic_reasoning") {
     fail("DIAGNOSTIC_DISPATCH_INPUT_INVALID", `${path}.capability_class is unsupported.`);
+  }
+  exact(value.snapshot, `${path}.snapshot`, ["identifier", "verification"]);
+  exact(value.reasoning, `${path}.reasoning`, ["effort"]);
+  exact(value.sampling, `${path}.sampling`, ["temperature", "top_p"]);
+  exact(value.seed, `${path}.seed`, ["value", "verification"]);
+  if (!new Set(["provider_verified", "broker_asserted", "unverifiable"])
+    .has(value.snapshot.verification)
+      || !new Set(["fixed", "low", "medium", "high"]).has(value.reasoning.effort)
+      || typeof value.sampling.temperature !== "number"
+      || !Number.isFinite(value.sampling.temperature)
+      || value.sampling.temperature < 0 || value.sampling.temperature > 2
+      || typeof value.sampling.top_p !== "number" || !Number.isFinite(value.sampling.top_p)
+      || value.sampling.top_p <= 0 || value.sampling.top_p > 1
+      || value.seed.value !== null && (!Number.isSafeInteger(value.seed.value)
+        || value.seed.value < 0 || value.seed.value > 2_147_483_647)
+      || !new Set(["provider_verified", "broker_asserted", "not_supported", "unverifiable"])
+        .has(value.seed.verification)
+      || (value.seed.verification === "not_supported" && value.seed.value !== null)) {
+    fail("DIAGNOSTIC_DISPATCH_INPUT_INVALID",
+      `${path} snapshot, reasoning, sampling, or seed controls are invalid.`);
   }
   return {
     provider: identifier(value.provider, `${path}.provider`),
     model: string(value.model, `${path}.model`, 200),
     version: string(value.version, `${path}.version`, 200),
-    capability_class: value.capability_class
+    capability_class: value.capability_class,
+    snapshot: {
+      identifier: identifier(value.snapshot.identifier, `${path}.snapshot.identifier`),
+      verification: value.snapshot.verification
+    },
+    reasoning: { effort: value.reasoning.effort },
+    sampling: { temperature: value.sampling.temperature, top_p: value.sampling.top_p },
+    seed: { value: value.seed.value, verification: value.seed.verification }
   };
 }
 
@@ -641,10 +671,10 @@ export function validateDiagnosticDispatchAuthorizationDocument(value) {
   timestamp(value.worker_run.expires_at, "authorization.worker_run.expires_at");
   validateRuntime(value.runtime, "authorization.runtime");
   exact(value.model, "authorization.model",
-    ["provider", "model", "version", "capability_class", "configuration_digest"]);
-  validateModel({ provider: value.model.provider, model: value.model.model,
-    version: value.model.version, capability_class: value.model.capability_class },
-  "authorization.model");
+    ["provider", "model", "version", "capability_class", "snapshot", "reasoning",
+      "sampling", "seed", "configuration_digest"]);
+  const { configuration_digest: ignoredConfigurationDigest, ...authorizationModel } = value.model;
+  validateModel(authorizationModel, "authorization.model");
   digest(value.model.configuration_digest, "authorization.model.configuration_digest");
   exact(value.broker, "authorization.broker", [
     "broker_id", "policy_id", "policy_version", "audience", "max_requests", "max_input_units",

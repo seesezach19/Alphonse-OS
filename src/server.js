@@ -39,6 +39,7 @@ import { createDiagnosticAssignmentService } from "./diagnostic-assignment-servi
 import { createDiagnosticDispatchAuthorizationService } from "./diagnostic-dispatch-authorization-service.js";
 import { createDiagnosticDispatchService } from "./diagnostic-dispatch-service.js";
 import { createDiagnosticWorkerExecutionService } from "./diagnostic-worker-execution-service.js";
+import { createDiagnosticConsistencyService } from "./diagnostic-consistency-service.js";
 import { createDiagnosticMaterialAvailabilityService } from "./diagnostic-material-availability-service.js";
 import { createLegacyRuntimeCompatibility } from "./legacy-runtime-compatibility.js";
 import { getOperationDescriptor, listOperationDescriptors, PROTOCOL_VERSION } from "./operations.js";
@@ -183,6 +184,7 @@ let diagnosticMaterialAvailabilityService = null;
 let diagnosticDispatchService = null;
 let diagnosticDispatchAuthorizationService = null;
 let diagnosticWorkerExecutionService = null;
+let diagnosticConsistencyService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -464,6 +466,13 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     dispatcherAudience: diagnosticDispatcherAudience,
     allowedRunnerAudiences: diagnosticRunnerAudiences
   });
+  diagnosticConsistencyService = createDiagnosticConsistencyService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    materialAuthority: diagnosticMaterialAvailabilityService,
+    installationId,
+    environmentId
+  });
   diagnosticWorkerExecutionService = createDiagnosticWorkerExecutionService({
     database: diagnosticDatabase,
     artifactStore: diagnosticArtifactStore,
@@ -481,7 +490,8 @@ if (diagnosticDatabase && diagnosticArtifactStore) {
     runnerSigning: {
       keyId: diagnosticRunnerAttestationKeyId,
       secret: diagnosticRunnerAttestationSecret
-    }
+    },
+    consistencyEvaluator: diagnosticConsistencyService
   });
   diagnosticDispatchAuthorizationService = createDiagnosticDispatchAuthorizationService({
     database,
@@ -717,6 +727,14 @@ function requireDiagnosticWorkerExecution() {
       "Diagnostic Worker execution is not configured.");
   }
   return diagnosticWorkerExecutionService;
+}
+
+function requireDiagnosticConsistency() {
+  if (!diagnosticConsistencyService) {
+    throw new KernelError(503, "DIAGNOSTIC_CONSISTENCY_SERVICE_UNAVAILABLE",
+      "Diagnostic Consistency Test service is not configured.");
+  }
+  return diagnosticConsistencyService;
 }
 
 function requireDiagnosticDispatchAuthority() {
@@ -1168,6 +1186,21 @@ async function route(request, response) {
         model_request_created: execution.model_request_created,
         diagnosis_created: execution.diagnosis_created, execution }
       : workerRun });
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/consistency-tests") {
+    const service = requireDiagnosticConsistency();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.consistency_test.register");
+    const body = await readJson(request, 512 * 1024);
+    return sendCommandResult(response, await service.register(body, actor));
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/consistency-tests\/[^/]+$/.test(url.pathname)) {
+    const service = requireDiagnosticConsistency();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { diagnostic_consistency_test: await service.getTest(
+      pathId(url.pathname, "/diagnostic/v0/consistency-tests/")) });
   }
 
   if (request.method === "POST"

@@ -6,7 +6,7 @@ import {
   DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA,
   DIAGNOSTIC_ASSIGNMENT_RULES_DIGEST,
   DIAGNOSTIC_WORKER_INSTRUCTION_V0_1,
-  DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_1,
+  DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_2,
   resolveLateEvidenceAssignmentAction,
   validateDiagnosticAssignmentPolicy
 } from "../../src/diagnostic-assignment-contracts.js";
@@ -25,7 +25,7 @@ function policy() {
     schema_version: DIAGNOSTIC_ASSIGNMENT_POLICY_SCHEMA,
     policy_id: "policy:model-free-diagnostic-analysis",
     instruction: structuredClone(DIAGNOSTIC_WORKER_INSTRUCTION_V0_1),
-    output_schema: structuredClone(DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_1),
+    output_schema: structuredClone(DIAGNOSTIC_WORKER_OUTPUT_SCHEMA_V0_2),
     required_passport_class: "diagnostic_interpreter",
     required_worker_capabilities: [
       "read_exact_evidence_package", "produce_schema_validated_diagnostic_output"
@@ -117,7 +117,8 @@ test("assignment policy is answer-free, neutral, closed, and authority-free", ()
   const checked = validateDiagnosticAssignmentPolicy(policy());
   const schema = checked.output_schema.properties.best_supported_hypothesis.properties;
   assert.ok(schema.mechanism.enum.length > 4);
-  assert.ok(schema.scope.enum.length > 4);
+  assert.ok(schema.observed_identity_scope.enum.length > 4);
+  assert.ok(schema.required_identity_scope.enum.length > 4);
   assert.ok(schema.support.enum.includes("NOT_ESTABLISHED"));
   assert.equal(Object.hasOwn(checked.instruction, "expected_answer"), false);
   assert.equal(Object.hasOwn(checked.instruction, "root_cause"), false);

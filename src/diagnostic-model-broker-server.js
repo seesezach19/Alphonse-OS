@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
 import {
-  claimIdsFromWorkerInput,
+  citationIndexFromWorkerInput,
   DIAGNOSTIC_BROKER_GRANT_SCHEMA,
   DIAGNOSTIC_BROKER_RECEIPT_SCHEMA,
   signDiagnosticRuntimeDocument,
@@ -30,8 +30,12 @@ const providerCredential = process.env.DIAGNOSTIC_REFERENCE_PROVIDER_CREDENTIAL;
 const referenceModel = {
   provider: "reference-provider",
   model: "synthetic-diagnostic-fixture",
-  version: "ticket-16-v1",
-  capability_class: "diagnostic_reasoning"
+  version: "ticket-17-v1",
+  capability_class: "diagnostic_reasoning",
+  snapshot: { identifier: "ticket-17-v1", verification: "broker_asserted" },
+  reasoning: { effort: "fixed" },
+  sampling: { temperature: 0, top_p: 1 },
+  seed: { value: null, verification: "not_supported" }
 };
 if (!grantSigning.keyId || !grantSigning.secret || !receiptSigning.keyId
     || !receiptSigning.secret || !providerCredential) {
@@ -72,18 +76,24 @@ async function readJson(request, maximum = 32 * 1024 * 1024) {
 }
 
 function referenceProvider(input) {
-  const claims = input.evidence_package_artifact.semantic_package.material.document
-    .deterministic_interpretation.case_claims;
-  const supported = claims.filter((claim) => claim.claim_type !== "unresolved_conclusion")
-    .map((claim) => claim.claim_id);
+  const citations = [...citationIndexFromWorkerInput(input).values()]
+    .sort((left, right) => {
+      const leftCanonical = canonicalize(left);
+      const rightCanonical = canonicalize(right);
+      return leftCanonical < rightCanonical ? -1 : leftCanonical > rightCanonical ? 1 : 0;
+    });
   const diagnosis = {
+    causal_summary: "Two delivery attempts for one logical operation used delivery-scoped request identity while the governed outcome requires one committed effect per logical operation.",
     best_supported_hypothesis: {
       mechanism: "identity_scope_mismatch",
-      scope: "logical_operation",
+      observed_identity_scope: "delivery",
+      required_identity_scope: "logical_operation",
       support: "BEST_SUPPORTED_HYPOTHESIS",
-      confidence: "high"
+      confidence: "high",
+      implementation_location: { status: "not_proven", component_id: null }
     },
-    supporting_claims: supported,
+    identity_cardinality: { deliveries: 2, logical_operations: 1 },
+    supporting_evidence: citations,
     counterevidence: [],
     alternatives: [
       {
@@ -105,12 +115,13 @@ function referenceProvider(input) {
       "A stable logical-operation idempotency key already governed both committed destination requests.",
       "The two committed effects resolve to different logical operations under verified correlation material."
     ],
-    next_best_observation: {
+    recommended_investigations: [{
       type: "destination_request_idempotency_key_scope",
-      purpose: "Distinguish delivery-scoped keying from logical-operation-scoped keying at the destination request boundary."
-    }
+      purpose: "Inspect the request-key derivation boundary without assuming which workflow component implements it."
+    }],
+    actions_taken: []
   };
-  return validateDiagnosticWorkerOutput(diagnosis, claimIdsFromWorkerInput(input));
+  return validateDiagnosticWorkerOutput(diagnosis, citationIndexFromWorkerInput(input));
 }
 
 async function consumeGrantOnce(grantDigest, consumedAt) {
