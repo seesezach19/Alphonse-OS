@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * Kernel HTTP routes extracted from the Kernel composition root.
  * Handlers are unchanged; only module boundaries moved.
@@ -6,7 +8,7 @@
 import { KernelError } from "./errors.js";
 
 /**
- * @param {any} ctx Composition-root services, config, and createRouteHelpers() result.
+ * @param {import("./route-context.js").RouteContext} ctx Composition-root services, config, and createRouteHelpers() result.
  * @returns {(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse, url: URL) => Promise<boolean>}
  */
 export function createKernelRouter(ctx) {
@@ -322,7 +324,7 @@ export function createKernelRouter(ctx) {
     authenticateBootstrapOperator(request);
     const parts = url.pathname.split("/");
     return sendJson(response, 200, { trust_policy: await packageTrustService.getPolicy(
-      decodeURIComponent(parts.at(-3)), decodeURIComponent(parts.at(-1))) });
+      decodeURIComponent(parts.at(-3) ?? ""), decodeURIComponent(parts.at(-1) ?? "")) });
     return true;
   }
 
@@ -899,7 +901,9 @@ export function createKernelRouter(ctx) {
       effects: { count: effects.length, items: effects },
       recovery_cases: { count: recoveryCases.length, items: recoveryCases },
       support,
-      restore: restore ? { ...restore, unresolved_obligations: restore.obligations.filter((item) => !item.resolved).length } : null,
+      restore: restore ? { ...restore, unresolved_obligations: restore.obligations.filter(
+        /** @param {any} item */ (item) => !item.resolved
+      ).length } : null,
       authority: "read_only_projection"
     });
     return true;

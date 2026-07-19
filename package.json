@@ -46,7 +46,7 @@
     "test:canonical-proof:ticket-15": "node scripts/acceptance-canonical-proof-ticket-05.js --through-15",
     "test:canonical-proof:ticket-16": "node scripts/acceptance-canonical-proof-ticket-05.js --through-16",
     "test:canonical-proof:ticket-17": "node scripts/acceptance-canonical-proof-ticket-05.js --through-17",
-    "proof:canonical": "node scripts/acceptance-canonical-proof-ticket-02.js",
+    "proof:canonical": "node scripts/acceptance-canonical-proof-ticket-05.js --through-17",
     "diagnostic:cli": "node src/diagnostic-cli.js",
     "local:up": "docker compose up --build --wait",
     "local:down": "docker compose down",
@@ -96,7 +96,7 @@
   },
   "devDependencies": {
     "@types/json-logic-js": "^2.0.8",
-    "@types/node": "^26.1.1",
+    "@types/node": "^22.20.1",
     "@types/pg": "^8.20.0",
     "typescript": "^7.0.2"
   }

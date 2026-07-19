@@ -302,7 +302,7 @@ services:
     build: { context: . }
     command: ["node", "src/mock-crm-migrate.js"]
     environment:
-      MOCK_CRM_DATABASE_URL: postgresql://alphonse_mock_crm_migrator:local-mock-crm-migration-only@postgres:5432/alphonse_mock_crm
+      MOCK_CRM_DATABASE_URL: postgresql://alphonse_mock_crm_migrator:${MOCK_CRM_MIGRATION_DATABASE_PASSWORD:-local-mock-crm-migration-only}@postgres:5432/alphonse_mock_crm
     depends_on:
       mock-crm-bootstrap: { condition: service_completed_successfully }
 
@@ -312,7 +312,7 @@ services:
     command: ["node", "src/mock-crm-server.js"]
     environment:
       MOCK_CRM_PORT: 3701
-      MOCK_CRM_DATABASE_URL: postgresql://alphonse_mock_crm:local-mock-crm-only@postgres:5432/alphonse_mock_crm
+      MOCK_CRM_DATABASE_URL: postgresql://alphonse_mock_crm:${MOCK_CRM_DATABASE_PASSWORD:-local-mock-crm-only}@postgres:5432/alphonse_mock_crm
       MOCK_CRM_WRITE_TOKEN: ${MOCK_CRM_WRITE_TOKEN:-local-mock-crm-write-token}
       MOCK_CRM_LEDGER_TOKEN: ${MOCK_CRM_LEDGER_TOKEN:-local-mock-crm-ledger-read-token}
     ports: ["127.0.0.1:${MOCK_CRM_PORT:-43701}:3701"]
@@ -330,7 +330,7 @@ services:
     command: ["node", "src/crm-request-observer-server.js"]
     environment:
       CRM_GATEWAY_PORT: 3700
-      CRM_GATEWAY_DATABASE_URL: postgresql://alphonse_crm_gateway:local-crm-gateway-only@postgres:5432/alphonse_mock_crm
+      CRM_GATEWAY_DATABASE_URL: postgresql://alphonse_crm_gateway:${CRM_GATEWAY_DATABASE_PASSWORD:-local-crm-gateway-only}@postgres:5432/alphonse_mock_crm
       CRM_GATEWAY_ROUTE_TOKEN: ${CRM_GATEWAY_ROUTE_TOKEN:-local-n8n-crm-route-token}
       CRM_GATEWAY_PAYLOAD_SECRET: ${CRM_GATEWAY_PAYLOAD_SECRET:-local-crm-gateway-payload-secret-v1}
       MOCK_CRM_URL: http://mock-crm:3701
@@ -649,7 +649,7 @@ services:
     environment:
       POSTGRES_DB: alphonse_coordinator
       POSTGRES_USER: coordinator
-      POSTGRES_PASSWORD: ${COORDINATOR_POSTGRES_POSTGRES_PASSWORD:-local-coordinator-only}
+      POSTGRES_PASSWORD: ${COORDINATOR_DATABASE_PASSWORD:-local-coordinator-only}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U coordinator -d alphonse_coordinator"]
       interval: 2s
@@ -665,7 +665,7 @@ services:
     command: ["node", "src/hosted-coordinator-server.js"]
     environment:
       COORDINATOR_PORT: 3600
-      COORDINATOR_DATABASE_URL: postgresql://coordinator:local-coordinator-only@coordinator-postgres:5432/alphonse_coordinator
+      COORDINATOR_DATABASE_URL: postgresql://coordinator:${COORDINATOR_DATABASE_PASSWORD:-local-coordinator-only}@coordinator-postgres:5432/alphonse_coordinator
       COORDINATOR_ID: coordinator:local
       COORDINATOR_CUSTOMER_ID: customer:demo
       COORDINATOR_PRIVATE_KEY: ${COORDINATOR_PRIVATE_KEY:-ed25519-pkcs8:MC4CAQAwBQYDK2VwBCIEIBSylRiSYFNkTpjv+dZOBfkvXjehTkpx2+S4bCqr8WRt}

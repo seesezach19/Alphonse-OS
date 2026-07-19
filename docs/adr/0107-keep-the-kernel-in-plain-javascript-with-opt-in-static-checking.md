@@ -11,7 +11,9 @@ Static checking is adopted without giving up that property. A root `tsconfig.jso
 no-emit mode over `src/`, `verifier/`, and `packages/` with `strict: true` and `checkJs` disabled globally. Files opt
 in with a leading `// @ts-check` pragma and JSDoc annotations, one bounded module group at a time — files that ship
 together and share contract shapes, such as a service factory, its contracts, and its clients. An opted-in file is
-never opted back out, so checked coverage only grows. `npm run typecheck` must stay clean; a global lenient baseline
+never opted back out. The checked-file manifest in `config/typechecked-js.json` is enforced by the unit suite, so
+coverage changes are explicit and reviewable rather than silently disappearing with a deleted pragma.
+`npm run typecheck` must stay clean; a global lenient baseline
 was rejected because checking all 129 kernel modules at once surfaces dozens of findings that would either be
 suppressed wholesale or fixed without review, and a strict bar on a small surface is worth more than a loose bar on
 the whole.

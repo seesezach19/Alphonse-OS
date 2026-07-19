@@ -533,6 +533,7 @@ import {
 import { createKernelRouter } from "./kernel-router.js";
 import { createDiagnosticRouter } from "./diagnostic-router.js";
 import { createSupportRouter } from "./support-router.js";
+import { createRouteContext } from "./route-context.js";
 
 const routeHelpers = createRouteHelpers({
   ownerToken, bootstrapPrincipalId, identityIntent,
@@ -550,7 +551,7 @@ const routeHelpers = createRouteHelpers({
   diagnosticVerificationService, diagnosticPromotionService
 });
 
-const routeContext = {
+const routeContext = createRouteContext({
   database, identityIntent, grantAuthorityService, contextService, packageService,
   packageTrustService, deploymentService, upgradeService, handoffService, executionService,
   recoveryService, restoreService, effectService, environmentCoordination, supportService,
@@ -574,7 +575,7 @@ const routeContext = {
   validateCommandEnvelope, validateProfileUpdateCommand,
   canonicalize, sha256Digest, createHmac, createPublicKey, timingSafeEqual,
   ...routeHelpers
-};
+});
 
 const kernelRouter = createKernelRouter(routeContext);
 const diagnosticRouter = createDiagnosticRouter(routeContext);

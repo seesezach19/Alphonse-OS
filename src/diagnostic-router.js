@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * Diagnostic Plane HTTP routes extracted from the Kernel composition root.
  * Handlers are unchanged; only module boundaries moved.
@@ -6,7 +8,7 @@
 import { KernelError } from "./errors.js";
 
 /**
- * @param {any} ctx Composition-root services, config, and createRouteHelpers() result.
+ * @param {import("./route-context.js").RouteContext} ctx Composition-root services, config, and createRouteHelpers() result.
  * @returns {(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse, url: URL) => Promise<boolean>}
  */
 export function createDiagnosticRouter(ctx) {
@@ -744,7 +746,7 @@ export function createDiagnosticRouter(ctx) {
     const passport = await authenticateAgent(request);
     const parts = url.pathname.split("/");
     return sendJson(response, 200, await service.retrieveArtifact(
-      decodeURIComponent(parts.at(-3)), decodeURIComponent(parts.at(-1)), passport
+      decodeURIComponent(parts.at(-3) ?? ""), decodeURIComponent(parts.at(-1) ?? ""), passport
     ));
     return true;
   }
@@ -858,7 +860,7 @@ export function createDiagnosticRouter(ctx) {
     const actor = await authenticateDiagnosticOwner(request, operationId);
     const body = await readJson(request, 64 * 1024);
     const segments = url.pathname.split("/");
-    const promotionId = decodeURIComponent(segments.at(-2));
+    const promotionId = decodeURIComponent(segments.at(-2) ?? "");
     if (body?.input?.promotion_id !== promotionId) {
       throw new KernelError(409, "PROMOTION_ROUTE_MISMATCH",
         "Route Promotion ID must match command input.");
