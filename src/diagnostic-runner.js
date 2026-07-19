@@ -1,3 +1,5 @@
+// @ts-check
+
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -10,6 +12,35 @@ import {
   signDiagnosticRuntimeDocument
 } from "./diagnostic-worker-execution-contracts.js";
 
+/**
+ * Shapes below describe runner wiring; Docker inspect payloads and launch
+ * documents stay loosely typed as untrusted external material. Runtime
+ * digest/image checks remain authoritative (ADR 0107).
+ *
+ * @typedef {{ keyId: string, secret: string }} DiagnosticSigningMaterial
+ * @typedef {{
+ *   inputDigest: string,
+ *   maxOutputBytes: number,
+ *   temporaryBytes: number,
+ *   homeBytes: number
+ * }} ContainerFactExpectations
+ * @typedef {{
+ *   launch: any,
+ *   workerImageReference: string,
+ *   brokerImageReference: string,
+ *   brokerGrantSigning: DiagnosticSigningMaterial,
+ *   brokerReceiptSigning: DiagnosticSigningMaterial,
+ *   runnerSigning: DiagnosticSigningMaterial,
+ *   providerCredential: string,
+ *   onStarted?: (attestation: any) => void | Promise<void>
+ * }} RunDiagnosticWorkerOptions
+ */
+
+/**
+ * @param {string[]} args
+ * @param {{ allowFailure?: boolean, timeout?: number }} [options]
+ * @returns {import("node:child_process").SpawnSyncReturns<string>}
+ */
 function docker(args, { allowFailure = false, timeout = 60_000 } = {}) {
   const result = spawnSync("docker", args, {
     encoding: "utf8", windowsHide: true, timeout, maxBuffer: 16 * 1024 * 1024
@@ -20,19 +51,35 @@ function docker(args, { allowFailure = false, timeout = 60_000 } = {}) {
   return result;
 }
 
+/**
+ * @param {Buffer | string} bytes
+ * @returns {string}
+ */
 function rawDigest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+/**
+ * @param {"container" | "network" | "image"} kind
+ * @param {string} reference
+ * @returns {any}
+ */
 function inspect(kind, reference) {
   const result = docker([kind, "inspect", reference]);
   return JSON.parse(result.stdout)[0];
 }
 
+/**
+ * @param {string} reference
+ * @returns {string}
+ */
 function exactImageDigest(reference) {
   return docker(["image", "inspect", "--format", "{{.Id}}", reference]).stdout.trim();
 }
 
+/**
+ * @returns {Record<string, string>}
+ */
 function runtimeEngineFacts() {
   const server = JSON.parse(docker(["version", "--format", "{{json .Server}}"])
     .stdout.trim());
@@ -46,6 +93,10 @@ function runtimeEngineFacts() {
   };
 }
 
+/**
+ * @param {any} network
+ * @returns {Record<string, unknown>}
+ */
 function networkFacts(network) {
   return {
     network_id: network.Id,
@@ -56,7 +107,7 @@ function networkFacts(network) {
     ingress: network.Ingress,
     attached_container_ids: Object.keys(network.Containers ?? {}).sort(),
     attached_container_names: Object.values(network.Containers ?? {})
-      .map((entry) => entry.Name).sort(),
+      .map((entry) => /** @type {{ Name: string }} */ (entry).Name).sort(),
     general_egress: false,
     allowed_destination: "diagnostic_model_broker_only",
     forbidden_destinations: [
@@ -65,10 +116,17 @@ function networkFacts(network) {
   };
 }
 
+/**
+ * @param {any} container
+ * @param {ContainerFactExpectations} expected
+ * @returns {Record<string, unknown>}
+ */
 function containerFacts(container, expected) {
   const host = container.HostConfig;
   const config = container.Config;
-  const mounts = container.Mounts ?? [];
+  const mounts = /** @type {Array<{ Source: string, Destination: string, Type?: string, RW?: boolean }>} */ (
+    container.Mounts ?? []
+  );
   return {
     container_id: container.Id,
     name: container.Name.replace(/^\//, ""),
@@ -86,7 +144,7 @@ function containerFacts(container, expected) {
       pid_mode: host.PidMode || "private",
       ipc_mode: host.IpcMode || "private",
       uts_mode: host.UTSMode || "private",
-      devices: (host.Devices ?? []).map((entry) => entry.PathOnHost),
+      devices: (host.Devices ?? []).map((/** @type {{ PathOnHost: string }} */ entry) => entry.PathOnHost),
       docker_socket_mounted: mounts.some((entry) => entry.Source === "/var/run/docker.sock")
     },
     mounts: {
@@ -111,10 +169,14 @@ function containerFacts(container, expected) {
       nano_cpus: host.NanoCpus,
       pids_limit: host.PidsLimit
     },
-    environment_keys: (config.Env ?? []).map((entry) => entry.split("=", 1)[0]).sort()
+    environment_keys: (config.Env ?? []).map((/** @type {string} */ entry) => entry.split("=", 1)[0]).sort()
   };
 }
 
+/**
+ * @param {string} containerName
+ * @param {number} maximumBytes
+ */
 function collectContainerOutput(containerName, maximumBytes) {
   const program = `const f=require('node:fs'),p=require('node:path');
     const entries=[];
@@ -137,7 +199,8 @@ function collectContainerOutput(containerName, maximumBytes) {
     sole_expected_regular_file: collected.entries.length === 1
       && collected.entries[0].path === "diagnosis.json"
       && collected.entries[0].type === "regular_file",
-    total_size_bytes: collected.entries.reduce((sum, entry) => sum +
+    total_size_bytes: collected.entries.reduce(
+      (/** @type {number} */ sum, /** @type {{ type: string, size_bytes: number }} */ entry) => sum +
       (entry.type === "regular_file" ? entry.size_bytes : 0), 0),
     maximum_size_bytes: maximumBytes,
     diagnosis_file_digest: bytes ? rawDigest(bytes) : null,
@@ -145,6 +208,10 @@ function collectContainerOutput(containerName, maximumBytes) {
   };
 }
 
+/**
+ * @param {Record<string, unknown>} document
+ * @param {DiagnosticSigningMaterial} signing
+ */
 function signedAttestation(document, signing) {
   return signDiagnosticRuntimeDocument({
     schema_version: DIAGNOSTIC_RUNNER_ATTESTATION_SCHEMA,
@@ -152,6 +219,15 @@ function signedAttestation(document, signing) {
   }, signing);
 }
 
+/**
+ * @param {{
+ *   launch: any,
+ *   inputDirectory: string,
+ *   networkName: string,
+ *   containerName: string
+ * }} options
+ * @returns {string[]}
+ */
 export function diagnosticWorkerCreateArguments({ launch, inputDirectory, networkName,
   containerName }) {
   const runtime = launch.runtime_boundary;
@@ -176,9 +252,16 @@ export function diagnosticWorkerCreateArguments({ launch, inputDirectory, networ
     runtime.runtime.image.digest];
 }
 
+/**
+ * Runs one authorized diagnostic worker with an isolated broker and records
+ * start/final runner attestations. Callers pass `onStarted` to observe the
+ * signed start attestation before the worker finishes.
+ *
+ * @param {RunDiagnosticWorkerOptions} options
+ */
 export async function runDiagnosticWorker({ launch, workerImageReference, brokerImageReference,
   brokerGrantSigning, brokerReceiptSigning, runnerSigning, providerCredential,
-  onStarted = async () => {} }) {
+  onStarted = async (_attestation) => {} }) {
   if (exactImageDigest(workerImageReference) !== launch.runtime_boundary.runtime.image.digest) {
     throw new Error("Local diagnostic Worker image does not match the authorized image digest.");
   }

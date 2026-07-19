@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import { KernelError } from "./errors.js";
 import {
   citationIndexFromWorkerInput,
   DIAGNOSTIC_BROKER_GRANT_SCHEMA,
@@ -42,12 +43,15 @@ if (!grantSigning.keyId || !grantSigning.secret || !receiptSigning.keyId
   throw new Error("Model Broker grant, receipt, and provider credentials are required.");
 }
 
+/**
+ * @param {number} status
+ * @param {string} code
+ * @param {string} message
+ * @param {Record<string, unknown>} [details]
+ * @returns {never}
+ */
 function fail(status, code, message, details = {}) {
-  const error = new Error(message);
-  error.status = status;
-  error.code = code;
-  error.details = details;
-  throw error;
+  throw new KernelError(status, code, message, details);
 }
 
 function send(response, status, value) {
@@ -253,8 +257,11 @@ const server = http.createServer(async (request, response) => {
     }
     return send(response, 404, { error: { code: "ROUTE_NOT_FOUND", message: "Route does not exist." } });
   } catch (error) {
-    return send(response, error.status ?? 500, { error: {
-      code: error.code ?? "INTERNAL_ERROR", message: error.message, details: error.details ?? {}
+    const status = error instanceof KernelError ? error.status : (error.status ?? 500);
+    const code = error instanceof KernelError ? error.code : (error.code ?? "INTERNAL_ERROR");
+    const details = error instanceof KernelError ? error.details : (error.details ?? {});
+    return send(response, status, { error: {
+      code, message: error.message, details
     } });
   }
 });

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "typecheck": "tsc --noEmit",
     "console:dev": "npm --prefix apps/console run dev",
     "console:build": "npm --prefix apps/console run build",
     "console:typecheck": "npm --prefix apps/console run typecheck",
@@ -92,5 +93,11 @@
   "dependencies": {
     "json-logic-js": "2.0.5",
     "pg": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/json-logic-js": "^2.0.8",
+    "@types/node": "^26.1.1",
+    "@types/pg": "^8.20.0",
+    "typescript": "^7.0.2"
   }
 }

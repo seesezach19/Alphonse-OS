@@ -3,6 +3,7 @@ import http from "node:http";
 import jsonLogic from "json-logic-js";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
+import { KernelError } from "./errors.js";
 
 const port = Number(process.env.DATA_PLANE_PORT ?? 3100);
 const kernelUrl = process.env.KERNEL_INTERNAL_URL ?? "http://kernel:3000";
@@ -41,11 +42,14 @@ async function body(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+/**
+ * @param {number} status
+ * @param {string} code
+ * @param {string} message
+ * @returns {never}
+ */
 function fail(status, code, message) {
-  const error = new Error(message);
-  error.status = status;
-  error.code = code;
-  throw error;
+  throw new KernelError(status, code, message);
 }
 
 async function queryInventory(requestBody, agentToken) {
@@ -153,7 +157,9 @@ const server = http.createServer(async (request, response) => {
     }
     return send(response, 404, { error: { code: "ROUTE_NOT_FOUND", message: "Route does not exist." } });
   } catch (error) {
-    return send(response, error.status ?? 500, { error: { code: error.code ?? "INTERNAL_ERROR", message: error.message } });
+    const status = error instanceof KernelError ? error.status : (error.status ?? 500);
+    const code = error instanceof KernelError ? error.code : (error.code ?? "INTERNAL_ERROR");
+    return send(response, status, { error: { code, message: error.message } });
   }
 });
 

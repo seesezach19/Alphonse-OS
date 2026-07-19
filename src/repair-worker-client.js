@@ -1,13 +1,38 @@
+// @ts-check
+
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { KernelError } from "./errors.js";
 
+/**
+ * Shapes below describe what the runtime guards in this module accept; the
+ * guards remain authoritative for untrusted input (ADR 0107).
+ *
+ * @typedef {{ path: string, artifact_digest: string }} RepairWorkspaceFile
+ * @typedef {{
+ *   ephemeral: boolean,
+ *   ambient_filesystem_access: boolean,
+ *   files: RepairWorkspaceFile[]
+ * }} RepairWorkspaceManifest
+ * @typedef {{ artifact_digest: string, verified: boolean, content: unknown }} RetrievedRepairArtifact
+ */
+
+/**
+ * @param {string} commandId
+ * @param {string} operationId
+ * @param {unknown} input
+ */
 function command(commandId, operationId, input) {
   return { command_id: commandId, operation_id: operationId, input };
 }
 
+/**
+ * @param {string} root
+ * @param {unknown} relativePath Untrusted manifest path; validated here.
+ * @returns {string}
+ */
 function workspacePath(root, relativePath) {
   if (typeof relativePath !== "string" || path.isAbsolute(relativePath)) {
     throw new KernelError(400, "INVALID_WORKSPACE_PATH", "Workspace path must be relative.");
@@ -19,6 +44,14 @@ function workspacePath(root, relativePath) {
   return resolved;
 }
 
+/**
+ * @template T
+ * @param {RepairWorkspaceManifest} workspaceManifest
+ * @param {(artifactDigest: string) => Promise<RetrievedRepairArtifact>} retrieveArtifact
+ * @param {(workspace: { root: string, manifest: RepairWorkspaceManifest }) => T | Promise<T>} callback
+ * @param {string} [temporaryRoot]
+ * @returns {Promise<T>}
+ */
 export async function withEphemeralRepairWorkspace(
   workspaceManifest, retrieveArtifact, callback, temporaryRoot = os.tmpdir()
 ) {
@@ -48,10 +81,13 @@ export async function withEphemeralRepairWorkspace(
 }
 
 export class RepairWorkerClient {
-  #baseUrl;
-  #agentToken;
-  #fetch;
+  /** @type {string} */ #baseUrl;
+  /** @type {string} */ #agentToken;
+  /** @type {typeof fetch} */ #fetch;
 
+  /**
+   * @param {{ baseUrl: string, agentToken: string, fetchImpl?: typeof fetch }} options
+   */
   constructor({ baseUrl, agentToken, fetchImpl = fetch }) {
     if (!baseUrl || !agentToken) throw new TypeError("baseUrl and agentToken are required.");
     this.#baseUrl = baseUrl.replace(/\/$/, "");
@@ -59,6 +95,11 @@ export class RepairWorkerClient {
     this.#fetch = fetchImpl;
   }
 
+  /**
+   * @param {string} pathname
+   * @param {{ method?: string, body?: unknown }} [options]
+   * @returns {Promise<any>} Parsed JSON envelope from the Repair Worker API.
+   */
   async #request(pathname, { method = "GET", body } = {}) {
     const response = await this.#fetch(`${this.#baseUrl}${pathname}`, {
       method,
@@ -77,6 +118,10 @@ export class RepairWorkerClient {
     return result;
   }
 
+  /**
+   * @param {string} commandId
+   * @param {unknown} input
+   */
   register(commandId, input) {
     return this.#request("/diagnostic/v0/repair-workers", {
       method: "POST", body: command(commandId, "diagnostic.repair_worker.register", input)
@@ -87,12 +132,22 @@ export class RepairWorkerClient {
     return this.#request("/diagnostic/v0/repair-tasks");
   }
 
+  /**
+   * @param {string} commandId
+   * @param {string} taskId
+   */
   claim(commandId, taskId) {
     return this.#request(`/diagnostic/v0/repair-tasks/${encodeURIComponent(taskId)}/claim`, {
       method: "POST", body: command(commandId, "diagnostic.repair_task.claim", { task_id: taskId })
     });
   }
 
+  /**
+   * @param {string} commandId
+   * @param {string} taskId
+   * @param {number} leaseEpoch
+   * @param {string} statusNote
+   */
   heartbeat(commandId, taskId, leaseEpoch, statusNote) {
     return this.#request(`/diagnostic/v0/repair-tasks/${encodeURIComponent(taskId)}/heartbeat`, {
       method: "POST",
@@ -102,12 +157,23 @@ export class RepairWorkerClient {
     });
   }
 
+  /**
+   * @param {string} taskId
+   * @param {string} artifactDigest
+   * @returns {Promise<RetrievedRepairArtifact>}
+   */
   async retrieveArtifact(taskId, artifactDigest) {
     const result = await this.#request(`/diagnostic/v0/repair-tasks/${encodeURIComponent(taskId)}` +
       `/artifacts/${encodeURIComponent(artifactDigest)}`);
     return result.artifact;
   }
 
+  /**
+   * @param {string} commandId
+   * @param {string} taskId
+   * @param {number} leaseEpoch
+   * @param {unknown} output
+   */
   submit(commandId, taskId, leaseEpoch, output) {
     return this.#request("/diagnostic/v0/repair-candidates", {
       method: "POST",
@@ -117,6 +183,13 @@ export class RepairWorkerClient {
     });
   }
 
+  /**
+   * @param {string} commandId
+   * @param {string} taskId
+   * @param {number} leaseEpoch
+   * @param {string} failureType
+   * @param {string} summary
+   */
   fail(commandId, taskId, leaseEpoch, failureType, summary) {
     return this.#request(`/diagnostic/v0/repair-tasks/${encodeURIComponent(taskId)}/fail`, {
       method: "POST",
@@ -126,6 +199,12 @@ export class RepairWorkerClient {
     });
   }
 
+  /**
+   * @param {string} commandId
+   * @param {string} taskId
+   * @param {number} leaseEpoch
+   * @param {string} reason
+   */
   release(commandId, taskId, leaseEpoch, reason) {
     return this.#request(`/diagnostic/v0/repair-tasks/${encodeURIComponent(taskId)}/release`, {
       method: "POST",
@@ -135,6 +214,13 @@ export class RepairWorkerClient {
     });
   }
 
+  /**
+   * @template T
+   * @param {{ repair_task: { task_id: string }, workspace_manifest: RepairWorkspaceManifest }} claimResult
+   * @param {(workspace: { root: string, manifest: RepairWorkspaceManifest }) => T | Promise<T>} callback
+   * @param {string} [temporaryRoot]
+   * @returns {Promise<T>}
+   */
   withWorkspace(claimResult, callback, temporaryRoot) {
     const taskId = claimResult.repair_task.task_id;
     return withEphemeralRepairWorkspace(

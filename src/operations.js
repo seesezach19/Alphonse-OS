@@ -1,3 +1,26 @@
+// @ts-check
+
+/**
+ * @typedef {{
+ *   operation_id: string,
+ *   version: string,
+ *   summary: string,
+ *   visibility: string,
+ *   authority_class: string,
+ *   effect_class: string,
+ *   idempotency: string,
+ *   transport: { method: string, path: string },
+ *   input_schema: Record<string, any>,
+ *   output_schema: Record<string, any>,
+ *   supported_modes: string[],
+ *   preconditions: string[],
+ *   outcomes: string[],
+ *   issues: string[],
+ *   emitted_events: string[],
+ *   next_operations: string[]
+ * }} KernelOperationDescriptor
+ */
+
 export const PROTOCOL_VERSION = "0.1.0";
 
 const emptyInputSchema = { type: "object", additionalProperties: false };
@@ -43,6 +66,7 @@ const operationDescriptorOutputSchema = {
   }
 };
 
+/** @type {KernelOperationDescriptor[]} */
 const descriptors = [
   {
     operation_id: "kernel.protocol.bootstrap.get",
@@ -226,6 +250,16 @@ const descriptors = [
 const identityCommandIssues = ["AUTHENTICATION_REQUIRED", "INVALID_BOOTSTRAP_CREDENTIAL", "INVALID_JSON",
   "REQUEST_TOO_LARGE", "INVALID_INPUT", "IDEMPOTENCY_CONFLICT"];
 
+/**
+ * @param {string} operationId
+ * @param {string} summary
+ * @param {string} path
+ * @param {string} resultKey
+ * @param {string[]} [issues]
+ * @param {Record<string, any>} [inputSchema]
+ * @param {string} [authorityClass]
+ * @returns {KernelOperationDescriptor}
+ */
 function commandDescriptor(operationId, summary, path, resultKey, issues = [], inputSchema = { type: "object" },
   authorityClass = "authenticated_sponsoring_human") {
   const agentCommand = authorityClass.includes("agent");
@@ -317,11 +351,21 @@ function commandDescriptor(operationId, summary, path, resultKey, issues = [], i
     issues: [...(agentCommand
       ? ["AGENT_AUTHENTICATION_REQUIRED", "INVALID_JSON", "REQUEST_TOO_LARGE", "INVALID_INPUT", "IDEMPOTENCY_CONFLICT"]
       : identityCommandIssues), ...issues],
-    emitted_events: Array.isArray(emittedEvent) ? emittedEvent : [emittedEvent],
+    emitted_events: /** @type {string[]} */ (
+      Array.isArray(emittedEvent) ? emittedEvent : emittedEvent ? [emittedEvent] : []
+    ),
     next_operations: []
   };
 }
 
+/**
+ * @param {string} operationId
+ * @param {string} summary
+ * @param {string} path
+ * @param {string} resultKey
+ * @param {string} notFoundIssue
+ * @returns {KernelOperationDescriptor}
+ */
 function readDescriptor(operationId, summary, path, resultKey, notFoundIssue) {
   const idName = path.match(/\{([^}]+)\}/)?.[1] ?? "id";
   return {
@@ -1058,10 +1102,17 @@ descriptors.push(
   }
 );
 
+/**
+ * @returns {KernelOperationDescriptor[]}
+ */
 export function listOperationDescriptors() {
   return structuredClone(descriptors);
 }
 
+/**
+ * @param {string} operationId
+ * @returns {KernelOperationDescriptor | null}
+ */
 export function getOperationDescriptor(operationId) {
   const descriptor = descriptors.find((item) => item.operation_id === operationId);
   return descriptor ? structuredClone(descriptor) : null;

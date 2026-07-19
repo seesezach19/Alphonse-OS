@@ -1,3 +1,5 @@
+// @ts-check
+
 import {
   createPrivateKey,
   createPublicKey,
@@ -16,7 +18,20 @@ const ADVISORY_SCHEMA = "alphonse.package_advisory.v0.1";
 const ATTESTATION_SCHEMA = "alphonse.package_attestation.v0.1";
 const ADVISORY_SNAPSHOT_SCHEMA = "alphonse.advisory_snapshot.v0.1";
 
+/**
+ * Runtime validators in this module remain authoritative for untrusted
+ * package, policy, and advisory documents. JSDoc describes accepted shapes
+ * so callers wire correctly; annotations never replace validation (ADR 0107).
+ *
+ * @typedef {[string, Set<string>, string]} RiskProfileClassCheck
+ */
+
 export class PortableTrustError extends Error {
+  /**
+   * @param {string} code Stable machine-readable issue code.
+   * @param {string} message Human-readable explanation.
+   * @param {Record<string, unknown>} [details] Structured, non-sensitive context.
+   */
   constructor(code, message, details = {}) {
     super(message);
     this.name = "PortableTrustError";
@@ -25,17 +40,33 @@ export class PortableTrustError extends Error {
   }
 }
 
+/**
+ * @param {string} code
+ * @param {string} message
+ * @param {Record<string, unknown>} [details]
+ * @returns {never}
+ */
 function fail(code, message, details) {
   throw new PortableTrustError(code, message, details);
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {Record<string, any>}
+ */
 function requireObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     fail("INVALID_DOCUMENT", `${label} must be an object.`);
   }
-  return value;
+  return /** @type {Record<string, any>} */ (value);
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {any[]}
+ */
 function requireArray(value, label) {
   if (!Array.isArray(value)) {
     fail("INVALID_DOCUMENT", `${label} must be an array.`);
@@ -43,6 +74,11 @@ function requireArray(value, label) {
   return value;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {string}
+ */
 function requireString(value, label) {
   if (typeof value !== "string" || value.length === 0) {
     fail("INVALID_DOCUMENT", `${label} must be a non-empty string.`);
@@ -50,6 +86,11 @@ function requireString(value, label) {
   return value;
 }
 
+/**
+ * @param {Record<string, unknown>} value
+ * @param {string[]} allowed
+ * @param {string} label
+ */
 function requireExactKeys(value, allowed, label) {
   const unexpected = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unexpected.length > 0) {
@@ -57,6 +98,10 @@ function requireExactKeys(value, allowed, label) {
   }
 }
 
+/**
+ * @param {any} value
+ * @param {string} [path]
+ */
 function rejectPrivateMaterial(value, path = "release") {
   if (typeof value === "string") {
     if (/PRIVATE KEY|ed25519-pkcs8:|MC4CAQAwBQYDK2VwBCIEI/i.test(value)) {
@@ -73,6 +118,10 @@ function rejectPrivateMaterial(value, path = "release") {
   }
 }
 
+/**
+ * @param {any} advisory Untrusted advisory envelope; validated here.
+ * @returns {Record<string, any>}
+ */
 export function validateAdvisoryShape(advisory) {
   requireObject(advisory, "advisory");
   rejectPrivateMaterial(advisory, "advisory");
@@ -99,6 +148,11 @@ export function validateAdvisoryShape(advisory) {
   return document;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {number}
+ */
 function parseTime(value, label) {
   const milliseconds = Date.parse(requireString(value, label));
   if (!Number.isFinite(milliseconds)) {
@@ -107,6 +161,10 @@ function parseTime(value, label) {
   return milliseconds;
 }
 
+/**
+ * @param {unknown} value
+ * @returns {import("node:crypto").KeyObject}
+ */
 function publicKeyObject(value) {
   if (typeof value !== "string" || !value.startsWith("ed25519-spki:")) {
     fail("INVALID_PUBLIC_KEY", "Ed25519 public key must use ed25519-spki encoding.");
@@ -122,6 +180,10 @@ function publicKeyObject(value) {
   }
 }
 
+/**
+ * @param {any} value
+ * @returns {import("node:crypto").KeyObject}
+ */
 function privateKeyObject(value) {
   if (typeof value !== "string") {
     return value;
@@ -140,23 +202,45 @@ function privateKeyObject(value) {
   }
 }
 
+/**
+ * @param {any} key
+ * @returns {string}
+ */
 export function publicKeyText(key) {
   const publicKey = typeof key === "string"
-    ? key.startsWith("ed25519-pkcs8:") ? createPublicKey(privateKeyObject(key)) : publicKeyObject(key)
+    ? key.startsWith("ed25519-pkcs8:")
+      // Node accepts KeyObject here; current @types/node overloads omit it.
+      ? createPublicKey(/** @type {any} */ (privateKeyObject(key)))
+      : publicKeyObject(key)
     : key.type === "public" ? key : createPublicKey(key);
   return `ed25519-spki:${publicKey.export({ format: "der", type: "spki" }).toString("base64")}`;
 }
 
+/**
+ * @param {any} key
+ * @returns {string}
+ */
 export function privateKeyText(key) {
   const privateKey = privateKeyObject(key);
   return `ed25519-pkcs8:${privateKey.export({ format: "der", type: "pkcs8" }).toString("base64")}`;
 }
 
+/**
+ * @param {any} document
+ * @param {any} privateKey
+ * @returns {string}
+ */
 export function signDocument(document, privateKey) {
   const signature = createSignature(null, Buffer.from(canonicalize(document)), privateKeyObject(privateKey));
   return `ed25519:${signature.toString("base64")}`;
 }
 
+/**
+ * @param {any} document
+ * @param {unknown} signature
+ * @param {any} publicKey
+ * @returns {boolean}
+ */
 export function verifyDocument(document, signature, publicKey) {
   if (typeof signature !== "string" || !signature.startsWith("ed25519:")) {
     return false;
@@ -173,6 +257,11 @@ export function verifyDocument(document, signature, publicKey) {
   }
 }
 
+/**
+ * @param {string} packageId
+ * @param {any} delegation
+ * @returns {boolean}
+ */
 function packageWithinDelegation(packageId, delegation) {
   const inNamespace = packageId === delegation.namespace_scope
     || packageId.startsWith(`${delegation.namespace_scope}.`);
@@ -182,6 +271,10 @@ function packageWithinDelegation(packageId, delegation) {
   return delegation.package_scope === packageId;
 }
 
+/**
+ * @param {any} release
+ * @returns {Map<string, Buffer>}
+ */
 function artifactPayloads(release) {
   const payloads = new Map();
   for (const artifact of requireArray(release.artifacts, "release.artifacts")) {
@@ -197,6 +290,10 @@ function artifactPayloads(release) {
   return payloads;
 }
 
+/**
+ * @param {any} release Untrusted release document; validated here.
+ * @param {{ now?: string, requireCurrentDelegation?: boolean }} [options]
+ */
 export function verifyRelease(release, {
   now = new Date().toISOString(),
   requireCurrentDelegation = false
@@ -275,8 +372,8 @@ export function verifyRelease(release, {
     const name = requireString(descriptor.name, "artifact descriptor name");
     if (descriptorNames.has(name)) fail("DUPLICATE_ARTIFACT", `Artifact descriptor ${name} is duplicated.`);
     descriptorNames.add(name);
-    if (!payloads.has(name)) fail("MISSING_ARTIFACT", `Artifact ${name} is missing.`);
     const bytes = payloads.get(name);
+    if (!bytes) fail("MISSING_ARTIFACT", `Artifact ${name} is missing.`);
     if (/PRIVATE KEY|ed25519-pkcs8:/i.test(bytes.toString("utf8"))) {
       fail("PRIVATE_KEY_PROHIBITED", `Artifact ${name} contains private key material.`);
     }
@@ -327,14 +424,22 @@ export function verifyRelease(release, {
     risk_classes: [...riskClasses].sort(),
     dependencies: manifest.dependencies,
     artifact_descriptors: descriptors,
-    attestation_digests: release.attestations.map((entry) => sha256Digest(entry))
+    attestation_digests: release.attestations.map((/** @type {any} */ entry) => sha256Digest(entry))
   };
 }
 
+/**
+ * @param {any} manifest
+ * @returns {string}
+ */
 export function packageIdentity(manifest) {
   return `${manifest.package_id}@${manifest.semantic_version}#${sha256Digest(manifest)}+${manifest.package_artifact_digest}`;
 }
 
+/**
+ * @param {any} release
+ * @param {any} policy
+ */
 function verifyPublisherPin(release, policy) {
   const pin = requireArray(policy.pinned_publishers, "policy.pinned_publishers")
     .find((entry) => entry.publisher_id === release.publisher.publisher_id);
@@ -343,12 +448,18 @@ function verifyPublisherPin(release, policy) {
   }
   const packageId = release.manifest.package_id;
   if (!requireArray(pin.namespaces, "publisher pin namespaces")
-    .some((namespace) => packageId === namespace || packageId.startsWith(`${namespace}.`))) {
+    .some((/** @type {string} */ namespace) => packageId === namespace || packageId.startsWith(`${namespace}.`))) {
     fail("PUBLISHER_NAMESPACE_DENIED", `Publisher is not pinned for ${packageId}.`);
   }
   return pin;
 }
 
+/**
+ * @param {any} node
+ * @param {any} verified
+ * @param {any} policy
+ * @returns {string}
+ */
 function verifyCustodyReceipt(node, verified, policy) {
   const trusted = [];
   for (const receipt of requireArray(node.custody_receipts, "custody_receipts")) {
@@ -392,9 +503,16 @@ function verifyCustodyReceipt(node, verified, policy) {
   fail("NO_TRUSTED_CUSTODY_RECEIPT", `No trusted exact custody receipt exists for ${verified.package_identity}.`);
 }
 
+/**
+ * @param {any} node
+ * @param {any} verified
+ * @param {any} policy
+ * @param {number} at
+ * @returns {any[]}
+ */
 function verifyAttestations(node, verified, policy, at) {
   const trustedAttesters = requireArray(policy.trusted_attesters, "policy.trusted_attesters");
-  const artifactDigests = new Set(verified.artifact_descriptors.map((entry) => entry.digest));
+  const artifactDigests = new Set(verified.artifact_descriptors.map((/** @type {any} */ entry) => entry.digest));
   const attestations = [];
   for (const attestation of node.release.attestations) {
     requireObject(attestation, "attestation");
@@ -428,6 +546,12 @@ function verifyAttestations(node, verified, policy, at) {
   return attestations;
 }
 
+/**
+ * @param {any} bundle
+ * @param {Map<string, any>} nodesByIdentity
+ * @param {any} policy
+ * @param {number} at
+ */
 function verifyAdvisorySnapshot(bundle, nodesByIdentity, policy, at) {
   const snapshot = requireObject(bundle.advisory_snapshot, "bundle.advisory_snapshot");
   const document = requireObject(snapshot.document, "advisory snapshot document");
@@ -441,7 +565,7 @@ function verifyAdvisorySnapshot(bundle, nodesByIdentity, policy, at) {
     fail("INVALID_ADVISORY_SNAPSHOT_SIGNATURE", "Advisory snapshot signature is invalid or untrusted.");
   }
   const identities = [...nodesByIdentity.keys()].sort();
-  const advisoryDigests = bundle.advisories.map((entry) => sha256Digest(entry)).sort();
+  const advisoryDigests = bundle.advisories.map((/** @type {any} */ entry) => sha256Digest(entry)).sort();
   if (canonicalize(document.package_identities) !== canonicalize(identities)
       || canonicalize(document.advisory_digests) !== canonicalize(advisoryDigests)) {
     fail("ADVISORY_SNAPSHOT_MISMATCH", "Advisory snapshot does not bind the exact bundle scope.");
@@ -467,6 +591,10 @@ function verifyAdvisorySnapshot(bundle, nodesByIdentity, policy, at) {
   };
 }
 
+/**
+ * @param {any} reference
+ * @returns {string}
+ */
 function exactReference(reference) {
   requireObject(reference, "dependency reference");
   return `${requireString(reference.package_id, "dependency package_id")}@${requireString(
@@ -478,6 +606,13 @@ function exactReference(reference) {
   )}`;
 }
 
+/**
+ * @param {any} advisories
+ * @param {Map<string, any>} nodesByIdentity
+ * @param {any} policy
+ * @param {number} at
+ * @returns {any[]}
+ */
 function verifyAdvisories(advisories, nodesByIdentity, policy, at) {
   const responses = [];
   for (const advisory of requireArray(advisories, "bundle.advisories")) {
@@ -512,6 +647,11 @@ function verifyAdvisories(advisories, nodesByIdentity, policy, at) {
   return responses.sort((left, right) => left.advisory_id.localeCompare(right.advisory_id));
 }
 
+/**
+ * @param {any} bundle Untrusted offline import bundle; validated here.
+ * @param {any} policy Untrusted trust policy; validated here.
+ * @param {{ now?: string, transport?: string }} [options]
+ */
 export function verifyImportBundle(bundle, policy, {
   now = new Date().toISOString(),
   transport = "registry"
@@ -553,8 +693,13 @@ export function verifyImportBundle(bundle, policy, {
   }
 
   const rootIdentity = packageIdentity(rootNode.release.manifest);
+  /** @type {Set<string>} */
   const reachable = new Set();
+  /** @type {Set<string>} */
   const visiting = new Set();
+  /**
+   * @param {string} identity
+   */
   function walk(identity) {
     if (visiting.has(identity)) fail("DEPENDENCY_CYCLE", `Dependency cycle includes ${identity}.`);
     if (reachable.has(identity)) return;
@@ -616,6 +761,7 @@ export function verifyImportBundle(bundle, policy, {
         kernel_api: manifest.compatibility?.kernel_api });
     }
     const riskProfile = requireObject(manifest.risk_profile, "manifest.risk_profile");
+    /** @type {RiskProfileClassCheck[]} */
     const profileChecks = [
       ["effect_class", allowedEffectClasses, "EFFECT_CLASS_DENIED"],
       ["context_class", allowedContextClasses, "CONTEXT_CLASS_DENIED"],
@@ -628,7 +774,7 @@ export function verifyImportBundle(bundle, policy, {
       }
     }
     for (const descriptor of verified.artifact_descriptors) {
-      const classification = attestations.find((entry) => entry.type === riskAttestationType
+      const classification = attestations.find((/** @type {any} */ entry) => entry.type === riskAttestationType
         && entry.subject_digest === descriptor.digest);
       if (!classification || typeof classification.result.risk_class !== "string") {
         decisions.push({ code: "RISK_CLASSIFICATION_MISSING", package_identity: identity,
@@ -649,7 +795,7 @@ export function verifyImportBundle(bundle, policy, {
         decisions.push({ code: "RISK_CLASS_DENIED", package_identity: identity, risk_class: riskClass });
       }
     }
-    const attestationTypes = new Set(attestations.map((entry) => entry.type));
+    const attestationTypes = new Set(attestations.map((/** @type {any} */ entry) => entry.type));
     for (const required of requiredAttestations) {
       if (!attestationTypes.has(required)) {
         decisions.push({ code: "REQUIRED_ATTESTATION_MISSING", package_identity: identity,
@@ -688,19 +834,20 @@ export function verifyImportBundle(bundle, policy, {
       bundle_digest: sha256Digest(bundle),
       trust_policy_digest: sha256Digest(policy),
       packages: [...reachable].sort().map((identity) => {
-        const verified = verifiedByIdentity.get(identity);
-        const node = nodesByIdentity.get(identity);
+        // Reachable identities were inserted into both maps during walk().
+        const verified = /** @type {any} */ (verifiedByIdentity.get(identity));
+        const node = /** @type {any} */ (nodesByIdentity.get(identity));
         return {
           package_identity: identity,
           manifest_digest: verified.manifest_digest,
           release_digest: verified.release_digest,
-          artifact_digests: verified.artifact_descriptors.map((entry) => entry.digest).sort(),
-          custody_receipt_digests: node.custody_receipts.map((entry) => sha256Digest(entry)).sort(),
-          attestation_digests: node.release.attestations.map((entry) => sha256Digest(entry)).sort()
+          artifact_digests: verified.artifact_descriptors.map((/** @type {any} */ entry) => entry.digest).sort(),
+          custody_receipt_digests: node.custody_receipts.map((/** @type {any} */ entry) => sha256Digest(entry)).sort(),
+          attestation_digests: node.release.attestations.map((/** @type {any} */ entry) => sha256Digest(entry)).sort()
         };
       }),
       advisory_snapshot: advisorySnapshot,
-      advisory_digests: bundle.advisories.map((entry) => sha256Digest(entry)).sort()
+      advisory_digests: bundle.advisories.map((/** @type {any} */ entry) => sha256Digest(entry)).sort()
     },
     decisions,
     advisory_responses: advisoryResponses
