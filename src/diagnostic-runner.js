@@ -78,6 +78,24 @@ function exactImageDigest(reference) {
 }
 
 /**
+ * Bind broker-owned state to the trusted runner so cleanup does not depend on a host's
+ * particular non-root UID. Root and non-POSIX runners retain a fixed non-root identity.
+ * @param {number | undefined} [uid]
+ * @param {number | undefined} [gid]
+ * @returns {string}
+ */
+export function diagnosticBrokerContainerUser(
+  uid = typeof process.getuid === "function" ? process.getuid() : undefined,
+  gid = typeof process.getgid === "function" ? process.getgid() : undefined
+) {
+  if (typeof uid === "number" && Number.isSafeInteger(uid) && uid > 0
+      && typeof gid === "number" && Number.isSafeInteger(gid) && gid > 0) {
+    return `${uid}:${gid}`;
+  }
+  return "1000:1000";
+}
+
+/**
  * @returns {Record<string, string>}
  */
 function runtimeEngineFacts() {
@@ -288,7 +306,7 @@ export async function runDiagnosticWorker({ launch, workerImageReference, broker
     docker(["run", "--detach", "--name", brokerName,
       "--label", `alphonse.worker_run_id=${launch.worker_run_id}`,
       "--network", networkName, "--network-alias", "model-broker",
-      "--user", "1000:1000", "--read-only", "--cap-drop", "ALL",
+      "--user", diagnosticBrokerContainerUser(), "--read-only", "--cap-drop", "ALL",
       "--security-opt", "no-new-privileges:true", "--pids-limit", "64",
       "--memory", "134217728", "--cpus", "0.5",
       "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16777216",
