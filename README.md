@@ -28,7 +28,7 @@ PostgreSQL migrations and the local Environment bootstrap run automatically. The
 
 ### Console Prototype
 
-The local Console currently uses V0.2-shaped demonstration data while its public-operation BFF is developed. It binds to loopback only and performs no Kernel or Diagnostic writes.
+The local Console is a safe guided customer demo built around V0.2-shaped fixture data. It binds to loopback only and performs no Kernel, Diagnostic, n8n, or customer-system writes. A server-side status route separately checks whether the local Kernel, Diagnostic Plane, and an optional n8n instance answer read-only probes; reachability never turns fixture records into live claims.
 
 ```powershell
 npm install --prefix apps/console
@@ -36,6 +36,22 @@ npm run console:dev
 ```
 
 Open http://127.0.0.1:3200.
+
+The first visit opens a short test guide. A useful five-minute path is:
+
+1. Open the priority case.
+2. Compare expected and observed behavior.
+3. Select timeline events and inspect what each one establishes.
+4. Open the recommended action and preview the simulated transition.
+5. Visit **System** to see the explicit boundary between live reachability and fixture service data.
+
+The Kernel probe defaults to `http://127.0.0.1:3000`. To include a local n8n health probe, set its base URL before starting the Console:
+
+```bash
+ALPHONSE_CONSOLE_N8N_URL=http://127.0.0.1:45679 npm run console:dev
+```
+
+Use `ALPHONSE_CONSOLE_KERNEL_URL` only when the local Kernel is listening at a different address. These variables are read by the Console server and are not exposed to the browser. Keep the Console loopback-bound for this prototype; sharing it to another device needs an authenticated deployment boundary first.
 
 Production and type checks:
 
