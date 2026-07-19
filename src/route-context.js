@@ -1,0 +1,128 @@
+// @ts-check
+
+/**
+ * The composition-root values exposed to HTTP routers. Keeping the key set in one checked
+ * module makes router wiring changes explicit while preserving the no-build JavaScript artifact.
+ */
+export const ROUTE_CONTEXT_KEYS = /** @type {const} */ ([
+  "database",
+  "identityIntent",
+  "grantAuthorityService",
+  "contextService",
+  "packageService",
+  "packageTrustService",
+  "deploymentService",
+  "upgradeService",
+  "handoffService",
+  "executionService",
+  "recoveryService",
+  "restoreService",
+  "effectService",
+  "environmentCoordination",
+  "supportService",
+  "diagnosticDatabase",
+  "diagnosticService",
+  "diagnosticRuntimeService",
+  "diagnosticReproductionService",
+  "diagnosticRepairWorkerService",
+  "diagnosticDiagnosisService",
+  "diagnosticRepairDeliveryService",
+  "diagnosticVerificationService",
+  "diagnosticPromotionService",
+  "diagnosticArtifactStore",
+  "diagnosticGrantApplicationService",
+  "diagnosticObservationService",
+  "diagnosticTokenizationProofService",
+  "diagnosticCorrelationService",
+  "diagnosticEffectEvaluationService",
+  "diagnosticEvidencePackageService",
+  "diagnosticIndependentVerificationService",
+  "diagnosticAssignmentService",
+  "diagnosticMaterialAvailabilityService",
+  "diagnosticDispatchService",
+  "diagnosticDispatchAuthorizationService",
+  "diagnosticWorkerExecutionService",
+  "diagnosticConsistencyService",
+  "installationId",
+  "environmentId",
+  "environmentName",
+  "grantAuthorityFeedToken",
+  "grantApplicationReceiptServiceToken",
+  "diagnosticTokenizationResultToken",
+  "dataPlaneReceiptSecret",
+  "dataPlaneId",
+  "diagnosticRuntimeAdapterId",
+  "diagnosticRuntimeAdapterVersion",
+  "diagnosticRuntimeAdapterKeyId",
+  "PROTOCOL_VERSION",
+  "DIAGNOSTIC_PROTOCOL_VERSION",
+  "listOperationDescriptors",
+  "getOperationDescriptor",
+  "listDiagnosticOperationDescriptors",
+  "getDiagnosticOperationDescriptor",
+  "getWorkflowRuntimeAdapterContract",
+  "getRepairDeliveryAdapterContract",
+  "getVerificationRunnerContract",
+  "validateCommandEnvelope",
+  "validateProfileUpdateCommand",
+  "canonicalize",
+  "sha256Digest",
+  "createHmac",
+  "createPublicKey",
+  "timingSafeEqual",
+  "sendJson",
+  "sendHtml",
+  "readJson",
+  "sendCommandResult",
+  "pathId",
+  "requireRouteTaskMatch",
+  "serializeEnvironment",
+  "escapeHtml",
+  "observationAuthentication",
+  "authenticateBootstrapOperator",
+  "authenticateDiagnosticOwner",
+  "authenticatePrivateService",
+  "authenticateDataPlane",
+  "authenticateSubstrate",
+  "authenticateBroker",
+  "authenticateAgent",
+  "requireDiagnosticPlane",
+  "requireDiagnosticRuntime",
+  "requireDiagnosticReproduction",
+  "requireGrantAuthority",
+  "requireDiagnosticGrantApplication",
+  "requireDiagnosticObservation",
+  "requireDiagnosticTokenizationProof",
+  "requireDiagnosticCorrelation",
+  "requireDiagnosticEffectEvaluation",
+  "requireDiagnosticEvidencePackaging",
+  "requireDiagnosticMaterialAvailability",
+  "requireDiagnosticAssignment",
+  "requireDiagnosticDispatch",
+  "requireDiagnosticWorkerExecution",
+  "requireDiagnosticConsistency",
+  "requireDiagnosticDispatchAuthority",
+  "requireIndependentDiagnosticVerification",
+  "requireDiagnosticRepairWorker",
+  "requireDiagnosticDiagnosis",
+  "requireDiagnosticRepairDelivery",
+  "requireDiagnosticVerification",
+  "requireDiagnosticPromotion"
+]);
+
+/** @typedef {typeof ROUTE_CONTEXT_KEYS[number]} RouteContextKey */
+/** @typedef {Record<RouteContextKey, any>} RouteContext */
+
+/**
+ * Fail at composition time when a router dependency is omitted. Static checking covers the
+ * routers themselves; this runtime assertion covers the deliberately unchecked server root.
+ * @param {Record<string, any>} values
+ * @returns {RouteContext}
+ */
+export function createRouteContext(values) {
+  const missing = ROUTE_CONTEXT_KEYS.filter((key) => !Object.hasOwn(values, key));
+  if (missing.length > 0) {
+    throw new Error(`Route context is missing required values: ${missing.join(", ")}`);
+  }
+  return /** @type {RouteContext} */ (values);
+}

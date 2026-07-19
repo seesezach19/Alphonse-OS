@@ -1,0 +1,16 @@
+{
+  "policy": "append-only",
+  "files": [
+    "packages/n8n-operational-package/src/repair-delivery-adapter.js",
+    "src/diagnostic-router.js",
+    "src/diagnostic-runner.js",
+    "src/errors.js",
+    "src/http-helpers.js",
+    "src/kernel-router.js",
+    "src/operations.js",
+    "src/portable-trust.js",
+    "src/repair-worker-client.js",
+    "src/route-context.js",
+    "src/support-router.js"
+  ]
+}

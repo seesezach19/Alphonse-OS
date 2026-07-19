@@ -1,5 +1,16 @@
+// @ts-check
+
 import { sha256Digest } from "../../../src/canonical-json.js";
 import { KernelError } from "../../../src/errors.js";
+
+/**
+ * n8n API payloads are untrusted external material: the `required(...)` and
+ * digest checks below stay authoritative (ADR 0107), so workflow-shaped
+ * values are deliberately typed `any` rather than trusted structurally.
+ *
+ * @typedef {any} N8nWorkflow
+ * @typedef {{ target_id: string }} RepairTarget
+ */
 
 const ADAPTER = Object.freeze({
   adapter_id: "alphonse.n8n.repair-delivery",
@@ -21,10 +32,20 @@ export const N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST = Object.freeze({
   })
 });
 
+/**
+ * @template T
+ * @param {T} value
+ * @returns {T}
+ */
 function clone(value) {
   return structuredClone(value);
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {string}
+ */
 function required(value, field) {
   if (typeof value !== "string" || !value.trim()) {
     throw new KernelError(400, "INVALID_N8N_REPAIR_INPUT", `${field} is required.`);
@@ -32,6 +53,10 @@ function required(value, field) {
   return value.trim();
 }
 
+/**
+ * @param {any} value Untrusted repair artifact; validated by exact comparison.
+ * @returns {"repaired" | "ineffective"}
+ */
 function exactInventoryPatch(value) {
   const repaired = [
     { operation: "replace", path: "missing_sku", value: "inventory_unknown" },
@@ -51,6 +76,7 @@ function exactInventoryPatch(value) {
     "n8n adapter does not support this missing-SKU patch.");
 }
 
+/** @param {N8nWorkflow} workflow */
 function behaviorMaterial(workflow) {
   return {
     target_type: "n8n.workflow",
@@ -66,10 +92,16 @@ function behaviorMaterial(workflow) {
   };
 }
 
+/** @param {N8nWorkflow} workflow */
 export function n8nTargetRevisionMaterial(workflow) {
   return behaviorMaterial(workflow);
 }
 
+/**
+ * @param {N8nWorkflow} baseWorkflow
+ * @param {any} repairArtifact
+ * @param {string} repairCandidateId
+ */
 export function materializeInventoryRepair(baseWorkflow, repairArtifact, repairCandidateId) {
   if (exactInventoryPatch(repairArtifact) !== "repaired") {
     throw new KernelError(400, "N8N_REPAIR_PATCH_UNSUPPORTED",
@@ -78,6 +110,11 @@ export function materializeInventoryRepair(baseWorkflow, repairArtifact, repairC
   return materializeInventoryCandidate(baseWorkflow, repairArtifact, repairCandidateId);
 }
 
+/**
+ * @param {N8nWorkflow} baseWorkflow
+ * @param {any} repairArtifact
+ * @param {string} repairCandidateId
+ */
 export function materializeInventoryCandidate(baseWorkflow, repairArtifact, repairCandidateId) {
   const mode = exactInventoryPatch(repairArtifact);
   const candidate = clone(baseWorkflow);
@@ -88,8 +125,8 @@ export function materializeInventoryCandidate(baseWorkflow, repairArtifact, repa
   delete candidate.updatedAt;
   delete candidate.versionId;
   if (mode === "ineffective") return candidate;
-  const mapping = candidate.nodes?.find((node) => node.name === "Defective Missing SKU Mapping");
-  const drafting = candidate.nodes?.find((node) => node.name === "Draft for Local Review");
+  const mapping = candidate.nodes?.find((/** @type {any} */ node) => node.name === "Defective Missing SKU Mapping");
+  const drafting = candidate.nodes?.find((/** @type {any} */ node) => node.name === "Draft for Local Review");
   if (!mapping || !drafting) {
     throw new KernelError(409, "N8N_REPAIR_TARGET_UNSUPPORTED",
       "Expected inventory mapping and review nodes are unavailable.");
@@ -133,6 +170,7 @@ export function materializeInventoryCandidate(baseWorkflow, repairArtifact, repa
   return candidate;
 }
 
+/** @param {N8nWorkflow} candidate */
 function createPayload(candidate) {
   return {
     name: candidate.name,
@@ -142,6 +180,7 @@ function createPayload(candidate) {
   };
 }
 
+/** @param {N8nWorkflow} value */
 function executableBehavior(value) {
   return {
     nodes: clone(value.nodes ?? []),
@@ -150,6 +189,16 @@ function executableBehavior(value) {
   };
 }
 
+/**
+ * @param {{
+ *   baseUrl: string,
+ *   apiKey: string,
+ *   healthUrl?: string,
+ *   fetchImpl?: typeof fetch,
+ *   requestTimeoutMs?: number
+ * }} options `healthUrl` is optional: it defaults to `baseUrl` with any
+ *   trailing `/api/v1` stripped, which is how server.js configures it.
+ */
 export function createN8nRepairDeliveryAdapter({
   baseUrl, apiKey, healthUrl, fetchImpl = fetch, requestTimeoutMs = 5000
 }) {
@@ -175,6 +224,11 @@ export function createN8nRepairDeliveryAdapter({
     return { status: "healthy", endpoint: healthRoot };
   }
 
+  /**
+   * @param {string} path
+   * @param {RequestInit} [init]
+   * @returns {Promise<any>}
+   */
   async function request(path, init = {}) {
     const response = await fetchImpl(`${root}${path}`, {
       ...init,
@@ -195,6 +249,7 @@ export function createN8nRepairDeliveryAdapter({
     return body;
   }
 
+  /** @param {RepairTarget} target */
   async function inspect(target) {
     const workflow = await request(`/workflows/${encodeURIComponent(required(target.target_id, "target.target_id"))}`);
     const material = n8nTargetRevisionMaterial(workflow);
@@ -207,10 +262,20 @@ export function createN8nRepairDeliveryAdapter({
     };
   }
 
+  /** @param {RepairTarget} target */
   async function snapshot(target) {
     return inspect(target);
   }
 
+  /**
+   * @param {{
+   *   target: RepairTarget,
+   *   expected_base_revision_digest: string,
+   *   repair_candidate_id: string,
+   *   repair_artifact: any,
+   *   idempotency_key: string
+   * }} input
+   */
   async function createCandidate({
     target, expected_base_revision_digest: expectedBase, repair_candidate_id: repairCandidateId,
     repair_artifact: repairArtifact, idempotency_key: idempotencyKey
@@ -256,6 +321,15 @@ export function createN8nRepairDeliveryAdapter({
     };
   }
 
+  /**
+   * @param {{
+   *   target: RepairTarget,
+   *   expected_base_revision_digest: string,
+   *   candidate_target_id: string,
+   *   candidate_target_revision_digest: string,
+   *   idempotency_key: string
+   * }} input
+   */
   async function promote({
     target, expected_base_revision_digest: expectedBase,
     candidate_target_id: candidateTargetId,
@@ -349,6 +423,14 @@ export function createN8nRepairDeliveryAdapter({
     };
   }
 
+  /**
+   * @param {{
+   *   target: RepairTarget,
+   *   previous_target_revision_digest: string,
+   *   candidate_target_id: string,
+   *   candidate_target_revision_digest: string
+   * }} input
+   */
   async function reconcilePromotion({
     target, previous_target_revision_digest: previousTargetRevisionDigest,
     candidate_target_id: candidateTargetId,
@@ -388,6 +470,14 @@ export function createN8nRepairDeliveryAdapter({
     return { ...material, receipt_digest: sha256Digest(material) };
   }
 
+  /**
+   * @param {{
+   *   target: RepairTarget,
+   *   expected_current_revision_digest: string,
+   *   rollback_representation: N8nWorkflow,
+   *   idempotency_key: string
+   * }} input
+   */
   async function rollback({
     target, expected_current_revision_digest: expectedCurrentRevisionDigest,
     rollback_representation: rollbackRepresentation, idempotency_key: idempotencyKey

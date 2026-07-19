@@ -30,6 +30,12 @@ const receiptHeaders = { authorization: "Bearer local-grant-application-receipt-
 const operatorHeaders = { authorization: "Bearer local-read-only-ingress-operator-token" };
 const stimulusToken = "local-route-scoped-stimulus-token";
 const agentToken = "canonical-proof-builder-agent-token-00000005";
+const offlineVerifierTimeoutMs = Number(
+  process.env.CANONICAL_OFFLINE_VERIFIER_TIMEOUT_MS ?? 8 * 60_000
+);
+if (!Number.isSafeInteger(offlineVerifierTimeoutMs) || offlineVerifierTimeoutMs <= 0) {
+  throw new Error("CANONICAL_OFFLINE_VERIFIER_TIMEOUT_MS must be a positive safe integer.");
+}
 const through17 = process.argv.includes("--through-17");
 const through16 = through17 || process.argv.includes("--through-16");
 const through15 = through16 || process.argv.includes("--through-15");
@@ -73,7 +79,7 @@ async function runOfflineVerifier({ imageTag, imageDigest, verificationBundle,
     "-v", `${inputDirectory}:/input:ro`, "-v", `${outputDirectory}:/output:rw`, imageTag,
     "/input/bundle.json", "/output/report.json"], {
     cwd: root, env: environment, encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
-    timeout: 2 * 60_000, windowsHide: true
+    timeout: offlineVerifierTimeoutMs, windowsHide: true
   });
   if (result.error) throw result.error;
   const report = JSON.parse(await readFile(outputPath, "utf8"));

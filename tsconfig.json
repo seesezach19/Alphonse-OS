@@ -1,0 +1,23 @@
+{
+  // Check-only configuration: the kernel ships plain .js — tsc never emits.
+  // Checking is opt-in: files add a leading `// @ts-check` pragma and JSDoc
+  // annotations, one bounded module group at a time, and never opt back out.
+  // Policy: docs/adr/0107-keep-the-kernel-in-plain-javascript-with-opt-in-static-checking.md
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "strict": true,
+    // Catch variables stay `any`: annotate-only JS cannot narrow `unknown`
+    // without inserting runtime-visible locals or assertions.
+    "useUnknownInCatchVariables": false,
+    "target": "es2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.js", "verifier/**/*.js", "packages/**/*.js"],
+  "exclude": ["node_modules", "**/node_modules"]
+}
