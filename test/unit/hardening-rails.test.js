@@ -73,5 +73,5 @@ test("route context fails closed when composition wiring omits a dependency", ()
 test("diagnostic broker state follows a non-root runner identity with a safe fallback", () => {
   assert.equal(diagnosticBrokerContainerUser(1001, 121), "1001:121");
   assert.equal(diagnosticBrokerContainerUser(0, 0), "1000:1000");
-  assert.equal(diagnosticBrokerContainerUser(undefined, undefined), "1000:1000");
+  assert.equal(diagnosticBrokerContainerUser(Number.NaN, Number.NaN), "1000:1000");
 });
