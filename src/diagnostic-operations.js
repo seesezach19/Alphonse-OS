@@ -126,6 +126,157 @@ const runtimeEventInput = {
   }
 };
 
+const coverageWorkflowReference = {
+  type: "object",
+  required: ["system", "environment", "provider_workflow_id"],
+  additionalProperties: false,
+  properties: {
+    system: { type: "string", minLength: 1, maxLength: 80 },
+    environment: { type: "string", minLength: 1, maxLength: 80 },
+    provider_workflow_id: { type: "string", minLength: 1, maxLength: 200 }
+  }
+};
+
+const coverageAdapterBinding = {
+  type: "object",
+  required: [
+    "adapter_id", "adapter_version", "contract_version", "inventory_scope_id", "inventory_scope_digest"
+  ],
+  additionalProperties: false,
+  properties: {
+    adapter_id: { type: "string", minLength: 1, maxLength: 160 },
+    adapter_version: { type: "string", minLength: 1, maxLength: 100 },
+    contract_version: { type: "string", minLength: 1, maxLength: 100 },
+    inventory_scope_id: { type: "string", minLength: 3, maxLength: 160 },
+    inventory_scope_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+  }
+};
+
+const coverageOnboardingOpenInput = {
+  type: "object",
+  required: [
+    "environment_id", "reason", "prior_onboarding_id", "work_intent_id", "passport_id",
+    "agent_principal_id", "workflow_reference", "adapter_binding"
+  ],
+  additionalProperties: false,
+  properties: {
+    environment_id: { type: "string", format: "uuid" },
+    reason: { enum: ["initial_coverage", "revision_change"] },
+    prior_onboarding_id: { type: ["string", "null"], format: "uuid" },
+    work_intent_id: { type: "string", format: "uuid" },
+    passport_id: { type: "string", format: "uuid" },
+    agent_principal_id: { type: "string", format: "uuid" },
+    workflow_reference: coverageWorkflowReference,
+    adapter_binding: coverageAdapterBinding
+  }
+};
+
+const coverageEvidenceCaptureInput = {
+  type: "object",
+  required: [
+    "onboarding_id", "passport_id", "expected_revision", "inventory_request", "selection",
+    "redaction_policy_id"
+  ],
+  additionalProperties: false,
+  properties: {
+    onboarding_id: { type: "string", format: "uuid" },
+    passport_id: { type: "string", format: "uuid" },
+    expected_revision: { type: "integer", minimum: 1 },
+    inventory_request: {
+      type: "object",
+      required: ["scope_id", "page_size", "cursor"],
+      additionalProperties: false,
+      properties: {
+        scope_id: { type: "string", minLength: 3, maxLength: 160 },
+        page_size: { type: "integer", minimum: 1, maximum: 250 },
+        cursor: { type: ["string", "null"], maxLength: 4096 }
+      }
+    },
+    selection: {
+      type: "object",
+      required: [
+        "provider_workflow_id", "expected_scope_digest", "expected_page_digest", "expected_metadata_digest"
+      ],
+      additionalProperties: false,
+      properties: {
+        provider_workflow_id: { type: "string", minLength: 1, maxLength: 200 },
+        expected_scope_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        expected_page_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        expected_metadata_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    redaction_policy_id: { const: "alphonse.workflow-discovery-redaction.v0.1" }
+  }
+};
+
+const coverageProjectionSchema = {
+  type: "object",
+  required: [
+    "schema_version", "onboarding_id", "installation_id", "environment_id", "reason",
+    "prior_onboarding_id", "workflow_reference", "work_intent", "agent", "adapter_binding",
+    "identity_digest", "revision", "event_head_digest", "status", "active_snapshot_digest",
+    "superseded_snapshot_digests", "snapshot_history", "legal_next_operations", "events", "opened_at",
+    "authority", "immutable"
+  ],
+  additionalProperties: false,
+  properties: {
+    schema_version: { const: "alphonse.coverage-onboarding-projection.v0.1" },
+    onboarding_id: { type: "string", format: "uuid" },
+    installation_id: { type: "string", format: "uuid" },
+    environment_id: { type: "string", format: "uuid" },
+    reason: { enum: ["initial_coverage", "revision_change"] },
+    prior_onboarding_id: { type: ["string", "null"], format: "uuid" },
+    workflow_reference: coverageWorkflowReference,
+    work_intent: { type: "object" },
+    agent: { type: "object" },
+    adapter_binding: coverageAdapterBinding,
+    identity_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    revision: { type: "integer", minimum: 1 },
+    event_head_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    status: { enum: ["gathering_evidence", "interpreting"] },
+    active_snapshot_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
+    superseded_snapshot_digests: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+    snapshot_history: { type: "array" },
+    legal_next_operations: { type: "array", items: { type: "string" } },
+    events: { type: "array", minItems: 1 },
+    opened_at: { type: "string", format: "date-time" },
+    authority: { type: "object" },
+    immutable: { const: true }
+  }
+};
+
+const coverageCommandOutput = (operationId, capture = false) => ({
+  type: "object",
+  required: [
+    "command_id", "request_digest", "accepted_at", "operation_id", "actor", "authorization",
+    "coverage_onboarding", "created", ...(capture
+      ? ["workflow_discovery_snapshot", "material_replaced"] : []), "transition"
+  ],
+  additionalProperties: false,
+  properties: {
+    command_id: { type: "string" },
+    request_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    accepted_at: { type: "string", format: "date-time" },
+    operation_id: { const: operationId },
+    actor: { type: "object" },
+    authorization: { type: "object" },
+    coverage_onboarding: coverageProjectionSchema,
+    created: { type: "boolean" },
+    ...(capture ? {
+      workflow_discovery_snapshot: {
+        type: "object",
+        required: [
+          "artifact_digest", "size_bytes", "media_type", "source_scope_digest", "source_page_digest",
+          "selected_metadata_digest", "authority", "immutable"
+        ],
+        additionalProperties: false
+      },
+      material_replaced: { type: "boolean" }
+    } : {}),
+    transition: { type: "object" }
+  }
+});
+
 const repairTaskReference = {
   type: "object",
   required: ["task_id"],
@@ -290,6 +441,87 @@ const descriptors = [
     issues: ["DIAGNOSTIC_PLANE_UNAVAILABLE"],
     emitted_events: [],
     next_operations: ["diagnostic.repair_verification.create"]
+  },
+  {
+    operation_id: "diagnostic.coverage_onboarding.open",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Open one durable authority-free Coverage Onboarding bound to an exact confirmed Work Intent.",
+    visibility: "public",
+    authority_class: "authenticated_coverage_onboarding_agent",
+    effect_class: "append_only_diagnostic_state_transition",
+    idempotency: "required_command_id_and_canonical_request_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/coverage-onboardings" },
+    input_schema: commandEnvelope("diagnostic.coverage_onboarding.open", coverageOnboardingOpenInput),
+    output_schema: coverageCommandOutput("diagnostic.coverage_onboarding.open"),
+    supported_modes: ["live"],
+    preconditions: [
+      "diagnostic_plane_available", "authenticated_agent_passport", "confirmed_exact_work_intent",
+      "configured_runtime_adapter_binding"
+    ],
+    outcomes: ["coverage_onboarding_opened", "coverage_onboarding_reused", "command_replayed"],
+    issues: [
+      "AGENT_AUTHENTICATION_REQUIRED", "COVERAGE_ONBOARDING_INPUT_INVALID", "IDEMPOTENCY_CONFLICT",
+      "COVERAGE_ONBOARDING_INTENT_MISMATCH", "COVERAGE_ONBOARDING_ADAPTER_BINDING_MISMATCH"
+    ],
+    emitted_events: ["diagnostic.coverage_onboarding.opened", "diagnostic.coverage_onboarding.reused"],
+    next_operations: ["diagnostic.coverage_onboarding.get", "diagnostic.coverage_onboarding.evidence_capture"]
+  },
+  {
+    operation_id: "diagnostic.coverage_onboarding.evidence_capture",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Freeze one exact selected workflow inventory item as an immutable authority-free discovery snapshot.",
+    visibility: "public",
+    authority_class: "authenticated_bound_coverage_onboarding_agent",
+    effect_class: "content_addressed_evidence_and_append_only_state_transition",
+    idempotency: "required_command_id_and_canonical_request_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/evidence-captures" },
+    input_schema: commandEnvelope(
+      "diagnostic.coverage_onboarding.evidence_capture", coverageEvidenceCaptureInput
+    ),
+    output_schema: coverageCommandOutput("diagnostic.coverage_onboarding.evidence_capture", true),
+    supported_modes: ["live"],
+    preconditions: [
+      "coverage_onboarding_exists", "authenticated_bound_agent_passport", "exact_expected_revision",
+      "scoped_inventory_adapter_available"
+    ],
+    outcomes: ["discovery_snapshot_captured", "discovery_snapshot_reused",
+      "prior_snapshot_visibly_superseded", "command_replayed"],
+    issues: [
+      "AGENT_AUTHENTICATION_REQUIRED", "COVERAGE_ONBOARDING_INPUT_INVALID", "IDEMPOTENCY_CONFLICT",
+      "COVERAGE_ONBOARDING_REVISION_CONFLICT", "COVERAGE_DISCOVERY_PROVENANCE_CONFLICT",
+      "COVERAGE_ONBOARDING_SENSITIVE_MATERIAL_REJECTED"
+    ],
+    emitted_events: [
+      "diagnostic.coverage_onboarding.evidence_captured",
+      "diagnostic.coverage_onboarding.evidence_reused",
+      "diagnostic.coverage_onboarding.snapshot_replaced"
+    ],
+    next_operations: ["diagnostic.coverage_onboarding.get"]
+  },
+  {
+    operation_id: "diagnostic.coverage_onboarding.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read one Coverage Onboarding projection derived from its immutable event chain.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}" },
+    input_schema: {
+      type: "object", required: ["onboarding_id"], additionalProperties: false,
+      properties: { onboarding_id: { type: "string", format: "uuid" } }
+    },
+    output_schema: {
+      type: "object", required: ["coverage_onboarding"], additionalProperties: false,
+      properties: { coverage_onboarding: coverageProjectionSchema }
+    },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_customer_reader", "coverage_onboarding_exists"],
+    outcomes: ["coverage_onboarding_projection_returned", "coverage_onboarding_not_found"],
+    issues: ["AUTHENTICATION_REQUIRED", "COVERAGE_ONBOARDING_NOT_FOUND",
+      "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION"],
+    emitted_events: [],
+    next_operations: ["diagnostic.coverage_onboarding.evidence_capture"]
   },
   commandDescriptor({
     operationId: "diagnostic.agent_workflow.register",

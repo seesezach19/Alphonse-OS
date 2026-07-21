@@ -166,7 +166,8 @@ export function createRouteHelpers(deps) {
     diagnosticConsistencyService, diagnosticDispatchAuthorizationService,
     diagnosticIndependentVerificationService, diagnosticRepairWorkerService,
     diagnosticDiagnosisService, diagnosticRepairDeliveryService,
-    diagnosticVerificationService, diagnosticPromotionService
+    diagnosticVerificationService, diagnosticPromotionService,
+    coverageOnboardingService
   } = deps;
 
   /**
@@ -336,6 +337,8 @@ export function createRouteHelpers(deps) {
     requireDiagnosticVerification: () => requireOr(diagnosticVerificationService, 503,
       "DIAGNOSTIC_PLANE_UNAVAILABLE", "Diagnostic verification is not configured."),
     requireDiagnosticPromotion: () => requireOr(diagnosticPromotionService, 503, "DIAGNOSTIC_PLANE_UNAVAILABLE",
-      "Diagnostic promotion is not configured.")
+      "Diagnostic promotion is not configured."),
+    requireCoverageOnboarding: () => requireOr(coverageOnboardingService, 503,
+      "COVERAGE_ONBOARDING_UNAVAILABLE", "Coverage Onboarding is not configured.")
   };
 }
