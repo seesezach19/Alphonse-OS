@@ -27,6 +27,54 @@ _Avoid_: Agent, Agent Revision, Work Intent, Capability Contract
 The repository-owned versioned declaration of one Agent Workflow's identity, revision inputs, diagnostic policy, verification fixtures, environment mappings, and optional Behavior Contracts and governance mappings. Imported manifests are immutable; secrets and runtime authority are excluded.
 _Avoid_: Dashboard configuration, Operational Package, secret store, live authority state
 
+**Coverage Onboarding**:
+A durable Diagnostic Plane reverse-specification lifecycle for one exact external workflow selection or behavior-bearing revision change. It binds discovered source evidence, agent interpretation, unresolved ambiguity, human review, deterministic compilation, validation, and resulting registration references without granting workflow, repair, verification, promotion, or external-effect authority.
+_Avoid_: Diagnostic Case, Build Session, workflow builder, mutable chat state
+
+**Workflow Discovery Snapshot**:
+An immutable content-addressed Coverage Onboarding artifact containing the exact provider workflow material and metadata returned by scoped Workflow Runtime Adapter reads, together with source, adapter, retrieval time, omissions, redaction, and digest provenance. It contains observations, not agent conclusions, and grants no coverage or authority.
+_Avoid_: Workflow Manifest, Agent Revision, inventory cache, interpretation
+
+**Workflow Interpretation Claim**:
+An immutable agent proposal about one exact Workflow Discovery Snapshot whose items distinguish observed facts, inferences, conflicts, and unknowns and cite exact evidence. Human confirmation is a separate record and can never be authored or implied by the agent claim.
+_Avoid_: Diagnostic Proposal, observed fact, Behavior Contract, human approval
+
+**Coverage Ambiguity**:
+A typed Coverage Onboarding item identifying one consequential question that evidence and deterministic rules cannot resolve. Blocking ambiguity prevents review approval or compilation; resolution is append-only and binds a named human, the exact ambiguity digest and chosen disposition, scope, rationale, and time. The resulting resolution digest is included in the later Coverage Review Bundle.
+_Avoid_: Free-form TODO, model uncertainty score, silent default, Diagnostic Trigger
+
+**Coverage Review Bundle**:
+An immutable content-addressed artifact consolidating one exact workflow objective, consequences, evidence-linked claims, ambiguity dispositions, Effect Inventory, limitations, redaction, optional contracts, fixtures, repair and verification bindings, promotion conditions, and rollback assumptions for human review.
+_Avoid_: Workflow Manifest, mutable form, approval record, chat summary
+
+**Coverage Review Approval**:
+A Kernel authority record binding one named human Principal to one exact Coverage Review Bundle digest, scope, rationale, and validity. It permits deterministic compilation of that exact reviewed meaning only; source-control proposal, merge, manifest import, registration, activation, workflow execution, repair, verification, promotion, credential, and external-effect authority remain separate.
+_Avoid_: Work Intent confirmation, Capability Activation, deployment approval, blanket sign-off
+
+**Coverage Specification**:
+An immutable deterministic compilation artifact derived from one approved Coverage Review Bundle. It contains rigid workflow identity, revision closure, evidence policy, Effect Inventory, capability prerequisites, limitations, redaction, fixtures, adapter bindings, and optional contracts but no secrets or live authority. It is an intermediate output of the deterministic compilation pipeline and remains distinct from the emitted Workflow Manifest proposal.
+_Avoid_: Workflow Manifest, agent prose, approval record, active coverage state
+
+**Coverage Validation Receipt**:
+An immutable deterministic result binding one exact Coverage Specification, compiler and validator identities, checks, issues, limitations, and exact Workflow Manifest proposal digest. A passing result permits the exact proposal to be offered to a separately authorized source-control path; only a later immutable import of the landed repository revision can make onboarding registration eligible. It grants no source-control, registration, activation, execution, repair, verification, or promotion authority.
+_Avoid_: Coverage Review Approval, Package Validation Receipt, readiness projection, success claim
+
+**Coverage Profile**:
+A versioned Operational Package export containing explicitly scoped reusable onboarding defaults such as approved integration semantics, consequence classifications, redaction policy, fixture strategies, and verification strategies. Reuse records the exact profile version and never carries human confirmation beyond its declared scope.
+_Avoid_: Customer credential, mutable agency settings, universal approval, active policy
+
+**Effect Inventory**:
+The Coverage Specification section enumerating consequential external operations with destination, operation, data class, reversibility, retry and idempotency behavior, expected response, available evidence basis, optional reconciliation, and remaining uncertainty. It declares possible effects and evidence limits; it does not prove an effect occurred.
+_Avoid_: Diagnostic Effect Projection, Effect Record, destination observer, workflow node list
+
+**Workflow Coverage Capability Projection**:
+A deterministic read model deriving independently evidenced workflow capabilities and limitations for `discovered`, `connected`, `revision_bound`, `execution_observed`, `diagnosable`, `behavior_monitored`, `repair_bound`, `verification_ready`, and `promotion_ready`. It grants no authority and is not a lifecycle ladder.
+_Avoid_: Coverage stage, Capability Activation, overall health score, mutable checklist
+
+**Accountable Coverage Claim**:
+A time-bounded commercial projection over one exact Workflow Coverage Capability Projection, coverage policy version, evidence cutoff, limitations, and any historical gap. It never means universal correctness and cannot hide unavailable capabilities or unknown destination state.
+_Avoid_: Capability stage, SLA by implication, certification, current-health boolean
+
 **Operational Package**:
 A versioned, composable unit produced by a Builder that declares some combination of business context, integrations, skills, evaluations, capabilities, policies, and operator views against stable Kernel contracts.
 _Avoid_: Entire industry vertical, arbitrary plugin, mutable workspace
