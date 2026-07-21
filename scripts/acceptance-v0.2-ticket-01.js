@@ -82,7 +82,7 @@ const revisionInput = {
   configuration: { delivery: "local_review", missing_inventory_state: "zero" },
   adapter: {
     adapter_id: "alphonse.n8n.runtime",
-    adapter_version: "0.2.0",
+    adapter_version: "0.3.0",
     fingerprint_rules_digest: `sha256:${"b".repeat(64)}`
   }
 };

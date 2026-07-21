@@ -27,7 +27,7 @@ const environment = {
   ALPHONSE_URL: baseUrl,
   ALPHONSE_TOKEN: "local-development-bootstrap-token",
   DIAGNOSTIC_RUNTIME_ADAPTER_ID: "alphonse.n8n.runtime",
-  DIAGNOSTIC_RUNTIME_ADAPTER_VERSION: "0.2.0",
+  DIAGNOSTIC_RUNTIME_ADAPTER_VERSION: "0.3.0",
   DIAGNOSTIC_RUNTIME_ADAPTER_KEY_ID: "n8n-runtime-key-v1",
   DIAGNOSTIC_RUNTIME_ADAPTER_SECRET: adapterSecret,
   ALPHONSE_RUNTIME_ADAPTER_KEY_ID: "n8n-runtime-key-v1",
@@ -82,6 +82,22 @@ async function n8nRequest(route, options = {}) {
   const response = await fetch(`${n8nUrl}${route}`, options);
   const body = await response.json().catch(() => ({}));
   return { response, body };
+}
+
+function adapterInventory(input) {
+  const source = `
+    const response = await fetch("http://127.0.0.1:5680/v0/workflow-inventory:list", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer local-n8n-detail-adapter-token-v1",
+        "content-type": "application/json"
+      },
+      body: ${JSON.stringify(JSON.stringify(input))}
+    });
+    console.log(JSON.stringify({ status: response.status, body: await response.json() }));
+  `;
+  return JSON.parse(compose("exec", "-T", "n8n-runtime-adapter", "node", "--input-type=module", "-e", source)
+    .stdout.trim());
 }
 
 async function waitForN8nRest() {
@@ -178,6 +194,7 @@ try {
   const availableScopes = responseData(scopesResponse.body);
   assert.ok(availableScopes.includes("execution:read"));
   assert.ok(availableScopes.includes("workflow:read"));
+  assert.ok(availableScopes.includes("workflow:list"));
 
   const apiKeyResponse = await n8nRequest("/rest/api-keys", {
     method: "POST",
@@ -185,7 +202,7 @@ try {
     body: JSON.stringify({
       label: "Alphonse runtime attestation",
       expiresAt: null,
-      scopes: ["execution:read", "workflow:read"]
+      scopes: ["execution:read", "workflow:read", "workflow:list"]
     })
   });
   assert.equal(apiKeyResponse.response.status, 200, JSON.stringify(apiKeyResponse.body));
@@ -204,6 +221,50 @@ try {
   environment.N8N_EXECUTION_WORKFLOW_MATERIAL_DIGEST =
     executionFingerprint.execution_workflow_material_digest;
   compose("up", "-d", "--force-recreate", "--no-deps", "--wait", "n8n-runtime-adapter");
+
+  const inventoryInput = { scope_id: "n8n:customer-primary", page_size: 1, cursor: null };
+  const inventoryFirst = adapterInventory(inventoryInput);
+  assert.equal(inventoryFirst.status, 200, JSON.stringify(inventoryFirst.body));
+  assert.equal(inventoryFirst.body.authority, "none");
+  assert.equal(inventoryFirst.body.scope.scope_basis, "credential_access");
+  assert.equal(inventoryFirst.body.candidates.length, 1);
+  assert.equal(inventoryFirst.body.candidates[0].content_class, "untrusted_provider_metadata");
+  assert.equal(inventoryFirst.body.candidates[0].instruction_authority, "none");
+  assert.equal(Object.hasOwn(inventoryFirst.body.candidates[0], "nodes"), false);
+  assert.equal(Object.hasOwn(inventoryFirst.body.candidates[0], "credentials"), false);
+  assert.match(inventoryFirst.body.page.next_cursor, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.equal(JSON.stringify(inventoryFirst.body).includes(n8nApiKey), false);
+
+  const inventoryReplay = adapterInventory(inventoryInput);
+  assert.equal(inventoryReplay.status, 200, JSON.stringify(inventoryReplay.body));
+  assert.deepEqual(inventoryReplay.body.candidates, inventoryFirst.body.candidates);
+  assert.equal(inventoryReplay.body.page.page_digest, inventoryFirst.body.page.page_digest);
+
+  const inventorySecond = adapterInventory({
+    ...inventoryInput,
+    cursor: inventoryFirst.body.page.next_cursor
+  });
+  assert.equal(inventorySecond.status, 200, JSON.stringify(inventorySecond.body));
+  assert.equal(inventorySecond.body.candidates.length, 1);
+  assert.notEqual(inventorySecond.body.candidates[0].provider_workflow_id,
+    inventoryFirst.body.candidates[0].provider_workflow_id);
+
+  const [cursorPayload, cursorSignature] = inventoryFirst.body.page.next_cursor.split(".");
+  const mutationIndex = Math.floor(cursorSignature.length / 2);
+  const tamperedSignature = `${cursorSignature.slice(0, mutationIndex)}`
+    + `${cursorSignature[mutationIndex] === "A" ? "B" : "A"}`
+    + `${cursorSignature.slice(mutationIndex + 1)}`;
+  const inventoryTampered = adapterInventory({
+    ...inventoryInput,
+    cursor: `${cursorPayload}.${tamperedSignature}`
+  });
+  assert.equal(inventoryTampered.status, 400);
+  assert.equal(inventoryTampered.body.error.code, "N8N_INVENTORY_CURSOR_INVALID");
+
+  const inventoryWrongScope = adapterInventory({ ...inventoryInput, scope_id: "n8n:other-scope" });
+  assert.equal(inventoryWrongScope.status, 403);
+  assert.equal(inventoryWrongScope.body.error.code, "N8N_INVENTORY_SCOPE_REJECTED");
+
   compose("stop", "n8n");
 
   const execution = compose("run", "--rm", "--no-deps", "n8n", "execute",
@@ -276,6 +337,9 @@ try {
     ticket: "v0.2-03",
     n8n_version: "2.25.7",
     imported_workflows: 2,
+    inventory_pages: 2,
+    inventory_cursor_tamper_rejected: true,
+    inventory_provider_credentials_exposed: false,
     n8n_execution_status: "succeeded",
     wrong_result: "missing_sku -> zero_inventory -> delay_draft",
     delivery: "local_review",

@@ -11,6 +11,11 @@ import {
   normalizeN8nExecutionObservation,
   unwrapN8nApiEntity
 } from "./runtime-attestation.js";
+import {
+  listN8nWorkflowInventory,
+  N8nInventoryError,
+  normalizeN8nInventoryScope
+} from "./workflow-inventory.js";
 
 const port = Number(process.env.PORT ?? 5680);
 const token = process.env.N8N_DETAIL_ADAPTER_TOKEN;
@@ -19,6 +24,10 @@ const testControlsEnabled = process.env.N8N_ADAPTER_TEST_CONTROLS_ENABLED === "t
 const stateFile = process.env.N8N_ADAPTER_STATE_FILE;
 const n8nApiUrl = process.env.N8N_API_URL?.replace(/\/$/, "");
 const n8nApiKey = process.env.N8N_API_KEY;
+const inventoryCursorSecret = process.env.N8N_INVENTORY_CURSOR_SECRET;
+const inventoryScopeInput = process.env.N8N_INVENTORY_SCOPE
+  ? JSON.parse(process.env.N8N_INVENTORY_SCOPE) : null;
+const inventoryScope = inventoryScopeInput ? normalizeN8nInventoryScope(inventoryScopeInput) : null;
 const kernelRuntimeEventUrl = process.env.ALPHONSE_RUNTIME_EVENT_URL;
 const runtimeAdapter = {
   adapter_id: process.env.ALPHONSE_RUNTIME_ADAPTER_ID,
@@ -38,6 +47,9 @@ const attestationConfigured = Boolean(
   n8nApiUrl && n8nApiKey && kernelRuntimeEventUrl && runtimeAdapter.adapter_id
   && runtimeAdapter.adapter_version && runtimeSigning.key_id && runtimeSigning.secret
   && attestationBindings.size > 0
+);
+const inventoryConfigured = Boolean(
+  n8nApiUrl && n8nApiKey && inventoryCursorSecret && inventoryScope
 );
 const attestationJobs = new Map();
 const attestationReceipts = new Map();
@@ -242,9 +254,10 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/healthz") {
       return send(response, 200, {
         status: "healthy",
-        api: "alphonse.n8n.runtime.detail/0.2.0",
+        api: "alphonse.n8n.runtime.detail/0.3.0",
         state_persistence: stateFile ? "configured" : "ephemeral",
-        runtime_attestation: attestationConfigured ? "independent_n8n_api_observation" : "not_configured"
+        runtime_attestation: attestationConfigured ? "independent_n8n_api_observation" : "not_configured",
+        workflow_inventory: inventoryConfigured ? "credential_scoped_n8n_api" : "not_configured"
       });
     }
     if (request.method === "POST" && request.url === "/v0/runtime-attestations") {
@@ -345,6 +358,19 @@ const server = http.createServer(async (request, response) => {
     }
     if (!authenticated(request)) return send(response, 403, { error: { code: "AUTHENTICATION_FAILED" } });
     const body = await readJson(request);
+    if (request.method === "POST" && request.url === "/v0/workflow-inventory:list") {
+      if (!inventoryConfigured) {
+        return send(response, 503, { error: { code: "N8N_INVENTORY_NOT_CONFIGURED" } });
+      }
+      const inventory = await listN8nWorkflowInventory({
+        baseUrl: n8nApiUrl,
+        apiKey: n8nApiKey,
+        scope: inventoryScopeInput,
+        cursorSecret: inventoryCursorSecret,
+        input: body
+      });
+      return send(response, 200, inventory);
+    }
     if (request.method === "POST" && request.url === "/v0/execution-details:retrieve") {
       if (!/^n8n-[0-9]+$/.test(body.external_execution_id ?? "")) {
         return send(response, 404, { error: { code: "EXECUTION_NOT_FOUND" } });
@@ -390,7 +416,10 @@ const server = http.createServer(async (request, response) => {
       });
     }
     return send(response, 404, { error: { code: "NOT_FOUND" } });
-  } catch {
+  } catch (error) {
+    if (error instanceof N8nInventoryError) {
+      return send(response, error.status, { error: { code: error.code } });
+    }
     return send(response, 400, { error: { code: "INVALID_REQUEST" } });
   }
 });

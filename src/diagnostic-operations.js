@@ -253,7 +253,7 @@ const descriptors = [
     outcomes: ["runtime_adapter_contract_returned"],
     issues: ["DIAGNOSTIC_PLANE_UNAVAILABLE"],
     emitted_events: [],
-    next_operations: ["diagnostic.runtime_event.receive"]
+    next_operations: ["runtime_adapter.workflow_inventory.list", "diagnostic.runtime_event.receive"]
   },
   {
     operation_id: "diagnostic.repair_delivery_adapter.contract.get",

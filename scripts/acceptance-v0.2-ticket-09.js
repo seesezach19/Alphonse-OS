@@ -77,7 +77,7 @@ async function createVerifiedCandidate({ suffix, sequence, revisionId, bindingId
   const workerToken = `ticket-09-${suffix}-worker-token-0000000000001`;
   const runtimeEvent = {
     schema_version: "0.2.0",
-    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.2.0" },
+    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.3.0" },
     workflow_id: "workflow:inventory-follow-up",
     revision_id: revisionId,
     external_execution_id: `n8n-${sequence}`,
