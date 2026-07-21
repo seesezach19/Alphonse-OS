@@ -38,7 +38,8 @@
     "020_environment_restore.sql",
     "021_support_coordination.sql",
     "022_grant_authority_application.sql",
-    "023_diagnostic_dispatch_authority.sql"
+    "023_diagnostic_dispatch_authority.sql",
+    "024_coverage_review_approvals.sql"
   ],
   "qualification": [
     "unit",

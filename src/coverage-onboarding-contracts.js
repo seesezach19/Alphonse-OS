@@ -432,7 +432,7 @@ function eventView(row) {
 }
 
 export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], interpretationRows = [],
-  ambiguityRows = [], resolutionRows = [], assignmentRows = []) {
+  ambiguityRows = [], resolutionRows = [], assignmentRows = [], reviewBundleRows = []) {
   const events = eventRows.map(eventView);
   if (events.length === 0 || events[0].event_index !== 1 || events[0].event_type !== "opened") {
     throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
@@ -564,6 +564,34 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
         "Coverage Ambiguity resolution is not bound to a resolution event.");
     }
   }
+  const reviewBundlesByEvent = new Map(reviewBundleRows.map((item) => [Number(item.event_index), item]));
+  let reviewBundleHead = null;
+  for (const event of events) {
+    const bundle = reviewBundlesByEvent.get(event.event_index);
+    if (event.event_type === "review_bundle_created") {
+      if (!bundle || bundle.review_bundle_digest !== event.payload.review_bundle_digest
+          || bundle.snapshot_digest !== event.payload.snapshot_digest
+          || bundle.interpretation_digest !== event.payload.interpretation_digest
+          || bundle.confirmation_manifest_digest !== event.payload.confirmation_manifest_digest
+          || bundle.reference_manifest_digest !== event.payload.reference_manifest_digest) {
+        throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+          "Coverage Review Bundle row does not match its append-only event.");
+      }
+      reviewBundleHead = bundle.review_bundle_digest;
+    } else if (event.event_type === "review_invalidated") {
+      if (!reviewBundleHead || event.payload.prior_review_bundle_digest !== reviewBundleHead
+          || canonicalize(event.payload.eligibility_revoked)
+            !== canonicalize(["compile_exact_bundle", "request_exact_registration"])
+          || event.payload.authority !== "none") {
+        throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+          "Coverage Review invalidation does not bind the exact active immutable bundle.");
+      }
+      reviewBundleHead = null;
+    } else if (bundle) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Coverage Review Bundle is not bound to a creation event.");
+    }
+  }
   for (const assignment of assignmentRows) {
     if (sha256Digest(assignment.assignment_document) !== assignment.assignment_digest
         || assignment.assignment_document.assignment_id !== assignment.assignment_id
@@ -638,9 +666,16 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
       .map((item) => ({ type: "coverage_ambiguity", subject_id: item.ambiguity_id,
         reason: item.question, blocking: false }))
   ];
-  const status = activeSnapshotDigest === null ? "gathering_evidence"
+  const baseStatus = activeSnapshotDigest === null ? "gathering_evidence"
     : activeInterpretation === null ? "interpreting"
       : blockingAmbiguityIds.length > 0 ? "resolving_ambiguity" : "reviewable";
+  const latestBundleEvent = [...events].reverse().find((event) => event.event_type === "review_bundle_created");
+  const latestInvalidationEvent = [...events].reverse().find((event) => event.event_type === "review_invalidated");
+  const activeReviewBundle = latestBundleEvent
+    && (!latestInvalidationEvent || latestInvalidationEvent.event_index < latestBundleEvent.event_index)
+    ? reviewBundlesByEvent.get(latestBundleEvent.event_index) : null;
+  const reviewRequired = reviewBundleRows.length > 0 && !activeReviewBundle;
+  const status = activeReviewBundle ? "awaiting_approval" : reviewRequired ? "review_required" : baseStatus;
   const legalNextOperations = [
     "diagnostic.coverage_onboarding.get",
     "diagnostic.coverage_onboarding.evidence_capture"
@@ -657,6 +692,10 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
   if (blockingAmbiguityIds.length > 0 || unresolvedNonblockingAmbiguityIds.length > 0) {
     legalNextOperations.push("diagnostic.coverage_ambiguity.resolve");
   }
+  if (!activeReviewBundle && baseStatus === "reviewable") {
+    legalNextOperations.push("diagnostic.coverage_review_bundle.create");
+  }
+  if (activeReviewBundle) legalNextOperations.push("kernel.coverage_review.approve");
   return {
     schema_version: COVERAGE_ONBOARDING_SCHEMA_VERSION,
     onboarding_id: row.onboarding_id,
@@ -674,6 +713,8 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
     status,
     active_snapshot_digest: activeSnapshotDigest,
     active_interpretation_digest: activeInterpretation?.interpretation_digest ?? null,
+    active_review_bundle_digest: activeReviewBundle?.review_bundle_digest ?? null,
+    latest_review_invalidation_event_digest: latestInvalidationEvent?.event_digest ?? null,
     superseded_snapshot_digests: [...new Set(superseded)],
     superseded_interpretation_digests: interpretationRows
       .filter((item) => item.interpretation_digest !== activeInterpretation?.interpretation_digest)
@@ -717,11 +758,25 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
       submitted: interpretationRows.some((interpretation) => interpretation.assignment_id === item.assignment_id),
       immutable: true
     })),
+    review_bundle_history: reviewBundleRows.map((item) => ({
+      review_bundle_id: item.review_bundle_id,
+      review_bundle_digest: item.review_bundle_digest,
+      base_onboarding_revision: Number(item.base_onboarding_revision),
+      base_event_head_digest: item.base_event_head_digest,
+      snapshot_digest: item.snapshot_digest,
+      interpretation_digest: item.interpretation_digest,
+      confirmation_manifest_digest: item.confirmation_manifest_digest,
+      reference_manifest_digest: item.reference_manifest_digest,
+      event_index: Number(item.event_index),
+      created_by: { type: item.created_by_actor_type, id: item.created_by_actor_id },
+      created_at: new Date(item.created_at).toISOString(),
+      immutable: true
+    })),
     ambiguities: ambiguityProjection,
     blocking_ambiguity_ids: blockingAmbiguityIds,
     unresolved_nonblocking_ambiguity_ids: unresolvedNonblockingAmbiguityIds,
     limitations,
-    review_eligible: status === "reviewable",
+    review_eligible: baseStatus === "reviewable" && !activeReviewBundle,
     legal_next_operations: legalNextOperations,
     events,
     opened_at: new Date(row.opened_at).toISOString(),

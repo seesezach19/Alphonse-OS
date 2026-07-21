@@ -348,14 +348,82 @@ const coverageAmbiguityResolveInput = {
   }
 };
 
+const coverageReviewArtifactReference = {
+  type: "object",
+  required: ["reference_kind", "reference_id", "artifact_digest"],
+  additionalProperties: false,
+  properties: {
+    reference_kind: { type: "string", minLength: 1, maxLength: 100 },
+    reference_id: { type: "string", minLength: 1, maxLength: 200 },
+    artifact_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+  }
+};
+
+const coverageReviewBundleCreateInput = {
+  type: "object",
+  required: [
+    "onboarding_id", "expected_revision", "expected_event_head_digest", "snapshot_digest",
+    "interpretation_digest", "integration_contract_references", "behavior_contract_references",
+    "fixture_references", "repair_binding_reference", "verification_strategy_reference",
+    "coverage_profile_reference"
+  ],
+  additionalProperties: false,
+  properties: {
+    onboarding_id: { type: "string", format: "uuid" },
+    expected_revision: { type: "integer", minimum: 4 },
+    expected_event_head_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    snapshot_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    interpretation_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    integration_contract_references: { type: "array", maxItems: 100,
+      items: coverageReviewArtifactReference },
+    behavior_contract_references: { type: "array", maxItems: 100,
+      items: coverageReviewArtifactReference },
+    fixture_references: { type: "array", maxItems: 100, items: coverageReviewArtifactReference },
+    repair_binding_reference: { anyOf: [{ type: "null" }, coverageReviewArtifactReference] },
+    verification_strategy_reference: { anyOf: [{ type: "null" }, coverageReviewArtifactReference] },
+    coverage_profile_reference: { anyOf: [{ type: "null" }, coverageReviewArtifactReference] }
+  }
+};
+
+const coverageReviewBundleSchema = {
+  type: "object",
+  required: [
+    "review_bundle_id", "review_bundle_digest", "size_bytes", "media_type", "onboarding_id",
+    "onboarding_revision", "event_head_digest", "workflow_reference_digest", "snapshot_digest",
+    "interpretation_digest", "confirmation_manifest_digest", "reference_manifest_digest",
+    "content", "created_by", "created_at", "authority", "immutable"
+  ],
+  additionalProperties: false,
+  properties: {
+    review_bundle_id: { type: "string", format: "uuid" },
+    review_bundle_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    size_bytes: { type: "integer", minimum: 0 },
+    media_type: { const: "application/json" },
+    onboarding_id: { type: "string", format: "uuid" },
+    onboarding_revision: { type: "integer", minimum: 4 },
+    event_head_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    workflow_reference_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    snapshot_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    interpretation_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    confirmation_manifest_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    reference_manifest_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    content: { type: "object" },
+    created_by: { type: "object" },
+    created_at: { type: "string", format: "date-time" },
+    authority: { const: "none" },
+    immutable: { const: true }
+  }
+};
+
 const coverageProjectionSchema = {
   type: "object",
   required: [
     "schema_version", "onboarding_id", "installation_id", "environment_id", "reason",
     "prior_onboarding_id", "workflow_reference", "work_intent", "agent", "adapter_binding",
     "identity_digest", "revision", "event_head_digest", "status", "active_snapshot_digest",
-    "active_interpretation_digest", "superseded_snapshot_digests", "superseded_interpretation_digests",
-    "snapshot_history", "interpretation_history", "interpretation_assignments", "ambiguities",
+    "active_interpretation_digest", "active_review_bundle_digest", "latest_review_invalidation_event_digest",
+    "superseded_snapshot_digests", "superseded_interpretation_digests",
+    "snapshot_history", "interpretation_history", "interpretation_assignments", "review_bundle_history", "ambiguities",
     "blocking_ambiguity_ids", "unresolved_nonblocking_ambiguity_ids", "limitations", "review_eligible",
     "legal_next_operations", "events", "opened_at",
     "authority", "immutable"
@@ -375,15 +443,21 @@ const coverageProjectionSchema = {
     identity_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
     revision: { type: "integer", minimum: 1 },
     event_head_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-    status: { enum: ["gathering_evidence", "interpreting", "resolving_ambiguity", "reviewable"] },
+    status: { enum: ["gathering_evidence", "interpreting", "resolving_ambiguity", "reviewable",
+      "awaiting_approval", "review_required"] },
     active_snapshot_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
     active_interpretation_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
+    active_review_bundle_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
+    latest_review_invalidation_event_digest: {
+      type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$"
+    },
     superseded_snapshot_digests: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
     superseded_interpretation_digests: { type: "array",
       items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
     snapshot_history: { type: "array" },
     interpretation_history: { type: "array" },
     interpretation_assignments: { type: "array" },
+    review_bundle_history: { type: "array" },
     ambiguities: { type: "array" },
     blocking_ambiguity_ids: { type: "array", items: { type: "string" } },
     unresolved_nonblocking_ambiguity_ids: { type: "array", items: { type: "string" } },
@@ -911,6 +985,49 @@ const descriptors = [
     ],
     emitted_events: ["diagnostic.coverage_onboarding.ambiguity_resolved"],
     next_operations: ["diagnostic.coverage_onboarding.get"]
+  },
+  {
+    operation_id: "diagnostic.coverage_review_bundle.create",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Assemble immutable content-addressed review bytes from one exact current reviewable onboarding state.",
+    visibility: "public",
+    authority_class: "authenticated_bound_coverage_onboarding_agent",
+    effect_class: "content_addressed_review_bundle_and_append_only_state_transition",
+    idempotency: "required_command_id_and_canonical_request_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/review-bundles" },
+    input_schema: commandEnvelope("diagnostic.coverage_review_bundle.create", coverageReviewBundleCreateInput),
+    output_schema: coverageInterpretationCommandOutput(
+      "diagnostic.coverage_review_bundle.create", "coverage_review_bundle", coverageReviewBundleSchema, true
+    ),
+    supported_modes: ["live"],
+    preconditions: ["exact_current_reviewable_state", "blocking_ambiguities_resolved",
+      "all_references_are_admitted_exact_artifacts"],
+    outcomes: ["immutable_review_bundle_created", "onboarding_awaiting_approval", "command_replayed"],
+    issues: ["COVERAGE_REVIEW_STATE_CONFLICT", "COVERAGE_REVIEW_REFERENCE_NOT_ADMITTED",
+      "COVERAGE_REVIEW_AGENT_MISMATCH", "IDEMPOTENCY_CONFLICT"],
+    emitted_events: ["diagnostic.coverage_review_bundle.created",
+      "diagnostic.coverage_onboarding.review_bundle_created"],
+    next_operations: ["diagnostic.coverage_review_bundle.get", "kernel.coverage_review.approve"]
+  },
+  {
+    operation_id: "diagnostic.coverage_review_bundle.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read and verify one immutable content-addressed Coverage Review Bundle.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/coverage-review-bundles/{review_bundle_digest}" },
+    input_schema: { type: "object", required: ["review_bundle_digest"], additionalProperties: false,
+      properties: { review_bundle_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } } },
+    output_schema: { type: "object", required: ["coverage_review_bundle"], additionalProperties: false,
+      properties: { coverage_review_bundle: coverageReviewBundleSchema } },
+    supported_modes: ["live"],
+    preconditions: ["authenticated_customer_reader", "review_bundle_exists"],
+    outcomes: ["verified_review_bundle_returned"],
+    issues: ["COVERAGE_REVIEW_BUNDLE_NOT_FOUND", "COVERAGE_REVIEW_INTEGRITY_VIOLATION"],
+    emitted_events: [],
+    next_operations: ["kernel.coverage_review.approve"]
   },
   commandDescriptor({
     operationId: "diagnostic.agent_workflow.register",

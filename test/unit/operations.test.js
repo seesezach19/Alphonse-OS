@@ -43,6 +43,18 @@ test("Kernel dispatch authority is exact, single-use, and does not claim consump
   assert.match(read.summary, /without pretending Diagnostic Plane consumption/u);
 });
 
+test("coverage review approval is exact, human, and non-escalating", () => {
+  const approve = getOperationDescriptor("kernel.coverage_review.approve");
+  const read = getOperationDescriptor("kernel.coverage_review_approval.get");
+  assert.equal(approve.input_schema.properties.input.additionalProperties, false);
+  assert.equal(approve.input_schema.properties.input.properties.scope.additionalProperties, false);
+  assert.deepEqual(approve.input_schema.properties.input.properties.authority_granted.const,
+    ["compile_exact_bundle", "request_exact_registration"]);
+  assert.ok(approve.input_schema.properties.input.properties.authority_denied.const
+    .includes("external_effect"));
+  assert.equal(read.effect_class, "read_only");
+});
+
 test("governed context descriptors expose exact identifiers and grant fields", () => {
   const issue = getOperationDescriptor("kernel.context_access_grant.issue");
   assert.ok(issue.input_schema.properties.input.required.includes("passport_id"));

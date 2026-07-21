@@ -28,7 +28,7 @@ test("release pins every component, migration, dependency, and base image", asyn
   assert.match(release.manifest.base_images.node, /@sha256:[0-9a-f]{64}$/);
   assert.match(release.manifest.base_images.postgres, /@sha256:[0-9a-f]{64}$/);
   const migrations = release.manifest.payload_files.filter((item) => item.path.startsWith("migrations/"));
-  assert.equal(migrations.length, 23);
+  assert.equal(migrations.length, 24);
   assert.ok(migrations.every((item) => /^sha256:[0-9a-f]{64}$/.test(item.digest)));
 });
 

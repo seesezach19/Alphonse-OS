@@ -55,7 +55,8 @@
     "020_environment_restore.sql",
     "021_support_coordination.sql",
     "022_grant_authority_application.sql",
-    "023_diagnostic_dispatch_authority.sql"
+    "023_diagnostic_dispatch_authority.sql",
+    "024_coverage_review_approvals.sql"
   ],
   "diagnostic_migrations": [
     "001_bootstrap.sql",
@@ -83,7 +84,8 @@
     "023_diagnostic_worker_execution.sql",
     "024_diagnostic_consistency_tests.sql",
     "025_coverage_onboarding.sql",
-    "026_workflow_interpretation.sql"
+    "026_workflow_interpretation.sql",
+    "027_coverage_review_bundles.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

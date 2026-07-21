@@ -36,9 +36,9 @@ test("V0.2 manifest pins the complete headless Debug Loop", async () => {
     .every((image) => /@sha256:[0-9a-f]{64}$/.test(image)));
   assert.equal(release.manifest.compatible_n8n.redistributed, false);
   assert.equal(release.manifest.compatible_n8n.customer_owned, true);
-  assert.equal(release.manifest.payload_files.filter((item) => item.path.startsWith("migrations/")).length, 23);
+  assert.equal(release.manifest.payload_files.filter((item) => item.path.startsWith("migrations/")).length, 24);
   assert.equal(release.manifest.payload_files
-    .filter((item) => item.path.startsWith("diagnostic-migrations/")).length, 26);
+    .filter((item) => item.path.startsWith("diagnostic-migrations/")).length, 27);
 });
 
 test("V0.2 release excludes credentials, development state, test authority, and n8n binaries", async () => {

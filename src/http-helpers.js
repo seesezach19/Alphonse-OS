@@ -167,7 +167,8 @@ export function createRouteHelpers(deps) {
     diagnosticIndependentVerificationService, diagnosticRepairWorkerService,
     diagnosticDiagnosisService, diagnosticRepairDeliveryService,
     diagnosticVerificationService, diagnosticPromotionService,
-    coverageOnboardingService, workflowInterpretationService
+    coverageOnboardingService, workflowInterpretationService, coverageReviewService,
+    coverageReviewApprovalService
   } = deps;
 
   /**
@@ -341,6 +342,10 @@ export function createRouteHelpers(deps) {
     requireCoverageOnboarding: () => requireOr(coverageOnboardingService, 503,
       "COVERAGE_ONBOARDING_UNAVAILABLE", "Coverage Onboarding is not configured."),
     requireWorkflowInterpretation: () => requireOr(workflowInterpretationService, 503,
-      "COVERAGE_INTERPRETATION_UNAVAILABLE", "Workflow Interpretation is not configured.")
+      "COVERAGE_INTERPRETATION_UNAVAILABLE", "Workflow Interpretation is not configured."),
+    requireCoverageReview: () => requireOr(coverageReviewService, 503,
+      "COVERAGE_REVIEW_UNAVAILABLE", "Coverage Review is not configured."),
+    requireCoverageReviewApproval: () => requireOr(coverageReviewApprovalService, 503,
+      "COVERAGE_REVIEW_APPROVAL_UNAVAILABLE", "Coverage Review Approval is not configured.")
   };
 }

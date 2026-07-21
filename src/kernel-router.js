@@ -46,7 +46,7 @@ export function createKernelRouter(ctx) {
     requireDiagnosticDispatch, requireDiagnosticWorkerExecution, requireDiagnosticConsistency,
     requireDiagnosticDispatchAuthority, requireIndependentDiagnosticVerification,
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
-    requireDiagnosticVerification, requireDiagnosticPromotion
+    requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageReviewApproval
   } = ctx;
 
   return async function kernelRouter(request, response, url) {
@@ -129,6 +129,21 @@ export function createKernelRouter(ctx) {
   if (request.method === "GET" && url.pathname === "/kernel/v0/environments/current") {
     return sendJson(response, 200, serializeEnvironment(await database.getEnvironment(installationId, environmentId)));
     return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/kernel/v0/coverage-review-approvals") {
+    const service = requireCoverageReviewApproval();
+    const actor = await authenticateDiagnosticOwner(request, "kernel.coverage_review.approve");
+    return sendCommandResult(response, await service.approve(await readJson(request, 256 * 1024), actor));
+  }
+
+  if (request.method === "GET"
+      && url.pathname.startsWith("/kernel/v0/coverage-review-approvals/")) {
+    const service = requireCoverageReviewApproval();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { coverage_review_approval: await service.get(
+      pathId(url.pathname, "/kernel/v0/coverage-review-approvals/")
+    ) });
   }
 
   if (request.method === "POST" && url.pathname === "/kernel/v0/diagnostic-dispatch-authorizations") {
