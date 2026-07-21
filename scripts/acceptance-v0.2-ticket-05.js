@@ -27,7 +27,7 @@ const environment = {
   ALPHONSE_TOKEN: ownerToken,
   ALPHONSE_AGENT_TOKEN: workerToken,
   DIAGNOSTIC_RUNTIME_ADAPTER_ID: "alphonse.n8n.runtime",
-  DIAGNOSTIC_RUNTIME_ADAPTER_VERSION: "0.2.0",
+  DIAGNOSTIC_RUNTIME_ADAPTER_VERSION: "0.3.0",
   DIAGNOSTIC_RUNTIME_ADAPTER_KEY_ID: adapterKeyId,
   DIAGNOSTIC_RUNTIME_ADAPTER_SECRET: adapterSecret
 };
@@ -160,7 +160,7 @@ try {
 
   const runtimeEvent = {
     schema_version: "0.2.0",
-    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.2.0" },
+    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.3.0" },
     workflow_id: "workflow:inventory-follow-up",
     revision_id: revisionId,
     external_execution_id: "n8n-404",

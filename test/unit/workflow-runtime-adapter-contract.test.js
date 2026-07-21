@@ -9,9 +9,10 @@ import {
 function manifest(overrides = {}) {
   return {
     adapter_id: "example.workflow-runtime",
-    adapter_version: "1.2.3",
-    contract_version: "0.2.0",
+    adapter_version: "1.3.0",
+    contract_version: "0.3.0",
     capabilities: {
+      workflow_inventory: { supported: true },
       workflow_identity: { supported: true },
       revision_identity: { supported: true },
       event_receipt: { supported: true },
@@ -25,8 +26,9 @@ function manifest(overrides = {}) {
 
 test("Workflow Runtime Adapter contract is provider-neutral and describes all extension seams", () => {
   const contract = getWorkflowRuntimeAdapterContract();
-  assert.equal(contract.contract_version, "0.2.0");
+  assert.equal(contract.contract_version, "0.3.0");
   assert.deepEqual(Object.keys(contract.capabilities), [
+    "workflow_inventory",
     "workflow_identity",
     "revision_identity",
     "event_receipt",
@@ -43,6 +45,22 @@ test("Workflow Runtime Adapter contract is provider-neutral and describes all ex
   }
   assert.doesNotMatch(JSON.stringify(contract), /n8n|zapier|make\.com/i);
   assert.deepEqual(assertWorkflowRuntimeAdapterManifest(manifest()), manifest());
+});
+
+test("workflow inventory is exact, cursor-bound, authority-free, and marks provider content untrusted", () => {
+  const operation = getWorkflowRuntimeAdapterContract().capabilities.workflow_inventory.operation;
+  assert.equal(operation.operation_id, "runtime_adapter.workflow_inventory.list");
+  assert.deepEqual(operation.input_schema.required, ["scope_id", "page_size", "cursor"]);
+  assert.equal(operation.input_schema.additionalProperties, false);
+  assert.equal(operation.input_schema.properties.page_size.maximum, 250);
+  assert.deepEqual(operation.output_schema.required,
+    ["schema_version", "scope", "candidates", "page", "omissions", "health", "authority"]);
+  assert.equal(operation.output_schema.properties.authority.const, "none");
+  const candidate = operation.output_schema.properties.candidates.items;
+  assert.equal(candidate.properties.content_class.const, "untrusted_provider_metadata");
+  assert.equal(candidate.properties.instruction_authority.const, "none");
+  assert.equal(candidate.properties.credentials, undefined);
+  assert.equal(candidate.properties.nodes, undefined);
 });
 
 test("Adapter conformance requires core capabilities and rejects provider fields", () => {

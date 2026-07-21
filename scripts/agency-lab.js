@@ -62,7 +62,7 @@ function conciseRunReport(definition, result) {
 function runtimeEvents(definition, fixture, result, revisionId) {
   return fixture.lead_form_events.map((event) => normalizeRuntimeEventEnvelope({
     schema_version: "0.2.0",
-    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.2.0" },
+    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.3.0" },
     workflow_id: `workflow:agency-lab:${definition.domain}`,
     revision_id: revisionId,
     external_execution_id: `n8n-${definition.failure_id.toLowerCase()}-${event.event_id}`,

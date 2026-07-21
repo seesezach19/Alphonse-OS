@@ -45,7 +45,7 @@ test("first-party n8n Operational Package is pinned, complete, and conforming", 
   assert.deepEqual(assertWorkflowRuntimeAdapterManifest(adapterManifest), adapterManifest);
   assert.deepEqual(assertRepairDeliveryAdapterManifest(repairDeliveryManifest), repairDeliveryManifest);
   assert.equal(packageManifest.package_id, "alphonse.runtime.n8n");
-  assert.equal(packageManifest.package_version, "0.2.0");
+  assert.equal(packageManifest.package_version, "0.3.0");
   assert.equal(packageManifest.compatibility.n8n, ">=2.25.0 <3.0.0");
   assert.equal(packageManifest.compatibility.reference_image,
     "n8nio/n8n@sha256:761374d4eb841b0a22771d6bd68f0e8d827b4979ae4e490045517b13fc1259dd");
@@ -61,6 +61,7 @@ test("first-party n8n Operational Package is pinned, complete, and conforming", 
   assert.ok(packageManifest.health_checks.runtime_reachability);
   assert.deepEqual(packageManifest.detail_policy.redact_paths, ["input.customer_email"]);
   assert.equal(adapterManifest.capabilities.detail_retrieval.supported, true);
+  assert.equal(adapterManifest.capabilities.workflow_inventory.supported, true);
   assert.equal(repairDeliveryManifest.operations.promotion.supported, true);
   assert.equal(repairDeliveryManifest.operations.confirmation.supported, true);
   assert.equal(repairDeliveryManifest.operations.rollback.supported, true);
@@ -173,13 +174,13 @@ test("sidecar attestation derives identity and lifecycle from an independently o
   const attestation = buildAttestedRuntimeEvent({
     observation,
     binding,
-    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.2.0" },
+    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.3.0" },
     signing: { key_id: "n8n-runtime-key-v1", secret },
     signedAt: "2026-07-16T16:00:03.000Z"
   });
   const verified = verifyRuntimeEventEnvelope(attestation.envelope, attestation.authentication, {
     adapter_id: "alphonse.n8n.runtime",
-    adapter_version: "0.2.0",
+    adapter_version: "0.3.0",
     key_id: "n8n-runtime-key-v1",
     secret
   }, { now: new Date("2026-07-16T16:00:03.000Z") });
@@ -216,7 +217,7 @@ test("sidecar attestation derives identity and lifecycle from an independently o
   assert.throws(() => buildAttestedRuntimeEvent({
     observation: { ...observation, status: "running", stoppedAt: null },
     binding,
-    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.2.0" },
+    adapter: { adapter_id: "alphonse.n8n.runtime", adapter_version: "0.3.0" },
     signing: { key_id: "n8n-runtime-key-v1", secret },
     signedAt: "2026-07-16T16:00:03.000Z"
   }), /terminal n8n executions/);

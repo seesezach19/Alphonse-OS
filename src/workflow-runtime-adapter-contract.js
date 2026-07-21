@@ -1,6 +1,6 @@
 import { KernelError } from "./errors.js";
 
-export const WORKFLOW_RUNTIME_ADAPTER_CONTRACT_VERSION = "0.2.0";
+export const WORKFLOW_RUNTIME_ADAPTER_CONTRACT_VERSION = "0.3.0";
 
 const objectSchema = (required, properties = {}) => ({
   type: "object",
@@ -10,6 +10,99 @@ const objectSchema = (required, properties = {}) => ({
 });
 
 const CAPABILITIES = Object.freeze({
+  workflow_inventory: {
+    requirement: "required",
+    purpose: "List credential-scoped external workflow candidates as typed untrusted metadata without granting coverage or authority.",
+    operation: {
+      operation_id: "runtime_adapter.workflow_inventory.list",
+      direction: "alphonse_to_adapter",
+      input_schema: objectSchema(["scope_id", "page_size", "cursor"], {
+        scope_id: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{2,159}$" },
+        page_size: { type: "integer", minimum: 1, maximum: 250 },
+        cursor: { type: ["string", "null"], maxLength: 4096 }
+      }),
+      output_schema: objectSchema([
+        "schema_version", "scope", "candidates", "page", "omissions", "health", "authority"
+      ], {
+        schema_version: { const: "alphonse.workflow-inventory-page.v0.1" },
+        scope: objectSchema(["scope_id", "provider", "environment", "scope_basis", "scope_digest"], {
+          scope_id: { type: "string", minLength: 3, maxLength: 160 },
+          provider: { type: "string", minLength: 1, maxLength: 80 },
+          environment: { type: "string", minLength: 1, maxLength: 80 },
+          scope_basis: { enum: ["credential_access", "project", "workflow_allowlist"] },
+          scope_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+        }),
+        candidates: {
+          type: "array",
+          maxItems: 250,
+          items: objectSchema([
+            "provider_workflow_id", "display_name", "active", "created_at", "updated_at",
+            "provider_revision_reference", "tags", "metadata_digest", "content_class",
+            "instruction_authority", "omitted_fields"
+          ], {
+            provider_workflow_id: { type: "string", minLength: 1, maxLength: 200 },
+            display_name: { type: "string", minLength: 1, maxLength: 240 },
+            active: { type: "boolean" },
+            created_at: { type: ["string", "null"], format: "date-time" },
+            updated_at: { type: ["string", "null"], format: "date-time" },
+            provider_revision_reference: { type: ["string", "null"], maxLength: 240 },
+            tags: {
+              type: "array",
+              maxItems: 100,
+              items: objectSchema(["id", "name", "content_class", "instruction_authority"], {
+                id: { type: "string", minLength: 1, maxLength: 200 },
+                name: { type: "string", minLength: 1, maxLength: 200 },
+                content_class: { const: "untrusted_provider_metadata" },
+                instruction_authority: { const: "none" }
+              })
+            },
+            metadata_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+            content_class: { const: "untrusted_provider_metadata" },
+            instruction_authority: { const: "none" },
+            omitted_fields: {
+              type: "array",
+              maxItems: 7,
+              items: {
+                enum: ["nodes", "connections", "settings", "credentials", "notes", "staticData", "pinData"]
+              }
+            }
+          })
+        },
+        page: objectSchema([
+          "current_cursor", "next_cursor", "item_count", "scope_complete", "source_cutoff", "page_digest"
+        ], {
+          current_cursor: { type: ["string", "null"], maxLength: 4096 },
+          next_cursor: { type: ["string", "null"], maxLength: 4096 },
+          item_count: { type: "integer", minimum: 0, maximum: 250 },
+          scope_complete: { type: "boolean" },
+          source_cutoff: { type: "string", format: "date-time" },
+          page_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+        }),
+        omissions: {
+          type: "array",
+          maxItems: 300,
+          items: objectSchema(["code", "count", "fields"], {
+            code: {
+              enum: [
+                "WORKFLOW_CONTENT_EXCLUDED",
+                "OUTSIDE_CONFIGURED_SCOPE",
+                "INVALID_PROVIDER_METADATA",
+                "PROVIDER_REVISION_REFERENCE_UNAVAILABLE"
+              ]
+            },
+            count: { type: "integer", minimum: 0, maximum: 1000000 },
+            fields: { type: "array", maxItems: 32, items: { type: "string", minLength: 1, maxLength: 100 } }
+          })
+        },
+        health: objectSchema(["status", "observed_at", "issues"], {
+          status: { enum: ["healthy", "degraded", "unavailable", "unknown"] },
+          observed_at: { type: "string", format: "date-time" },
+          issues: { type: "array", maxItems: 100, items: { type: "string", maxLength: 500 } }
+        }),
+        authority: { const: "none" }
+      })
+    }
+  },
   workflow_identity: {
     requirement: "required",
     purpose: "Describe one stable provider-neutral external workflow identity.",
