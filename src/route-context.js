@@ -49,6 +49,7 @@ export const ROUTE_CONTEXT_KEYS = /** @type {const} */ ([
   "coverageReviewApprovalService",
   "coverageCompilationService",
   "coverageCapabilityService",
+  "coverageReconciliationService",
   "installationId",
   "environmentId",
   "environmentName",
@@ -119,7 +120,8 @@ export const ROUTE_CONTEXT_KEYS = /** @type {const} */ ([
   "requireCoverageReview",
   "requireCoverageReviewApproval",
   "requireCoverageCompilation",
-  "requireCoverageCapability"
+  "requireCoverageCapability",
+  "requireCoverageReconciliation"
 ]);
 
 /** @typedef {typeof ROUTE_CONTEXT_KEYS[number]} RouteContextKey */

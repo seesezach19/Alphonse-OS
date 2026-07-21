@@ -48,7 +48,7 @@ export function createDiagnosticRouter(ctx) {
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
     requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding,
     requireWorkflowInterpretation, requireCoverageReview, requireCoverageCompilation,
-    requireCoverageCapability
+    requireCoverageCapability, requireCoverageReconciliation
   } = ctx;
 
   return async function diagnosticRouter(request, response, url) {
@@ -637,6 +637,27 @@ export function createDiagnosticRouter(ctx) {
     authenticateBootstrapOperator(request);
     const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
     return sendJson(response, 200, await service.get(onboardingId));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/reconciliations$/.test(url.pathname)) {
+    const service = requireCoverageReconciliation();
+    const passport = await authenticateAgent(request);
+    const body = await readJson(request, 128 * 1024);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    if (body?.input?.onboarding_id !== onboardingId) {
+      throw new KernelError(409, "COVERAGE_RECONCILIATION_ROUTE_MISMATCH",
+        "Route onboarding ID must match Coverage Reconciliation input.");
+    }
+    return sendCommandResult(response, await service.advance(body, passport));
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/reconciliation$/.test(url.pathname)) {
+    const service = requireCoverageReconciliation();
+    authenticateBootstrapOperator(request);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    return sendJson(response, 200, { coverage_reconciliation: await service.get(onboardingId) });
   }
 
   if (request.method === "GET"

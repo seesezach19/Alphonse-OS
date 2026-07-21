@@ -28,6 +28,8 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.coverage_specification.validate",
     "diagnostic.coverage_validation.get",
     "diagnostic.workflow_coverage_capabilities.get",
+    "diagnostic.coverage_reconciliation.advance",
+    "diagnostic.coverage_reconciliation.get",
     "diagnostic.agent_workflow.register",
     "diagnostic.agent_workflow.get",
     "diagnostic.agent_revision.register",
@@ -206,6 +208,21 @@ test("Accountable Coverage is read-only, non-binary, and cannot grant readiness 
   assert.equal(coverage.output_schema.properties.accountable_coverage.properties
     .claims_destination_commitment.const, false);
   assert.doesNotMatch(JSON.stringify(coverage), /force_ready|execution_authority|promotion_authority/);
+});
+
+test("coverage reconciliation persists cursor evidence without treating workflow signals as completeness", () => {
+  const advance = getDiagnosticOperationDescriptor("diagnostic.coverage_reconciliation.advance");
+  const read = getDiagnosticOperationDescriptor("diagnostic.coverage_reconciliation.get");
+  assert.equal(advance.authority_class, "authenticated_bound_coverage_onboarding_agent");
+  assert.equal(advance.input_schema.properties.input.additionalProperties, false);
+  assert.equal(advance.input_schema.properties.input.properties.page, undefined);
+  assert.ok(advance.outcomes.includes("reconciliation_degraded_and_resume_cursor_preserved"));
+  assert.equal(read.effect_class, "read_only");
+  const projection = read.output_schema.properties.coverage_reconciliation;
+  assert.deepEqual(projection.properties.current_coverage.properties.state.enum,
+    ["active", "degraded", "suspended", "unavailable"]);
+  assert.equal(projection.properties.immutable_history.const, true);
+  assert.equal(projection.properties.authority.const, "none");
 });
 
 test("Diagnostic execution separates launch, running proof, and diagnosis ingestion", () => {

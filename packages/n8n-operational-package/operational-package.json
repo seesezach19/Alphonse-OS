@@ -1,6 +1,6 @@
 {
   "package_id": "alphonse.runtime.n8n",
-  "package_version": "0.3.0",
+  "package_version": "0.4.0",
   "compatibility": {
     "n8n": ">=2.25.0 <3.0.0",
     "reference_version": "2.25.7",
@@ -15,6 +15,7 @@
   },
   "mappings": {
     "workflow_inventory": "credential-scoped n8n public API workflow pages to typed untrusted metadata with signed scope-bound cursors",
+    "execution_history": "credential-scoped n8n public API execution pages to typed history with workflow-, cutoff-, and page-bound cursors, explicit non-production classes, and revision evidence",
     "workflow_identity": "n8n workflow id to Alphonse workflow_id",
     "revision_identity": "exported workflow JSON, runtime image, node versions, model declaration, and configuration",
     "event_receipt": "successful n8n execution to signed minimal Runtime Event Envelope",

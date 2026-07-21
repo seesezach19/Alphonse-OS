@@ -12,6 +12,10 @@ import { createCoverageReviewService } from "./coverage-review-service.js";
 import { createCoverageReviewApprovalService } from "./coverage-review-approval-service.js";
 import { createCoverageCompilationService } from "./coverage-compilation-service.js";
 import { createCoverageCapabilityService } from "./coverage-capability-service.js";
+import {
+  createCoverageExecutionHistoryClient,
+  createCoverageReconciliationService
+} from "./coverage-reconciliation-service.js";
 import { createContextService } from "./context-service.js";
 import { createDatabase } from "./database.js";
 import { createDeploymentService } from "./deployment-service.js";
@@ -202,6 +206,7 @@ let coverageReviewService = null;
 let coverageReviewApprovalService = null;
 let coverageCompilationService = null;
 let coverageCapabilityService = null;
+let coverageReconciliationService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -346,6 +351,19 @@ if (diagnosticDatabase) {
     coverageOnboardingService,
     coverageReviewService,
     coverageCompilationService,
+    installationId,
+    environmentId
+  });
+  coverageReconciliationService = createCoverageReconciliationService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    coverageOnboardingService,
+    historyClient: diagnosticRuntimeDetailUrl && diagnosticRuntimeDetailToken
+      ? createCoverageExecutionHistoryClient({
+        baseUrl: diagnosticRuntimeDetailUrl,
+        token: diagnosticRuntimeDetailToken
+      })
+      : null,
     installationId,
     environmentId
   });
@@ -626,7 +644,8 @@ const routeHelpers = createRouteHelpers({
   diagnosticDiagnosisService, diagnosticRepairDeliveryService,
   diagnosticVerificationService, diagnosticPromotionService,
   coverageOnboardingService, workflowInterpretationService, coverageReviewService,
-  coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService
+  coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService,
+  coverageReconciliationService
 });
 
 const routeContext = createRouteContext({
@@ -644,6 +663,7 @@ const routeContext = createRouteContext({
   diagnosticConsistencyService,
   coverageOnboardingService, workflowInterpretationService, coverageReviewService,
   coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService,
+  coverageReconciliationService,
   installationId, environmentId, environmentName,
   grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
   dataPlaneReceiptSecret, dataPlaneId,

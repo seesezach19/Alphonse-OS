@@ -10,9 +10,10 @@ function manifest(overrides = {}) {
   return {
     adapter_id: "example.workflow-runtime",
     adapter_version: "1.3.0",
-    contract_version: "0.3.0",
+    contract_version: "0.4.0",
     capabilities: {
       workflow_inventory: { supported: true },
+      execution_history: { supported: true },
       workflow_identity: { supported: true },
       revision_identity: { supported: true },
       event_receipt: { supported: true },
@@ -26,9 +27,10 @@ function manifest(overrides = {}) {
 
 test("Workflow Runtime Adapter contract is provider-neutral and describes all extension seams", () => {
   const contract = getWorkflowRuntimeAdapterContract();
-  assert.equal(contract.contract_version, "0.3.0");
+  assert.equal(contract.contract_version, "0.4.0");
   assert.deepEqual(Object.keys(contract.capabilities), [
     "workflow_inventory",
+    "execution_history",
     "workflow_identity",
     "revision_identity",
     "event_receipt",
@@ -45,6 +47,17 @@ test("Workflow Runtime Adapter contract is provider-neutral and describes all ex
   }
   assert.doesNotMatch(JSON.stringify(contract), /n8n|zapier|make\.com/i);
   assert.deepEqual(assertWorkflowRuntimeAdapterManifest(manifest()), manifest());
+});
+
+test("execution history is cutoff-bound and signals cannot claim completeness", () => {
+  const operation = getWorkflowRuntimeAdapterContract().capabilities.execution_history.operation;
+  assert.equal(operation.operation_id, "runtime_adapter.execution_history.list");
+  assert.equal(operation.input_schema.properties.page_size.maximum, 100);
+  assert.equal(operation.output_schema.properties.completeness.properties
+    .embedded_signals_are_completeness_proof.const, false);
+  assert.equal(operation.output_schema.properties.completeness.properties
+    .provider_retention_and_deletion_visible_as_limitations.const, true);
+  assert.equal(operation.output_schema.properties.authority.const, "none");
 });
 
 test("workflow inventory is exact, cursor-bound, authority-free, and marks provider content untrusted", () => {

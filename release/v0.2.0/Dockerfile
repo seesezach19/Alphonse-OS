@@ -2,10 +2,12 @@ FROM node@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e
 
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY Dockerfile ./Dockerfile
 RUN npm ci --omit=dev
 
 COPY migrations ./migrations
 COPY diagnostic-migrations ./diagnostic-migrations
+COPY schemas ./schemas
 COPY packages ./packages
 COPY src ./src
 

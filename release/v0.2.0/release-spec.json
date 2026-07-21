@@ -13,8 +13,8 @@
     "diagnostic_consistency_evaluator": { "version": "0.1.0", "entrypoint": "src/diagnostic-consistency-service.js" },
     "verification_runner": { "version": "0.2.0", "entrypoint": "src/verification-runner-process.js" },
     "independent_diagnostic_verifier": { "version": "0.1.0", "entrypoint": "verifier/cli.js" },
-    "n8n_operational_package": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/operational-package.json" },
-    "n8n_runtime_adapter": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/runtime-adapter-manifest.json" },
+    "n8n_operational_package": { "version": "0.4.0", "entrypoint": "packages/n8n-operational-package/operational-package.json" },
+    "n8n_runtime_adapter": { "version": "0.4.0", "entrypoint": "packages/n8n-operational-package/runtime-adapter-manifest.json" },
     "n8n_repair_delivery_adapter": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/repair-delivery-adapter-manifest.json" },
     "reference_workflow": { "version": "inventory-follow-up-defective-v1", "entrypoint": "packages/n8n-operational-package/workflows/inventory-follow-up-defective.json" },
     "event_reporter": { "version": "0.2.0", "entrypoint": "packages/n8n-operational-package/workflows/alphonse-event-reporter.json" }
@@ -86,7 +86,8 @@
     "025_coverage_onboarding.sql",
     "026_workflow_interpretation.sql",
     "027_coverage_review_bundles.sql",
-    "028_coverage_compilation_validation.sql"
+    "028_coverage_compilation_validation.sql",
+    "029_coverage_reconciliation_intervals.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

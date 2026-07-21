@@ -21,6 +21,8 @@ const commands = {
   "get-trace": { method: "GET", path: `/diagnostic/v0/external-activity-traces/${encodeURIComponent(argument ?? "")}`, argumentRequired: true },
   "get-event-conflict": { method: "GET", path: `/diagnostic/v0/runtime-event-conflicts/${encodeURIComponent(argument ?? "")}`, argumentRequired: true },
   "get-workflow-coverage": { method: "GET", path: `/diagnostic/v0/coverage-onboardings/${encodeURIComponent(argument ?? "")}/capabilities`, argumentRequired: true },
+  "advance-coverage-reconciliation": { method: "POST", file: true, coverageReconciliation: true },
+  "get-coverage-reconciliation": { method: "GET", path: `/diagnostic/v0/coverage-onboardings/${encodeURIComponent(argument ?? "")}/reconciliation`, argumentRequired: true },
   "report-failure": { method: "POST", path: "/diagnostic/v0/cases", file: true },
   "confirm-failure-spec": { method: "POST", path: "/diagnostic/v0/failure-specifications", file: true },
   "create-reproduction": { method: "POST", path: "/diagnostic/v0/reproductions", file: true },
@@ -78,6 +80,8 @@ function usage() {
     "  get-trace <trace-id>",
     "  get-event-conflict <conflict-id>",
     "  get-workflow-coverage <onboarding-id>",
+    "  advance-coverage-reconciliation <command-json-file>",
+    "  get-coverage-reconciliation <onboarding-id>",
     "  report-failure <command-json-file>",
     "  confirm-failure-spec <command-json-file>",
     "  create-reproduction <command-json-file>",
@@ -182,6 +186,12 @@ if (selected.diagnosisRequestAction) {
   const body = JSON.parse(await readFile(argument, "utf8"));
   selectedPath = `/diagnostic/v0/diagnosis-requests/${encodeURIComponent(body?.input?.request_id ?? "")}` +
     `/${selected.diagnosisRequestAction}`;
+}
+
+if (selected.coverageReconciliation) {
+  const body = JSON.parse(await readFile(argument, "utf8"));
+  selectedPath = `/diagnostic/v0/coverage-onboardings/${encodeURIComponent(
+    body?.input?.onboarding_id ?? "")}/reconciliations`;
 }
 
 if (selected.diagnosisProposalReview) {

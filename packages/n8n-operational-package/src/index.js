@@ -5,7 +5,7 @@ const REQUIRED_EXPORTS = [
   "event_reporter_workflow", "reference_workflow"
 ];
 const REQUIRED_MAPPINGS = [
-  "workflow_inventory", "workflow_identity", "revision_identity", "event_receipt", "health",
+  "workflow_inventory", "execution_history", "workflow_identity", "revision_identity", "event_receipt", "health",
   "repair_delivery", "verification"
 ];
 
@@ -13,7 +13,7 @@ export function validateN8nOperationalPackage(value) {
   const issues = [];
   if (!value || typeof value !== "object" || Array.isArray(value)) issues.push("manifest must be an object");
   if (value?.package_id !== "alphonse.runtime.n8n") issues.push("package_id is unsupported");
-  if (value?.package_version !== "0.3.0") issues.push("package_version is unsupported");
+  if (value?.package_version !== "0.4.0") issues.push("package_version is unsupported");
   if (value?.compatibility?.n8n !== ">=2.25.0 <3.0.0") issues.push("n8n compatibility is unsupported");
   for (const name of REQUIRED_EXPORTS) if (!value?.exports?.[name]) issues.push(`missing export ${name}`);
   for (const name of REQUIRED_MAPPINGS) if (!value?.mappings?.[name]) issues.push(`missing mapping ${name}`);
@@ -504,7 +504,7 @@ export function buildN8nRevisionMaterial({ packageManifest, workflow, reporter }
     },
     adapter: {
       adapter_id: "alphonse.n8n.runtime",
-      adapter_version: "0.3.0",
+      adapter_version: "0.4.0",
       fingerprint_rules_digest: sha256Digest(packageManifest.fingerprint_rules)
     }
   };

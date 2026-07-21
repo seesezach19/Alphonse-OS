@@ -7,6 +7,7 @@ import { createSignedObservation } from "./observation-contracts.js";
 
 const config = {
   port: Number(process.env.N8N_OBSERVER_PORT ?? 3650), apiUrl: process.env.N8N_API_URL,
+  historyIntervalMs: Number(process.env.N8N_HISTORY_POLL_INTERVAL_MS ?? 15000),
   apiKey: process.env.N8N_API_KEY, bindingPath: process.env.N8N_BINDING_PATH,
   metadataPath: process.env.N8N_NODE_METADATA_PATH, statePath: process.env.N8N_OBSERVER_STATE_PATH,
   diagnosticUrl: process.env.N8N_DIAGNOSTIC_URL, schema: process.env.N8N_OBSERVATION_SCHEMA,
@@ -17,7 +18,10 @@ const config = {
   environmentId: process.env.KERNEL_ENVIRONMENT_ID, streamId: process.env.N8N_OBSERVATION_STREAM_ID
   , signalToken: process.env.N8N_OBSERVER_SIGNAL_TOKEN
 };
-if (Object.entries(config).some(([key, value]) => key !== "port" && !value)) throw new Error("n8n observer configuration is incomplete.");
+if (Object.entries(config).some(([key, value]) => !["port", "historyIntervalMs"].includes(key) && !value)
+    || !Number.isInteger(config.historyIntervalMs) || config.historyIntervalMs < 250) {
+  throw new Error("n8n observer configuration is incomplete.");
+}
 const binding = JSON.parse(await readFile(config.bindingPath, "utf8"));
 const metadata = JSON.parse(await readFile(config.metadataPath, "utf8"));
 let state;
@@ -26,6 +30,19 @@ try { state = JSON.parse(await readFile(config.statePath, "utf8")); } catch (err
   state = { next_sequence: 1, pending_execution_ids: [], reported_execution_ids: [], receipts: [], mismatches: [] };
 }
 state.pending_execution_ids ??= [];
+state.reported_execution_ids ??= [];
+state.receipts ??= [];
+state.mismatches ??= [];
+state.history_cursor ??= null;
+state.history_source_cutoff ??= null;
+state.history_cycle ??= 0;
+state.history_pages_admitted ??= 0;
+state.history_cycles_completed ??= 0;
+state.history_processed_execution_ids ??= [];
+state.history_nonterminal_execution_ids ??= [];
+state.history_exclusions ??= [];
+state.history_gaps ??= [];
+state.next_history_cycle_after ??= null;
 let persistQueue = Promise.resolve();
 async function persist() {
   persistQueue = persistQueue.then(async () => {
@@ -40,6 +57,11 @@ async function n8n(route) {
   if (!response.ok) throw new Error(`n8n read failed with HTTP ${response.status}`);
   const body = await response.json();
   return body.id === undefined ? body.data ?? body : body;
+}
+async function n8nResponse(route) {
+  const response = await fetch(`${config.apiUrl}${route}`, { headers: { "x-n8n-api-key": config.apiKey } });
+  if (!response.ok) throw new Error(`n8n history read failed with HTTP ${response.status}`);
+  return response.json();
 }
 async function submit(execution, sequence) {
   const capturedAt = new Date().toISOString();
@@ -106,12 +128,111 @@ async function submit(execution, sequence) {
   await persist();
 }
 async function poll() {
-  for (const executionId of [...state.pending_execution_ids].sort((a, b) => Number(a) - Number(b))) {
+  const numericOrder = (left, right) => {
+    const leftId = BigInt(left);
+    const rightId = BigInt(right);
+    return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+  };
+  for (const executionId of [...state.pending_execution_ids].sort(numericOrder)) {
     if (state.reported_execution_ids.includes(executionId)) continue;
     const execution = await n8n(`/api/v1/executions/${encodeURIComponent(executionId)}?includeData=true`);
     if (!execution.stoppedAt) continue;
     await submit(execution, state.next_sequence);
   }
+
+  const now = new Date();
+  if (state.next_history_cycle_after && now < new Date(state.next_history_cycle_after)) return;
+  if (!state.history_source_cutoff) {
+    state.history_cycle += 1;
+    state.history_source_cutoff = now.toISOString();
+    state.history_cursor = null;
+    await persist();
+  }
+  const query = new URLSearchParams({ includeData: "true", limit: "100",
+    workflowId: binding.provider_workflow_id });
+  if (state.history_cursor) query.set("cursor", state.history_cursor);
+  const page = await n8nResponse(`/api/v1/executions?${query.toString()}`);
+  if (!page || !Array.isArray(page.data)
+      || (page.nextCursor !== undefined && page.nextCursor !== null
+        && (typeof page.nextCursor !== "string" || page.nextCursor.length > 2000))) {
+    throw new Error("n8n history page is malformed");
+  }
+  const cutoff = new Date(state.history_source_cutoff);
+  for (const execution of page.data) {
+    const executionId = String(execution?.id ?? "");
+    if (!/^[0-9]{1,20}$/u.test(executionId)) {
+      state.history_gaps.push({ cycle: state.history_cycle, execution_id: null,
+        reason: "provider_execution_id_invalid", detected_at: now.toISOString() });
+      continue;
+    }
+    if (String(execution.workflowId ?? "") !== binding.provider_workflow_id) {
+      state.history_gaps.push({ cycle: state.history_cycle, execution_id: executionId,
+        reason: "provider_workflow_scope_mismatch", detected_at: now.toISOString() });
+      continue;
+    }
+    const occurredAt = new Date(execution.startedAt ?? execution.stoppedAt ?? "invalid");
+    if (Number.isNaN(occurredAt.valueOf())) {
+      state.history_gaps.push({ cycle: state.history_cycle, execution_id: executionId,
+        reason: "provider_execution_time_invalid", detected_at: now.toISOString() });
+      continue;
+    }
+    if (occurredAt > cutoff) continue;
+    if (!execution.stoppedAt) {
+      if (!state.history_nonterminal_execution_ids.includes(executionId)) {
+        state.history_nonterminal_execution_ids.push(executionId);
+      }
+      continue;
+    }
+    state.history_nonterminal_execution_ids = state.history_nonterminal_execution_ids
+      .filter((id) => id !== executionId);
+    if (state.history_processed_execution_ids.includes(executionId)) continue;
+    const executionClass = execution.retryOf || execution.retrySuccessId ? "retry"
+      : ["manual", "evaluation", "integrated"].includes(execution.mode) ? "non_production"
+        : ["webhook", "trigger"].includes(execution.mode) ? "production" : "unknown";
+    if (executionClass === "non_production") {
+      state.history_exclusions.push({ cycle: state.history_cycle, execution_id: executionId,
+        reason: "manual_or_test_execution", mode: execution.mode });
+      state.history_processed_execution_ids.push(executionId);
+      continue;
+    }
+    if (executionClass === "unknown") {
+      state.history_gaps.push({ cycle: state.history_cycle, execution_id: executionId,
+        reason: "execution_class_unknown", mode: execution.mode ?? null, detected_at: now.toISOString() });
+      state.history_processed_execution_ids.push(executionId);
+      continue;
+    }
+    if (execution.status !== "success") {
+      state.history_gaps.push({ cycle: state.history_cycle, execution_id: executionId,
+        reason: "production_execution_not_successful", status: execution.status ?? null,
+        detected_at: now.toISOString() });
+      state.history_processed_execution_ids.push(executionId);
+      continue;
+    }
+    let reconciled = state.reported_execution_ids.includes(executionId)
+      || state.mismatches.some((item) => item.execution_id === executionId);
+    if (!reconciled
+        && !state.mismatches.some((item) => item.execution_id === executionId)) {
+      try {
+        await submit(execution, state.next_sequence);
+        reconciled = true;
+      } catch (error) {
+        state.history_gaps.push({ cycle: state.history_cycle, execution_id: executionId,
+          reason: "runtime_observation_unavailable", detail: error.message.slice(0, 500),
+          detected_at: now.toISOString() });
+      }
+    }
+    if (reconciled) state.history_processed_execution_ids.push(executionId);
+  }
+  state.history_pages_admitted += 1;
+  state.history_cursor = page.nextCursor ?? null;
+  if (!state.history_cursor) {
+    state.history_cycles_completed += 1;
+    state.last_complete_history_at = now.toISOString();
+    state.last_complete_history_cutoff = state.history_source_cutoff;
+    state.history_source_cutoff = null;
+    state.next_history_cycle_after = new Date(now.valueOf() + config.historyIntervalMs).toISOString();
+  }
+  await persist();
 }
 let lastError = null;
 let polling = false;
@@ -159,6 +280,16 @@ const server = http.createServer(async (request, response) => {
   response.end(JSON.stringify({ status: lastError ? "degraded" : "healthy", binding_digest: binding.binding_digest,
     expected_identity_source: binding.expected_identity_source, reported_count: state.reported_execution_ids.length,
     pending_execution_ids: state.pending_execution_ids, receipts: state.receipts ?? [], mismatch_count: state.mismatches.length,
-    mismatches: state.mismatches, last_error: lastError }));
+    mismatches: state.mismatches, last_error: lastError,
+    history_reconciliation: { completeness_basis: "n8n_public_api_cursor_walk",
+      embedded_signals_are_completeness_proof: false, signals_are_acceleration_hints_only: true,
+      provider_retention_and_deletion_can_limit_history: true, cycle: state.history_cycle,
+      active_cursor: state.history_cursor, source_cutoff: state.history_source_cutoff,
+      pages_admitted: state.history_pages_admitted, cycles_completed: state.history_cycles_completed,
+      last_complete_history_at: state.last_complete_history_at ?? null,
+      last_complete_history_cutoff: state.last_complete_history_cutoff ?? null,
+      nonterminal_execution_ids: state.history_nonterminal_execution_ids,
+      exclusion_count: state.history_exclusions.length, gap_count: state.history_gaps.length,
+      gaps: state.history_gaps.slice(-100) } }));
 });
 server.listen(config.port, "0.0.0.0");

@@ -624,6 +624,124 @@ const accountableCoverageSchema = {
   }
 };
 
+const coverageReconciliationAdvanceInput = {
+  type: "object", required: ["onboarding_id", "passport_id", "expected_reconciliation_revision",
+    "expected_cycle_id", "page_size"], additionalProperties: false,
+  properties: {
+    onboarding_id: { type: "string", format: "uuid" },
+    passport_id: { type: "string", format: "uuid" },
+    expected_reconciliation_revision: { type: "integer", minimum: 0 },
+    expected_cycle_id: { type: ["string", "null"], format: "uuid" },
+    page_size: { type: "integer", minimum: 1, maximum: 100 }
+  }
+};
+
+const coverageReconciliationProjectionSchema = {
+  type: "object", required: ["schema_version", "onboarding_id", "workflow_reference", "revision",
+    "event_head_digest", "status", "active_cycle", "latest_completed_cycle", "coverage_intervals",
+    "current_coverage", "event_count", "page_count", "execution_observation_count", "events",
+    "legal_next_operations", "authority", "immutable_history", "reconciler"], additionalProperties: false,
+  properties: {
+    schema_version: { const: "alphonse.coverage-reconciliation.v0.1" },
+    onboarding_id: { type: "string", format: "uuid" },
+    workflow_reference: coverageWorkflowReference,
+    revision: { type: "integer", minimum: 0 },
+    event_head_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
+    status: { enum: ["not_started", "backfilling", "degraded_backfill", "degraded", "reconciled"] },
+    active_cycle: { anyOf: [{ type: "null" }, { type: "object",
+      required: ["cycle_id", "cycle_index", "source_cutoff", "next_page_index", "next_cursor"],
+      additionalProperties: false, properties: {
+        cycle_id: { type: "string", format: "uuid" }, cycle_index: { type: "integer", minimum: 1 },
+        source_cutoff: { type: "string", format: "date-time" },
+        next_page_index: { type: "integer", minimum: 0 },
+        next_cursor: { type: ["string", "null"], maxLength: 4096 }
+      } }] },
+    latest_completed_cycle: { anyOf: [{ type: "null" }, { type: "object",
+      required: ["cycle_id", "cycle_index", "cycle_digest", "source_cutoff", "assessment",
+        "production_execution_count", "matched_revision_execution_count",
+        "mismatched_revision_execution_count", "unavailable_revision_execution_count"],
+      additionalProperties: false, properties: {
+        cycle_id: { type: "string", format: "uuid" }, cycle_index: { type: "integer", minimum: 1 },
+        cycle_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        source_cutoff: { type: "string", format: "date-time" },
+        assessment: { enum: ["active", "degraded", "suspended"] },
+        production_execution_count: { type: "integer", minimum: 0 },
+        matched_revision_execution_count: { type: "integer", minimum: 0 },
+        mismatched_revision_execution_count: { type: "integer", minimum: 0 },
+        unavailable_revision_execution_count: { type: "integer", minimum: 0 }
+      } }] },
+    coverage_intervals: { type: "array", items: { type: "object", required: ["schema_version",
+      "onboarding_id", "starts_at", "ends_at", "end_exclusive", "state", "basis_event_digest",
+      "gap_ids", "limitation_ids", "authority", "interval_digest", "immutable"],
+      additionalProperties: false, properties: {
+        schema_version: { const: "alphonse.coverage-interval.v0.1" },
+        onboarding_id: { type: "string", format: "uuid" },
+        starts_at: { type: "string", format: "date-time" },
+        ends_at: { type: "string", format: "date-time" },
+        state: { enum: ["active", "degraded", "suspended", "unavailable"] },
+        end_exclusive: { const: true },
+        basis_event_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        gap_ids: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+        limitation_ids: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+        authority: { const: "none" },
+        interval_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        immutable: { const: true }
+      } } },
+    current_coverage: { type: "object", required: ["starts_at", "ends_at", "state",
+      "basis_event_digest", "gap_ids", "limitation_ids", "open", "authority"],
+      additionalProperties: false, properties: {
+        starts_at: { type: "string", format: "date-time" },
+        ends_at: { const: null }, state: { enum: ["active", "degraded", "suspended", "unavailable"] },
+        basis_event_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        gap_ids: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+        limitation_ids: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+        open: { const: true }, authority: { const: "none" }
+      } },
+    event_count: { type: "integer", minimum: 0 },
+    page_count: { type: "integer", minimum: 0 },
+    execution_observation_count: { type: "integer", minimum: 0 },
+    events: { type: "array", items: { type: "object",
+      required: ["schema_version", "event_id", "onboarding_id", "event_index", "cycle_id",
+        "cycle_index", "event_type", "prior_event_digest", "payload", "actor", "occurred_at",
+        "event_digest"], additionalProperties: false, properties: {
+        schema_version: { const: "alphonse.coverage-reconciliation-event.v0.1" },
+        event_id: { type: "string", format: "uuid" }, onboarding_id: { type: "string", format: "uuid" },
+        event_index: { type: "integer", minimum: 1 }, cycle_id: { type: ["string", "null"], format: "uuid" },
+        cycle_index: { type: ["integer", "null"], minimum: 1 },
+        event_type: { enum: ["cycle_started", "page_admitted", "cycle_completed", "reconciliation_degraded"] },
+        prior_event_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
+        payload: { type: "object" }, actor: { type: "object", required: ["type", "id"],
+          additionalProperties: false, properties: { type: { enum: ["agent", "service"] },
+            id: { type: "string", minLength: 1, maxLength: 200 } } },
+        occurred_at: { type: "string", format: "date-time" },
+        event_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+      } } },
+    legal_next_operations: { type: "array", uniqueItems: true,
+      items: { enum: ["diagnostic.coverage_reconciliation.advance",
+        "diagnostic.coverage_reconciliation.get"] } },
+    reconciler: implementationIdentitySchema,
+    authority: { const: "none" },
+    immutable_history: { const: true }
+  }
+};
+
+const coverageReconciliationCommandOutput = {
+  type: "object", required: ["command_id", "request_digest", "accepted_at", "operation_id",
+    "actor", "authorization", "coverage_reconciliation", "page_receipt", "advanced", "degraded",
+    "authority", "transition"], additionalProperties: false,
+  properties: {
+    command_id: { type: "string" },
+    request_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    accepted_at: { type: "string", format: "date-time" },
+    operation_id: { const: "diagnostic.coverage_reconciliation.advance" },
+    actor: { type: "object" }, authorization: { type: "object" },
+    coverage_reconciliation: coverageReconciliationProjectionSchema,
+    page_receipt: { type: ["object", "null"] },
+    advanced: { type: "boolean" }, degraded: { type: "boolean" },
+    authority: { const: "none" }, transition: { type: "object" }
+  }
+};
+
 const coverageProjectionSchema = {
   type: "object",
   required: [
@@ -1370,6 +1488,53 @@ const descriptors = [
       "COVERAGE_PROFILE_INVALID", "ARTIFACT_NOT_FOUND"],
     emitted_events: [],
     next_operations: ["diagnostic.coverage_onboarding.get"]
+  },
+  {
+    operation_id: "diagnostic.coverage_reconciliation.advance",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Advance one durable execution-history cursor page and append authority-free reconciliation evidence.",
+    visibility: "public",
+    authority_class: "authenticated_bound_coverage_onboarding_agent",
+    effect_class: "credential_scoped_read_and_append_only_diagnostic_state",
+    idempotency: "required_command_id_expected_reconciliation_revision_and_exact_cursor_state",
+    transport: { method: "POST", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/reconciliations" },
+    input_schema: commandEnvelope("diagnostic.coverage_reconciliation.advance",
+      coverageReconciliationAdvanceInput),
+    output_schema: coverageReconciliationCommandOutput,
+    supported_modes: ["live"],
+    preconditions: ["authenticated_bound_agent_passport", "coverage_onboarding_exists",
+      "credential_scoped_execution_history_adapter", "exact_expected_reconciliation_revision"],
+    outcomes: ["reconciliation_page_admitted", "reconciliation_cycle_completed",
+      "reconciliation_degraded_and_resume_cursor_preserved", "command_replayed"],
+    issues: ["AGENT_AUTHENTICATION_REQUIRED", "COVERAGE_RECONCILIATION_REVISION_CONFLICT",
+      "COVERAGE_RECONCILIATION_CYCLE_CONFLICT", "COVERAGE_RECONCILIATION_SCOPE_CONFLICT",
+      "COVERAGE_RECONCILIATION_RESPONSE_INVALID", "IDEMPOTENCY_CONFLICT"],
+    emitted_events: ["diagnostic.coverage_reconciliation.page_admitted",
+      "diagnostic.coverage_reconciliation.completed", "diagnostic.coverage_reconciliation.degraded"],
+    next_operations: ["diagnostic.coverage_reconciliation.advance",
+      "diagnostic.coverage_reconciliation.get", "diagnostic.workflow_coverage_capabilities.get"]
+  },
+  {
+    operation_id: "diagnostic.coverage_reconciliation.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read verified reconciliation history, immutable closed intervals, current suspension, gaps, and limitations.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/reconciliation" },
+    input_schema: { type: "object", required: ["onboarding_id"], additionalProperties: false,
+      properties: { onboarding_id: { type: "string", format: "uuid" } } },
+    output_schema: { type: "object", required: ["coverage_reconciliation"],
+      additionalProperties: false,
+      properties: { coverage_reconciliation: coverageReconciliationProjectionSchema } },
+    supported_modes: ["live"],
+    preconditions: ["authenticated_customer_reader", "coverage_onboarding_exists"],
+    outcomes: ["immutable_reconciliation_history_returned"],
+    issues: ["COVERAGE_ONBOARDING_NOT_FOUND", "COVERAGE_RECONCILIATION_INTEGRITY_VIOLATION"],
+    emitted_events: [],
+    next_operations: ["diagnostic.coverage_reconciliation.advance",
+      "diagnostic.workflow_coverage_capabilities.get"]
   },
   commandDescriptor({
     operationId: "diagnostic.agent_workflow.register",

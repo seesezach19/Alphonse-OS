@@ -9,8 +9,10 @@ import { sha256Digest } from "../src/canonical-json.js";
 import { createContentAddressedArtifactStore } from "../src/content-addressed-artifact-store.js";
 import { WORKFLOW_DISCOVERY_EXCLUDED_FIELDS } from "../src/coverage-onboarding-contracts.js";
 import { createCoverageOnboardingService } from "../src/coverage-onboarding-service.js";
+import { createCoverageReconciliationService } from "../src/coverage-reconciliation-service.js";
 import { createDatabase } from "../src/database.js";
 import { createDiagnosticDatabase } from "../src/diagnostic-database.js";
+import { KernelError } from "../src/errors.js";
 import { createIdentityIntentService } from "../src/identity-intent-service.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -120,10 +122,64 @@ function service(identityIntent, artifactStore, inventoryClient) {
     environmentId,
     runtimeAdapter: {
       adapter_id: "alphonse.n8n.runtime",
-      adapter_version: "0.3.0",
-      contract_version: "0.3.0"
+      adapter_version: "0.4.0",
+      contract_version: "0.4.0"
     }
   });
+}
+
+function execution(id, overrides = {}) {
+  const material = {
+    provider_execution_id: String(id),
+    provider_workflow_id: "InventoryDefect1",
+    provider_status: "success",
+    execution_class: "production",
+    provider_mode: "webhook",
+    retry_of: null,
+    retry_success_id: null,
+    started_at: "2026-07-21T17:00:00.000Z",
+    stopped_at: "2026-07-21T17:00:01.000Z",
+    wait_until: null,
+    revision: {
+      status: "matched",
+      provider_workflow_version_id: "revision-2",
+      execution_workflow_material_digest: `sha256:${"a".repeat(64)}`,
+      binding_digest: `sha256:${"b".repeat(64)}`
+    },
+    ...overrides
+  };
+  return { ...material, observation_digest: sha256Digest(material), authority: "none" };
+}
+
+function executionHistoryPage({ currentCursor = null, nextCursor = null, pageIndex = 0,
+  cutoff, executions, omissions = [] }) {
+  const normalized = {
+    schema_version: "alphonse.workflow-execution-history-page.v0.1",
+    scope: { scope_id: "n8n:customer-primary", provider: "n8n",
+      environment: "customer-local", provider_workflow_id: "InventoryDefect1",
+      scope_digest: `sha256:${"1".repeat(64)}` },
+    executions,
+    page: { current_cursor: currentCursor, next_cursor: nextCursor, page_index: pageIndex,
+      item_count: executions.length, scope_complete: nextCursor === null, source_cutoff: cutoff },
+    omissions,
+    health: { status: "healthy", observed_at: cutoff, issues: [] },
+    completeness: { basis: "credential_scoped_public_api_cursor_walk",
+      embedded_signals_are_completeness_proof: false,
+      provider_retention_and_deletion_visible_as_limitations: true },
+    authority: "none"
+  };
+  return { ...normalized, page: { ...normalized.page, page_digest: sha256Digest(normalized) } };
+}
+
+function reconciliationCommand(commandId, identity, onboardingId, projection) {
+  return {
+    schema_version: "alphonse.coverage-reconciliation-command.v0.1",
+    command_id: commandId,
+    operation_id: "diagnostic.coverage_reconciliation.advance",
+    input: { onboarding_id: onboardingId, passport_id: identity.authenticated.passport_id,
+      expected_reconciliation_revision: projection.revision,
+      expected_cycle_id: projection.active_cycle?.cycle_id ?? null, page_size: 2 }
+  };
 }
 
 async function openDatabases() {
@@ -213,8 +269,8 @@ function openInput(identity) {
     },
     adapter_binding: {
       adapter_id: "alphonse.n8n.runtime",
-      adapter_version: "0.3.0",
-      contract_version: "0.3.0",
+      adapter_version: "0.4.0",
+      contract_version: "0.4.0",
       inventory_scope_id: "n8n:customer-primary",
       inventory_scope_digest: `sha256:${"1".repeat(64)}`
     }
@@ -251,6 +307,14 @@ try {
   let page = inventoryPage({ pageSeed: "a" });
   let inventoryReads = 0;
   const inventoryClient = { async list() { inventoryReads += 1; return structuredClone(page); } };
+  let historyReads = 0;
+  const historyPlan = [];
+  const historyClient = { async list(input) {
+    historyReads += 1;
+    const next = historyPlan.shift();
+    assert.ok(next, "unexpected execution-history read");
+    return next(input);
+  } };
   let artifactStore = createContentAddressedArtifactStore(artifactRoot);
   let onboardingService = service(identityIntent, artifactStore, inventoryClient);
 
@@ -325,6 +389,126 @@ try {
   assert.equal((await artifactStore.getJson(secondDigest)).content.selected_workflow.display_name,
     "Inventory workflow v2");
 
+  let reconciliationService = createCoverageReconciliationService({
+    database: diagnosticDatabase, artifactStore, coverageOnboardingService: onboardingService,
+    historyClient, installationId, environmentId
+  });
+  const cutoffOne = "2026-07-21T18:00:00.000Z";
+  const cursorOne = "signed-cycle-one-page-one";
+  historyPlan.push((input) => {
+    assert.equal(input.cursor, null);
+    return executionHistoryPage({ cutoff: cutoffOne, nextCursor: cursorOne,
+      executions: [execution(101), execution(102, { execution_class: "manual", provider_mode: "manual" })] });
+  });
+  let projection = await reconciliationService.get(onboardingId);
+  const firstPageCommand = reconciliationCommand(
+    "coverage-reconcile-cycle-one-page-zero", identity, onboardingId, projection
+  );
+  const firstPage = await reconciliationService.advance(firstPageCommand, resumedPassport);
+  assert.equal(firstPage.result.coverage_reconciliation.status, "backfilling");
+  assert.equal(firstPage.result.coverage_reconciliation.current_coverage.state, "unavailable");
+  assert.equal((await reconciliationService.advance(firstPageCommand, resumedPassport)).replayed, true);
+  assert.equal(historyReads, 1, "command replay must not re-read provider history");
+
+  historyPlan.push((input) => {
+    assert.equal(input.cursor, cursorOne);
+    return executionHistoryPage({ cutoff: cutoffOne, currentCursor: cursorOne, pageIndex: 1,
+      executions: [execution(103, { execution_class: "retry", provider_mode: "retry",
+        retry_of: "101" })] });
+  });
+  projection = firstPage.result.coverage_reconciliation;
+  const completed = await reconciliationService.advance(reconciliationCommand(
+    "coverage-reconcile-cycle-one-page-one", identity, onboardingId, projection
+  ), resumedPassport);
+  projection = completed.result.coverage_reconciliation;
+  assert.equal(projection.revision, 4);
+  assert.equal(projection.current_coverage.state, "active");
+  assert.equal(projection.latest_completed_cycle.production_execution_count, 2);
+  assert.equal(projection.latest_completed_cycle.matched_revision_execution_count, 2);
+  assert.match(projection.reconciler.artifact_digest, /^sha256:[0-9a-f]{64}$/u);
+  assert.ok(projection.events.at(-1).payload.limitations.some((item) =>
+    item.code === "coverage.reconciliation.non_production_excluded"));
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  historyPlan.push(() => { throw new KernelError(502, "COVERAGE_RECONCILIATION_READ_FAILED",
+    "fixture provider outage"); });
+  const outage = await reconciliationService.advance(reconciliationCommand(
+    "coverage-reconcile-provider-outage", identity, onboardingId, projection
+  ), resumedPassport);
+  projection = outage.result.coverage_reconciliation;
+  assert.equal(outage.result.degraded, true);
+  assert.equal(projection.status, "degraded");
+  assert.equal(projection.current_coverage.state, "suspended");
+  assert.equal(projection.active_cycle, null);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const cutoffTwo = "2026-07-21T18:10:00.000Z";
+  historyPlan.push((input) => {
+    assert.equal(input.cursor, null);
+    return executionHistoryPage({ cutoff: cutoffTwo,
+      executions: [execution(101, { revision: { status: "mismatched",
+        provider_workflow_version_id: "revision-drifted",
+        execution_workflow_material_digest: `sha256:${"d".repeat(64)}`,
+        binding_digest: `sha256:${"b".repeat(64)}` } }),
+      execution(103, { execution_class: "retry", provider_mode: "retry", retry_of: "101" })] });
+  });
+  const drift = await reconciliationService.advance(reconciliationCommand(
+    "coverage-reconcile-drift", identity, onboardingId, projection
+  ), resumedPassport);
+  projection = drift.result.coverage_reconciliation;
+  assert.equal(projection.current_coverage.state, "suspended");
+  assert.equal(projection.latest_completed_cycle.assessment, "suspended");
+  assert.equal(projection.latest_completed_cycle.mismatched_revision_execution_count, 1);
+  assert.ok(projection.events.at(-1).payload.gaps.some((item) =>
+    item.code === "coverage.reconciliation.revision_drift"));
+  assert.ok(projection.events.at(-1).payload.gaps.some((item) =>
+    item.code === "coverage.reconciliation.provider_history_absence"));
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const cutoffThree = "2026-07-21T18:20:00.000Z";
+  historyPlan.push(() => executionHistoryPage({ cutoff: cutoffThree,
+    executions: [execution(101),
+      execution(103, { execution_class: "retry", provider_mode: "retry", retry_of: "101" })] }));
+  const persistentDeletion = await reconciliationService.advance(reconciliationCommand(
+    "coverage-reconcile-persistent-deletion", identity, onboardingId, projection
+  ), resumedPassport);
+  projection = persistentDeletion.result.coverage_reconciliation;
+  assert.equal(projection.revision, 11);
+  assert.equal(projection.current_coverage.state, "degraded");
+  assert.ok(projection.events.at(-1).payload.gaps.some((item) =>
+    item.code === "coverage.reconciliation.provider_history_absence"));
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const cutoffFour = "2026-07-21T18:30:00.000Z";
+  historyPlan.push(() => executionHistoryPage({ cutoff: cutoffFour,
+    executions: [execution(101),
+      execution(102, { execution_class: "manual", provider_mode: "manual" }),
+      execution(103, { execution_class: "retry", provider_mode: "retry", retry_of: "101" })] }));
+  const recoveredCoverage = await reconciliationService.advance(reconciliationCommand(
+    "coverage-reconcile-recovery", identity, onboardingId, projection
+  ), resumedPassport);
+  projection = recoveredCoverage.result.coverage_reconciliation;
+  assert.equal(projection.revision, 14);
+  assert.equal(projection.current_coverage.state, "active");
+  assert.equal(projection.latest_completed_cycle.assessment, "active");
+  assert.ok(projection.events.at(-1).payload.limitations.some((item) =>
+    item.code === "coverage.reconciliation.late_fill"));
+  assert.ok(projection.coverage_intervals.some((item) => item.state === "active"));
+  assert.ok(projection.coverage_intervals.some((item) => item.state === "suspended"));
+  assert.ok(projection.coverage_intervals.every((item) => item.immutable
+    && item.end_exclusive && item.interval_digest));
+  assert.equal(historyPlan.length, 0);
+  assert.equal(historyReads, 6);
+
+  await assert.rejects(() => diagnosticDatabase.pool.query(
+    `UPDATE diagnostic_coverage_reconciliation_events SET payload='{}'::jsonb
+     WHERE installation_id=$1 AND onboarding_id=$2`, [installationId, onboardingId]
+  ), /immutable records cannot be updated or deleted/);
+  await assert.rejects(() => diagnosticDatabase.pool.query(
+    `DELETE FROM diagnostic_coverage_execution_observations
+     WHERE installation_id=$1 AND onboarding_id=$2`, [installationId, onboardingId]
+  ), /immutable records cannot be updated or deleted/);
+
   page = inventoryPage({ name: "Bearer must-not-persist", revision: "revision-3", pageSeed: "c" });
   await assert.rejects(() => onboardingService.captureEvidence(command(
     "coverage-capture-secret", "diagnostic.coverage_onboarding.evidence_capture",
@@ -351,11 +535,20 @@ try {
   identityIntent = createIdentityIntentService(kernelDatabase, installationId, environmentId, bootstrapSubject);
   artifactStore = createContentAddressedArtifactStore(artifactRoot);
   onboardingService = service(identityIntent, artifactStore, inventoryClient);
+  reconciliationService = createCoverageReconciliationService({
+    database: diagnosticDatabase, artifactStore, coverageOnboardingService: onboardingService,
+    historyClient, installationId, environmentId
+  });
   const recovered = await onboardingService.get(onboardingId);
   assert.equal(recovered.event_head_digest, headBeforeRestart);
   assert.equal(recovered.active_snapshot_digest, secondDigest);
   assert.equal(recovered.snapshot_history.length, 2);
   assert.equal(recovered.authority.coverage_claim, "not_granted");
+  const recoveredReconciliation = await reconciliationService.get(onboardingId);
+  assert.equal(recoveredReconciliation.revision, 14);
+  assert.equal(recoveredReconciliation.current_coverage.state, "active");
+  assert.equal(recoveredReconciliation.execution_observation_count, 10);
+  assert.ok(recoveredReconciliation.coverage_intervals.some((item) => item.state === "suspended"));
   const kernelRuns = await kernelDatabase.pool.query("SELECT count(*) FROM kernel_runs");
   assert.equal(kernelRuns.rows[0].count, "0");
 
@@ -366,6 +559,15 @@ try {
     pause_resume_recovered: true,
     restart_recovered: true,
     provider_reads_total_including_two_captures_and_one_rejected_secret: inventoryReads,
+    execution_history_reads: historyReads,
+    execution_history_completeness_basis: "credential_scoped_public_api_cursor_walk",
+    embedded_signals_are_completeness_proof: false,
+    reconciliation_revision: 14,
+    immutable_execution_observations: recoveredReconciliation.execution_observation_count,
+    provider_outage_suspended_coverage: true,
+    revision_drift_suspended_coverage: true,
+    completed_reconciliation_reactivated_coverage: true,
+    historical_coverage_loss_preserved: true,
     replay_added_provider_reads: false,
     changed_command_conflict_before_provider_read: true,
     immutable_snapshots_preserved: 2,
