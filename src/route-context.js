@@ -45,6 +45,8 @@ export const ROUTE_CONTEXT_KEYS = /** @type {const} */ ([
   "diagnosticConsistencyService",
   "coverageOnboardingService",
   "workflowInterpretationService",
+  "coverageReviewService",
+  "coverageReviewApprovalService",
   "installationId",
   "environmentId",
   "environmentName",
@@ -111,7 +113,9 @@ export const ROUTE_CONTEXT_KEYS = /** @type {const} */ ([
   "requireDiagnosticVerification",
   "requireDiagnosticPromotion",
   "requireCoverageOnboarding",
-  "requireWorkflowInterpretation"
+  "requireWorkflowInterpretation",
+  "requireCoverageReview",
+  "requireCoverageReviewApproval"
 ]);
 
 /** @typedef {typeof ROUTE_CONTEXT_KEYS[number]} RouteContextKey */

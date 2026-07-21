@@ -47,7 +47,7 @@ export function createDiagnosticRouter(ctx) {
     requireDiagnosticDispatchAuthority, requireIndependentDiagnosticVerification,
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
     requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding,
-    requireWorkflowInterpretation
+    requireWorkflowInterpretation, requireCoverageReview
   } = ctx;
 
   return async function diagnosticRouter(request, response, url) {
@@ -562,6 +562,28 @@ export function createDiagnosticRouter(ctx) {
         "Route onboarding ID must match Coverage Ambiguity resolution input.");
     }
     return sendCommandResult(response, await service.resolveAmbiguity(body, actor));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/review-bundles$/.test(url.pathname)) {
+    const service = requireCoverageReview();
+    const passport = await authenticateAgent(request);
+    const body = await readJson(request, 2 * 1024 * 1024);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    if (body?.input?.onboarding_id !== onboardingId) {
+      throw new KernelError(409, "COVERAGE_ONBOARDING_ROUTE_MISMATCH",
+        "Route onboarding ID must match Coverage Review Bundle input.");
+    }
+    return sendCommandResult(response, await service.create(body, passport));
+  }
+
+  if (request.method === "GET"
+      && url.pathname.startsWith("/diagnostic/v0/coverage-review-bundles/")) {
+    const service = requireCoverageReview();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { coverage_review_bundle: await service.get(
+      pathId(url.pathname, "/diagnostic/v0/coverage-review-bundles/")
+    ) });
   }
 
   if (request.method === "GET"

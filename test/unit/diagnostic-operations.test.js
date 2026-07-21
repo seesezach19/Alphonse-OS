@@ -21,6 +21,8 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.coverage_interpretation_assignment.get",
     "diagnostic.coverage_interpretation.submit",
     "diagnostic.coverage_ambiguity.resolve",
+    "diagnostic.coverage_review_bundle.create",
+    "diagnostic.coverage_review_bundle.get",
     "diagnostic.agent_workflow.register",
     "diagnostic.agent_workflow.get",
     "diagnostic.agent_revision.register",
@@ -161,6 +163,18 @@ test("workflow interpretation separates bounded agent proposals from named-human
   assert.ok(resolve.preconditions.includes("exact_active_ambiguity_digest"));
   assert.doesNotMatch(JSON.stringify(submit.input_schema), /operator_confirmed|authority_granted/);
   assert.doesNotMatch(JSON.stringify([assign, submit, resolve]), /external_effect|registration_authority/);
+});
+
+test("coverage review discovery freezes exact bytes and exposes no execution authority", () => {
+  const create = getDiagnosticOperationDescriptor("diagnostic.coverage_review_bundle.create");
+  const read = getDiagnosticOperationDescriptor("diagnostic.coverage_review_bundle.get");
+  assert.equal(create.input_schema.properties.input.additionalProperties, false);
+  assert.equal(create.input_schema.properties.input.properties.repair_binding_reference
+    .anyOf[1].additionalProperties, false);
+  assert.equal(create.effect_class,
+    "content_addressed_review_bundle_and_append_only_state_transition");
+  assert.equal(read.effect_class, "read_only");
+  assert.doesNotMatch(JSON.stringify([create, read]), /provider_credential_value|workflow_execution_authority/);
 });
 
 test("Diagnostic execution separates launch, running proof, and diagnosis ingestion", () => {

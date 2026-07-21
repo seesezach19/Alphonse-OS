@@ -352,12 +352,22 @@ export function createWorkflowInterpretationService({ database, artifactStore, i
           nonblocking_count: ambiguityMaterial.ambiguities.filter((item) => !item.document.blocking).length,
           authority: "none"
         };
-        await coverageInternal.appendEvent(client, {
+        const ambiguityEventDigest = await coverageInternal.appendEvent(client, {
           onboardingId: current.onboarding_id,
           eventIndex: ambiguityEventIndex,
           eventType: "ambiguities_projected",
           priorEventDigest: interpretationEventDigest,
           payload: ambiguityPayload,
+          actor,
+          occurredAt: acceptedAt
+        });
+        await coverageInternal.appendReviewInvalidation(client, {
+          current,
+          eventIndex: ambiguityEventIndex + 1,
+          priorEventDigest: ambiguityEventDigest,
+          trigger: "interpretation_superseded",
+          priorMaterialDigest: current.active_interpretation_digest ?? stored.artifact_digest,
+          replacementMaterialDigest: stored.artifact_digest,
           actor,
           occurredAt: acceptedAt
         });
@@ -468,12 +478,22 @@ export function createWorkflowInterpretationService({ database, artifactStore, i
           principal_id: principalId,
           authority: "human_confirmation_only"
         };
-        await coverageInternal.appendEvent(client, {
+        const resolutionEventDigest = await coverageInternal.appendEvent(client, {
           onboardingId: current.onboarding_id,
           eventIndex,
           eventType: "ambiguity_resolved",
           priorEventDigest: current.event_head_digest,
           payload,
+          actor: executionActor(ownerActor),
+          occurredAt: acceptedAt
+        });
+        await coverageInternal.appendReviewInvalidation(client, {
+          current,
+          eventIndex: eventIndex + 1,
+          priorEventDigest: resolutionEventDigest,
+          trigger: "ambiguity_resolution_changed",
+          priorMaterialDigest: ambiguity.ambiguity_digest,
+          replacementMaterialDigest: built.resolution_digest,
           actor: executionActor(ownerActor),
           occurredAt: acceptedAt
         });

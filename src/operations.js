@@ -66,6 +66,74 @@ const operationDescriptorOutputSchema = {
   }
 };
 
+const coverageReviewApprovalSchema = {
+  type: "object",
+  required: [
+    "approval_id", "approval_digest", "onboarding_id", "review_bundle_digest", "review_state",
+    "review_state_digest", "work_intent_id", "work_intent_digest", "scope", "rationale",
+    "principal_id", "executed_by", "issued_at", "valid_until", "status", "eligibility",
+    "document", "immutable"
+  ],
+  additionalProperties: false,
+  properties: {
+    approval_id: { type: "string", format: "uuid" },
+    approval_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    onboarding_id: { type: "string", format: "uuid" },
+    review_bundle_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    review_state: { type: "object" },
+    review_state_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    work_intent_id: { type: "string", format: "uuid" },
+    work_intent_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    scope: { type: "object" },
+    rationale: { type: "string" },
+    principal_id: { type: "string", format: "uuid" },
+    executed_by: { type: "object" },
+    issued_at: { type: "string", format: "date-time" },
+    valid_until: { type: ["string", "null"], format: "date-time" },
+    status: { enum: ["eligible", "review_required", "expired"] },
+    eligibility: { type: "object" },
+    document: { type: "object" },
+    immutable: { const: true }
+  }
+};
+
+const coverageReviewApproveInput = {
+  type: "object",
+  required: ["onboarding_id", "review_bundle_digest", "expected_review_state", "work_intent_id",
+    "scope", "rationale", "valid_until", "authority_granted", "authority_denied"],
+  additionalProperties: false,
+  properties: {
+    onboarding_id: { type: "string", format: "uuid" },
+    review_bundle_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    expected_review_state: {
+      type: "object", required: ["onboarding_revision", "event_head_digest", "status"],
+      additionalProperties: false,
+      properties: {
+        onboarding_revision: { type: "integer", minimum: 5 },
+        event_head_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        status: { const: "awaiting_approval" }
+      }
+    },
+    work_intent_id: { type: "string", format: "uuid" },
+    scope: {
+      type: "object", required: ["kind", "onboarding_id", "workflow_reference_digest",
+        "review_bundle_digest"], additionalProperties: false,
+      properties: {
+        kind: { const: "exact_workflow_and_review_digest" },
+        onboarding_id: { type: "string", format: "uuid" },
+        workflow_reference_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        review_bundle_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    rationale: { type: "string", minLength: 1, maxLength: 2000 },
+    valid_until: { type: ["string", "null"], format: "date-time" },
+    authority_granted: { const: ["compile_exact_bundle", "request_exact_registration"] },
+    authority_denied: { const: ["source_control", "manifest_import", "registration",
+      "provider_credential", "workflow_execution", "repair", "verification", "promotion",
+      "target_change", "external_effect"] }
+  }
+};
+
 /** @type {KernelOperationDescriptor[]} */
 const descriptors = [
   {
@@ -1099,6 +1167,64 @@ descriptors.push(
       "DIAGNOSTIC_DISPATCH_AUTHORIZATION_INTEGRITY_VIOLATION"],
     emitted_events: [],
     next_operations: ["diagnostic.assignment.claim"]
+  },
+  {
+    operation_id: "kernel.coverage_review.approve",
+    version: "0.1.0",
+    summary: "Bind one named human to exact immutable review bytes without granting business execution authority.",
+    visibility: "public",
+    authority_class: "named_customer_owner_or_exact_trusted_operator",
+    effect_class: "immutable_human_coverage_review_approval",
+    idempotency: "required_command_id_and_canonical_request_digest",
+    transport: { method: "POST", path: "/kernel/v0/coverage-review-approvals" },
+    input_schema: {
+      type: "object", required: ["command_id", "operation_id", "input"], additionalProperties: false,
+      properties: {
+        command_id: { type: "string", minLength: 1, maxLength: 160 },
+        operation_id: { const: "kernel.coverage_review.approve" },
+        input: coverageReviewApproveInput
+      }
+    },
+    output_schema: {
+      type: "object", required: ["command_id", "request_digest", "accepted_at", "operation_id",
+        "coverage_review_approval", "created", "transition"], additionalProperties: false,
+      properties: {
+        command_id: { type: "string" }, request_digest: { type: "string" },
+        accepted_at: { type: "string", format: "date-time" },
+        operation_id: { const: "kernel.coverage_review.approve" },
+        coverage_review_approval: coverageReviewApprovalSchema,
+        created: { type: "boolean" }, transition: { type: "object" }
+      }
+    },
+    supported_modes: ["live"],
+    preconditions: ["exact_current_review_bundle", "exact_confirmed_work_intent",
+      "named_human_principal", "fixed_non_escalating_authority_boundary"],
+    outcomes: ["exact_review_approval_recorded", "compile_and_registration_request_eligibility_only",
+      "command_replayed"],
+    issues: ["COVERAGE_REVIEW_HUMAN_APPROVAL_REQUIRED", "COVERAGE_REVIEW_APPROVAL_STATE_CONFLICT",
+      "COVERAGE_REVIEW_AUTHORITY_INVALID", "IDEMPOTENCY_CONFLICT"],
+    emitted_events: ["kernel.coverage_review.approved"],
+    next_operations: ["kernel.coverage_review_approval.get"]
+  },
+  {
+    operation_id: "kernel.coverage_review_approval.get",
+    version: "0.1.0",
+    summary: "Derive current exact-bundle approval eligibility while preserving immutable approval history.",
+    visibility: "public",
+    authority_class: "authenticated_customer_owner",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/kernel/v0/coverage-review-approvals/{approval_id}" },
+    input_schema: { type: "object", required: ["approval_id"], additionalProperties: false,
+      properties: { approval_id: { type: "string", format: "uuid" } } },
+    output_schema: { type: "object", required: ["coverage_review_approval"], additionalProperties: false,
+      properties: { coverage_review_approval: coverageReviewApprovalSchema } },
+    supported_modes: ["live"],
+    preconditions: ["authenticated_customer_owner", "approval_exists"],
+    outcomes: ["eligible", "review_required", "expired"],
+    issues: ["COVERAGE_REVIEW_APPROVAL_NOT_FOUND", "COVERAGE_REVIEW_APPROVAL_INTEGRITY_VIOLATION"],
+    emitted_events: [],
+    next_operations: ["kernel.coverage_compilation.compile", "kernel.coverage_registration.request"]
   }
 );
 

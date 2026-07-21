@@ -173,8 +173,13 @@ export function createCoverageOnboardingService({ database, artifactStore, ident
        WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY assigned_at,assignment_id`,
       [installationId, onboardingId]
     )).rows;
+    const reviewBundles = (await client.query(
+      `SELECT * FROM diagnostic_coverage_review_bundles
+       WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY event_index`,
+      [installationId, onboardingId]
+    )).rows;
     return projectCoverageOnboarding(row, events, snapshots, interpretations, ambiguities,
-      resolutions, assignments);
+      resolutions, assignments, reviewBundles);
   }
 
   async function appendEvent(client, { onboardingId, eventIndex, eventType, priorEventDigest,
@@ -192,6 +197,30 @@ export function createCoverageOnboardingService({ database, artifactStore, ident
         built.event_digest, payload, actor.type, actor.id, occurredAt]
     );
     return built.event_digest;
+  }
+
+  async function appendReviewInvalidation(client, { current, eventIndex, priorEventDigest, trigger,
+    priorMaterialDigest, replacementMaterialDigest, actor, occurredAt }) {
+    if (!current.active_review_bundle_digest) return { appended: false, event_digest: priorEventDigest };
+    const payload = {
+      prior_review_bundle_digest: current.active_review_bundle_digest,
+      trigger,
+      prior_material_digest: priorMaterialDigest,
+      replacement_material_digest: replacementMaterialDigest,
+      reason: "Material changed after immutable review bundle assembly.",
+      eligibility_revoked: ["compile_exact_bundle", "request_exact_registration"],
+      authority: "none"
+    };
+    const eventDigest = await appendEvent(client, {
+      onboardingId: current.onboarding_id,
+      eventIndex,
+      eventType: "review_invalidated",
+      priorEventDigest,
+      payload,
+      actor,
+      occurredAt
+    });
+    return { appended: true, event_digest: eventDigest };
   }
 
   async function open(value, authenticatedPassport) {
@@ -366,6 +395,18 @@ export function createCoverageOnboardingService({ database, artifactStore, ident
           actor,
           occurredAt: acceptedAt
         });
+        if (eventType === "snapshot_replaced") {
+          await appendReviewInvalidation(client, {
+            current,
+            eventIndex: eventIndex + 1,
+            priorEventDigest: eventDigest,
+            trigger: "snapshot_replaced",
+            priorMaterialDigest: previousDigest,
+            replacementMaterialDigest: stored.artifact_digest,
+            actor,
+            occurredAt: acceptedAt
+          });
+        }
         const projection = await loadOnboarding(current.onboarding_id, client);
         return {
           aggregateType: "coverage_onboarding",
@@ -398,6 +439,6 @@ export function createCoverageOnboardingService({ database, artifactStore, ident
     open,
     captureEvidence,
     get: loadOnboarding,
-    internal: Object.freeze({ loadOnboarding, appendEvent })
+    internal: Object.freeze({ loadOnboarding, appendEvent, appendReviewInvalidation })
   };
 }

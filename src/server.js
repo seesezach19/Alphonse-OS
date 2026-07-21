@@ -8,6 +8,8 @@ import {
   createCoverageOnboardingService
 } from "./coverage-onboarding-service.js";
 import { createWorkflowInterpretationService } from "./workflow-interpretation-service.js";
+import { createCoverageReviewService } from "./coverage-review-service.js";
+import { createCoverageReviewApprovalService } from "./coverage-review-approval-service.js";
 import { createContextService } from "./context-service.js";
 import { createDatabase } from "./database.js";
 import { createDeploymentService } from "./deployment-service.js";
@@ -194,6 +196,8 @@ let diagnosticWorkerExecutionService = null;
 let diagnosticConsistencyService = null;
 let coverageOnboardingService = null;
 let workflowInterpretationService = null;
+let coverageReviewService = null;
+let coverageReviewApprovalService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -306,6 +310,20 @@ if (diagnosticDatabase) {
     artifactStore: diagnosticArtifactStore,
     identityIntent,
     coverageOnboardingService,
+    installationId,
+    environmentId
+  });
+  coverageReviewService = createCoverageReviewService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    coverageOnboardingService,
+    installationId,
+    environmentId
+  });
+  coverageReviewApprovalService = createCoverageReviewApprovalService({
+    database,
+    identityIntent,
+    coverageReviewService,
     installationId,
     environmentId
   });
@@ -585,7 +603,8 @@ const routeHelpers = createRouteHelpers({
   diagnosticIndependentVerificationService, diagnosticRepairWorkerService,
   diagnosticDiagnosisService, diagnosticRepairDeliveryService,
   diagnosticVerificationService, diagnosticPromotionService,
-  coverageOnboardingService, workflowInterpretationService
+  coverageOnboardingService, workflowInterpretationService, coverageReviewService,
+  coverageReviewApprovalService
 });
 
 const routeContext = createRouteContext({
@@ -601,7 +620,8 @@ const routeContext = createRouteContext({
   diagnosticMaterialAvailabilityService, diagnosticDispatchService,
   diagnosticDispatchAuthorizationService, diagnosticWorkerExecutionService,
   diagnosticConsistencyService,
-  coverageOnboardingService, workflowInterpretationService,
+  coverageOnboardingService, workflowInterpretationService, coverageReviewService,
+  coverageReviewApprovalService,
   installationId, environmentId, environmentName,
   grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
   dataPlaneReceiptSecret, dataPlaneId,
