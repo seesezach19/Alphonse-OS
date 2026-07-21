@@ -47,7 +47,8 @@ export function createDiagnosticRouter(ctx) {
     requireDiagnosticDispatchAuthority, requireIndependentDiagnosticVerification,
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
     requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding,
-    requireWorkflowInterpretation, requireCoverageReview, requireCoverageCompilation
+    requireWorkflowInterpretation, requireCoverageReview, requireCoverageCompilation,
+    requireCoverageCapability
   } = ctx;
 
   return async function diagnosticRouter(request, response, url) {
@@ -628,6 +629,14 @@ export function createDiagnosticRouter(ctx) {
     return sendJson(response, 200, { coverage_validation: await service.getValidation(
       pathId(url.pathname, "/diagnostic/v0/coverage-validations/")
     ) });
+  }
+
+  if (request.method === "GET"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/capabilities$/.test(url.pathname)) {
+    const service = requireCoverageCapability();
+    authenticateBootstrapOperator(request);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    return sendJson(response, 200, await service.get(onboardingId));
   }
 
   if (request.method === "GET"

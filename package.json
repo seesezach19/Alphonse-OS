@@ -87,6 +87,7 @@
     "test:workflow-interpretation": "node scripts/acceptance-workflow-interpretation.js",
     "test:coverage-review": "node scripts/acceptance-coverage-review.js",
     "test:coverage-compilation": "node scripts/acceptance-coverage-compilation.js",
+    "test:coverage-capability": "node scripts/acceptance-coverage-capability.js",
     "release:v0.2:build": "node scripts/build-release-v0.2.js",
     "release:v0.2:qualify": "node scripts/qualify-release-v0.2.js",
     "release:build": "node scripts/build-release-v0.1.js",

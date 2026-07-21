@@ -14,6 +14,10 @@ import {
   DIAGNOSTIC_ASSIGNMENT_EXPORT_KINDS,
   validateDiagnosticAssignmentExport
 } from "./diagnostic-assignment-contracts.js";
+import {
+  COVERAGE_PROFILE_EXPORT_KIND,
+  validateCoverageProfile
+} from "./coverage-profile-contracts.js";
 import { KernelError } from "./errors.js";
 
 const VALIDATOR_VERSION = "alphonse.package-validator.v0.1";
@@ -234,7 +238,8 @@ function validateCandidateShape(candidate, passport, session) {
       return;
     }
     rejectUnknownKeys(entry, ["kind", "export_id", "contract_version", "content"], path, issues);
-    if (![...REQUIRED_EXPORT_KINDS, "capability", ...DIAGNOSTIC_INTERPRETATION_EXPORT_KINDS,
+    if (![...REQUIRED_EXPORT_KINDS, "capability", COVERAGE_PROFILE_EXPORT_KIND,
+      ...DIAGNOSTIC_INTERPRETATION_EXPORT_KINDS,
       ...DIAGNOSTIC_EVIDENCE_EXPORT_KINDS, ...DIAGNOSTIC_ASSIGNMENT_EXPORT_KINDS]
       .includes(entry.kind)) {
       issues.push(issue("UNKNOWN_EXPORT_KIND", `${path}.kind`, "Export kind is unsupported."));
@@ -279,6 +284,14 @@ function validateCandidateShape(candidate, passport, session) {
       } catch (error) {
         issues.push(issue(error.code ?? "DIAGNOSTIC_ASSIGNMENT_POLICY_INVALID", path,
           error.message ?? "Diagnostic Assignment policy export is invalid."));
+      }
+    }
+    if (entry.kind === COVERAGE_PROFILE_EXPORT_KIND) {
+      try {
+        validateCoverageProfile(entry.content);
+      } catch (error) {
+        issues.push(issue(error.code ?? "COVERAGE_PROFILE_INVALID", path,
+          error.message ?? "Coverage Profile export is invalid."));
       }
     }
     if (entry.kind === "schema") validateJsonSchemaSubset(entry.content, path, issues);

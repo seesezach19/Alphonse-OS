@@ -12,6 +12,7 @@ import { createCoverageOnboardingService } from "../src/coverage-onboarding-serv
 import { createCoverageReviewService } from "../src/coverage-review-service.js";
 import { createCoverageReviewApprovalService } from "../src/coverage-review-approval-service.js";
 import { createCoverageCompilationService } from "../src/coverage-compilation-service.js";
+import { createCoverageCapabilityService } from "../src/coverage-capability-service.js";
 import {
   COVERAGE_REVIEW_AUTHORITY_DENIED,
   COVERAGE_REVIEW_AUTHORITY_GRANTED
@@ -234,20 +235,20 @@ function createServices(identityIntent, artifactStore, inventoryClient) {
     installationId,
     environmentId
   });
-  return { onboarding, interpretation, review, approval, compilation };
+  const capability = createCoverageCapabilityService({
+    database: diagnosticDatabase,
+    artifactStore,
+    coverageOnboardingService: onboarding,
+    coverageReviewService: review,
+    coverageCompilationService: compilation,
+    installationId,
+    environmentId
+  });
+  return { onboarding, interpretation, review, approval, compilation, capability };
 }
 
 async function seedReviewReferences(artifactStore) {
-  const definitions = [
-    ["integration_contract", "inventory-api-v1", { operation: "inventory.lookup", version: "1" }],
-    ["behavior_contract", "inventory-behavior-v1", { invariant: "failure_is_visible", version: "1" }],
-    ["fixture", "empty-inventory-v1", { fixture: "empty_inventory", expected: "no_items" }],
-    ["repair_binding", "inventory-repair-v1", { binding: "inventory-repair", version: "1" }],
-    ["verification_strategy", "inventory-verification-v1", { strategy: "deterministic_fixture", version: "1" }],
-    ["coverage_profile", "inventory-coverage-v1", { profile: "inventory-baseline", version: "1" }]
-  ];
-  const references = {};
-  for (const [referenceKind, referenceId, content] of definitions) {
+  async function admit(content) {
     const stored = await artifactStore.putJson(content);
     await diagnosticDatabase.pool.query(
       `INSERT INTO diagnostic_artifacts
@@ -255,9 +256,50 @@ async function seedReviewReferences(artifactStore) {
        VALUES ($1,$2,$3,$4,$5,now()) ON CONFLICT (installation_id,artifact_digest) DO NOTHING`,
       [installationId, stored.artifact_digest, stored.size_bytes, stored.media_type, stored.storage_key]
     );
+    return stored;
+  }
+  const fixture = await admit({ fixture: "empty_inventory", expected: "no_items" });
+  const deterministicStub = await admit({ stub: "inventory-api", behavior: "deterministic" });
+  const assertions = await admit({ assertions: ["no_external_effect", "expected_result_exact"] });
+  const verificationStrategy = {
+    schema_version: "alphonse.coverage-verification-strategy.v0.1",
+    strategy_id: "inventory-critical-path",
+    version: "1.0.0",
+    runner: { runner_id: "00000000-0000-4000-8000-000000000700", version: "0.2.0",
+      artifact_digest: `sha256:${"7".repeat(64)}` },
+    critical_path_fixture_digests: [fixture.artifact_digest],
+    deterministic_stub_digests: [deterministicStub.artifact_digest],
+    assertion_digests: [assertions.artifact_digest],
+    prohibited_effects: ["external_effect", "promotion", "provider_credential"],
+    authority: "none"
+  };
+  const coverageProfile = {
+    schema_version: "alphonse.coverage-profile.v0.1",
+    profile_id: "agency.inventory.critical",
+    version: "1.0.0",
+    consequence_class: "critical",
+    required_capabilities: ["discovered", "connected", "revision_bound", "execution_observed",
+      "diagnosable", "behavior_monitored", "repair_bound", "verification_ready", "promotion_ready"],
+    maximum_evidence_age_seconds: 86400,
+    assessment_policy: { all_required_established: "covered", partial: "partial",
+      indeterminate: "indeterminate", unavailable: "not_covered", not_established: "not_covered" },
+    authority: "none"
+  };
+  const definitions = [
+    ["integration_contract", "inventory-api-v1", { operation: "inventory.lookup", version: "1" }],
+    ["behavior_contract", "inventory-behavior-v1", { invariant: "failure_is_visible", version: "1" }],
+    ["repair_binding", "inventory-repair-v1", { binding: "inventory-repair", version: "1" }],
+    ["verification_strategy", "inventory-verification-v1", verificationStrategy],
+    ["coverage_profile", "inventory-coverage-v1", coverageProfile]
+  ];
+  const references = {};
+  for (const [referenceKind, referenceId, content] of definitions) {
+    const stored = await admit(content);
     references[referenceKind] = { reference_kind: referenceKind,
       reference_id: referenceId, artifact_digest: stored.artifact_digest };
   }
+  references.fixture = { reference_kind: "fixture", reference_id: "empty-inventory-v1",
+    artifact_digest: fixture.artifact_digest };
   return references;
 }
 
@@ -686,6 +728,23 @@ try {
     .validation_receipt_digest, validation.validation_receipt_digest);
   assert.equal((await services.approval.get(approvalId)).status, "eligible");
 
+  const coverage = await services.capability.get(onboardingId);
+  assert.equal(coverage.capability_vector.capabilities.discovered.state, "established");
+  assert.equal(coverage.capability_vector.capabilities.connected.state, "established");
+  assert.equal(coverage.capability_vector.capabilities.verification_ready.state, "established");
+  assert.equal(coverage.capability_vector.capabilities.revision_bound.state, "not_established");
+  assert.equal(coverage.capability_vector.capabilities.repair_bound.state, "not_established");
+  assert.equal(coverage.capability_vector.capabilities.promotion_ready.state, "not_established");
+  assert.equal(coverage.accountable_coverage.coverage_status, "partial");
+  assert.equal(coverage.accountable_coverage.meets_policy, false);
+  assert.equal(coverage.accountable_coverage.claims_destination_commitment, false);
+  assert.equal(coverage.accountable_coverage.authority, "none");
+  assert.equal(Object.hasOwn(coverage.accountable_coverage, "ready"), false);
+  assert.ok(coverage.capability_vector.gaps.length > 0);
+  assert.ok(coverage.capability_vector.limitations.length > 0);
+  assert.equal(coverage.capability_vector_digest, sha256Digest(coverage.capability_vector));
+  assert.equal(coverage.accountable_coverage_digest, sha256Digest(coverage.accountable_coverage));
+
   const secondAssignment = await services.interpretation.assign(command(
     "interpretation-assign-stale", "diagnostic.coverage_interpretation.assign", {
       ...assignCommand.input,
@@ -720,6 +779,10 @@ try {
   assert.deepEqual(invalidatedApproval.eligibility.authority_granted, []);
   assert.equal((await services.review.get(reviewBundle.review_bundle_digest)).review_bundle_digest,
     reviewBundle.review_bundle_digest);
+  const invalidatedCoverage = await services.capability.get(onboardingId);
+  assert.equal(invalidatedCoverage.accountable_coverage.policy, null);
+  assert.equal(invalidatedCoverage.accountable_coverage.coverage_status, "unavailable");
+  assert.equal(invalidatedCoverage.capability_vector.capabilities.discovered.state, "established");
 
   await assert.rejects(() => diagnosticDatabase.pool.query(
     `UPDATE diagnostic_coverage_ambiguities SET blocking=false
@@ -787,6 +850,11 @@ try {
     validation_status: "valid",
     source_control_proposal_eligible: true,
     validation_registration_request_eligible: false,
+    independent_capabilities: 9,
+    established_capabilities_at_validation: ["discovered", "connected", "verification_ready"],
+    accountable_coverage_status: "partial",
+    unavailable_after_material_invalidation: true,
+    runtime_success_claims_destination_commitment: false,
     exact_human_review_approval_bound: identity.humanPrincipalId,
     machine_approval_admitted: false,
     expanded_authority_admitted: false,

@@ -511,6 +511,119 @@ const coverageValidationSchema = {
   }
 };
 
+const coverageCapabilityNames = ["discovered", "connected", "revision_bound", "execution_observed",
+  "diagnosable", "behavior_monitored", "repair_bound", "verification_ready", "promotion_ready"];
+const coverageCapabilityStateSchema = {
+  enum: ["established", "not_established", "indeterminate", "unavailable"]
+};
+const coverageEvidenceCutoffSchema = {
+  type: "object", required: ["cutoff_type", "cutoff_id", "cutoff_digest", "occurred_at"],
+  additionalProperties: false,
+  properties: {
+    cutoff_type: { type: "string", minLength: 1, maxLength: 100 },
+    cutoff_id: { type: "string", minLength: 1, maxLength: 200 },
+    cutoff_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    occurred_at: { type: "string", format: "date-time" }
+  }
+};
+const coverageCapabilityEntrySchema = {
+  type: "object", required: ["state", "evidence_references", "gap_ids", "limitation_ids"],
+  additionalProperties: false,
+  properties: {
+    state: coverageCapabilityStateSchema,
+    evidence_references: { type: "array", uniqueItems: true, items: {
+      type: "object", required: ["evidence_type", "evidence_id", "evidence_digest", "observed_at"],
+      additionalProperties: false,
+      properties: {
+        evidence_type: { type: "string", minLength: 1, maxLength: 100 },
+        evidence_id: { type: "string", minLength: 1, maxLength: 200 },
+        evidence_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        observed_at: { type: "string", format: "date-time" }
+      }
+    } },
+    gap_ids: { type: "array", uniqueItems: true,
+      items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+    limitation_ids: { type: "array", uniqueItems: true,
+      items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } }
+  }
+};
+const coverageDisclosureSchema = (identityField, blocking) => ({
+  type: "object", required: [identityField, "code", "detail", "blocking"],
+  additionalProperties: false,
+  properties: {
+    [identityField]: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    code: { type: "string", minLength: 1, maxLength: 160 },
+    detail: { type: "string", minLength: 1, maxLength: 1000 },
+    blocking: blocking === null ? { type: "boolean" } : { const: blocking }
+  }
+});
+const coverageCapabilityProjectionSchema = {
+  type: "object",
+  required: ["schema_version", "onboarding_id", "workflow_reference", "evidence_cutoff",
+    "capabilities", "state_counts", "gaps", "limitations", "projector", "authority"],
+  additionalProperties: false,
+  properties: {
+    schema_version: { const: "alphonse.workflow-coverage-capability-vector.v0.1" },
+    onboarding_id: { type: "string", format: "uuid" },
+    workflow_reference: coverageWorkflowReference,
+    evidence_cutoff: coverageEvidenceCutoffSchema,
+    capabilities: { type: "object", required: coverageCapabilityNames,
+      additionalProperties: false, properties: Object.fromEntries(coverageCapabilityNames.map((name) =>
+        [name, coverageCapabilityEntrySchema])) },
+    state_counts: { type: "object", required: coverageCapabilityStateSchema.enum,
+      additionalProperties: false, properties: Object.fromEntries(coverageCapabilityStateSchema.enum.map((state) =>
+        [state, { type: "integer", minimum: 0, maximum: 9 }])) },
+    gaps: { type: "array", items: coverageDisclosureSchema("gap_id", null) },
+    limitations: { type: "array", items: coverageDisclosureSchema("limitation_id", false) },
+    projector: implementationIdentitySchema,
+    authority: { const: "none" }
+  }
+};
+
+const accountableCoverageSchema = {
+  type: "object",
+  required: ["schema_version", "onboarding_id", "workflow_reference", "capability_vector_digest",
+    "policy", "assessment_interval", "evidence_cutoff", "required_capability_states",
+    "coverage_status", "meets_policy", "gap_ids", "limitation_ids",
+    "claims_destination_commitment", "authority"],
+  additionalProperties: false,
+  properties: {
+    schema_version: { const: "alphonse.accountable-coverage-claim.v0.1" },
+    onboarding_id: { type: "string", format: "uuid" },
+    workflow_reference: coverageWorkflowReference,
+    capability_vector_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    policy: { anyOf: [{ type: "null" }, {
+      type: "object", required: ["profile_id", "version", "profile_digest", "consequence_class",
+        "required_capabilities", "maximum_evidence_age_seconds"], additionalProperties: false,
+      properties: {
+        profile_id: { type: "string", minLength: 3, maxLength: 160 },
+        version: { type: "string", pattern: "^\\d+\\.\\d+\\.\\d+$" },
+        profile_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        consequence_class: { enum: ["low", "moderate", "high", "critical"] },
+        required_capabilities: { type: "array", minItems: 1, uniqueItems: true,
+          items: { enum: coverageCapabilityNames } },
+        maximum_evidence_age_seconds: { type: "integer", minimum: 60, maximum: 31_536_000 }
+      }
+    }] },
+    assessment_interval: { type: "object", required: ["starts_at", "ends_at", "end_exclusive"],
+      additionalProperties: false, properties: {
+        starts_at: { type: "string", format: "date-time" },
+        ends_at: { type: "string", format: "date-time" },
+        end_exclusive: { const: false }
+      } },
+    evidence_cutoff: coverageEvidenceCutoffSchema,
+    required_capability_states: { type: "object", maxProperties: 9, additionalProperties: false,
+      properties: Object.fromEntries(coverageCapabilityNames.map((name) =>
+        [name, coverageCapabilityStateSchema])) },
+    coverage_status: { enum: ["covered", "partial", "indeterminate", "not_covered", "unavailable"] },
+    meets_policy: { type: ["boolean", "null"] },
+    gap_ids: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+    limitation_ids: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+    claims_destination_commitment: { const: false },
+    authority: { const: "none" }
+  }
+};
+
 const coverageProjectionSchema = {
   type: "object",
   required: [
@@ -1227,7 +1340,36 @@ const descriptors = [
     outcomes: ["verified_coverage_validation_returned"],
     issues: ["COVERAGE_VALIDATION_NOT_FOUND", "COVERAGE_VALIDATION_INTEGRITY_VIOLATION"],
     emitted_events: [],
-    next_operations: []
+    next_operations: ["diagnostic.workflow_coverage_capabilities.get"]
+  },
+  {
+    operation_id: "diagnostic.workflow_coverage_capabilities.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Derive nine independent workflow capabilities and one truthful Accountable Coverage claim from exact current evidence.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only_deterministic_projection",
+    idempotency: "current_onboarding_material_and_fixed_evidence_cutoff",
+    transport: { method: "GET", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/capabilities" },
+    input_schema: { type: "object", required: ["onboarding_id"], additionalProperties: false,
+      properties: { onboarding_id: { type: "string", format: "uuid" } } },
+    output_schema: { type: "object", required: ["capability_vector", "capability_vector_digest",
+      "accountable_coverage", "accountable_coverage_digest"], additionalProperties: false,
+      properties: {
+        capability_vector: coverageCapabilityProjectionSchema,
+        capability_vector_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        accountable_coverage: accountableCoverageSchema,
+        accountable_coverage_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+      } },
+    supported_modes: ["live"],
+    preconditions: ["authenticated_customer_reader", "coverage_onboarding_exists",
+      "exact_authoritative_sources_queried_at_or_before_cutoff"],
+    outcomes: ["independent_capability_vector_derived", "partial_and_unavailable_states_disclosed",
+      "accountable_coverage_policy_evaluated_without_authority"],
+    issues: ["COVERAGE_ONBOARDING_NOT_FOUND", "COVERAGE_CAPABILITY_INPUT_INVALID",
+      "COVERAGE_PROFILE_INVALID", "ARTIFACT_NOT_FOUND"],
+    emitted_events: [],
+    next_operations: ["diagnostic.coverage_onboarding.get"]
   },
   commandDescriptor({
     operationId: "diagnostic.agent_workflow.register",
