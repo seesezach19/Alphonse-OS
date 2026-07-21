@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.alphonse.local/coverage/workflow-coverage-capability-vector.v0.1.json",
+  "title": "Workflow Coverage Capability Vector v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "onboarding_id", "workflow_reference", "evidence_cutoff", "capabilities", "state_counts", "gaps", "limitations", "projector", "authority"],
+  "properties": {
+    "schema_version": { "const": "alphonse.workflow-coverage-capability-vector.v0.1" },
+    "onboarding_id": { "type": "string", "format": "uuid" },
+    "workflow_reference": { "$ref": "#/$defs/workflow_reference" },
+    "evidence_cutoff": { "$ref": "#/$defs/evidence_cutoff" },
+    "capabilities": {
+      "type": "object", "additionalProperties": false,
+      "required": ["discovered", "connected", "revision_bound", "execution_observed", "diagnosable", "behavior_monitored", "repair_bound", "verification_ready", "promotion_ready"],
+      "properties": {
+        "discovered": { "$ref": "#/$defs/capability" },
+        "connected": { "$ref": "#/$defs/capability" },
+        "revision_bound": { "$ref": "#/$defs/capability" },
+        "execution_observed": { "$ref": "#/$defs/capability" },
+        "diagnosable": { "$ref": "#/$defs/capability" },
+        "behavior_monitored": { "$ref": "#/$defs/capability" },
+        "repair_bound": { "$ref": "#/$defs/capability" },
+        "verification_ready": { "$ref": "#/$defs/capability" },
+        "promotion_ready": { "$ref": "#/$defs/capability" }
+      }
+    },
+    "state_counts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["established", "not_established", "indeterminate", "unavailable"],
+      "properties": {
+        "established": { "type": "integer", "minimum": 0, "maximum": 9 },
+        "not_established": { "type": "integer", "minimum": 0, "maximum": 9 },
+        "indeterminate": { "type": "integer", "minimum": 0, "maximum": 9 },
+        "unavailable": { "type": "integer", "minimum": 0, "maximum": 9 }
+      }
+    },
+    "gaps": { "type": "array", "items": { "$ref": "#/$defs/gap" } },
+    "limitations": { "type": "array", "items": { "$ref": "#/$defs/limitation" } },
+    "projector": { "$ref": "#/$defs/implementation_identity" },
+    "authority": { "const": "none" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "workflow_reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["system", "environment", "provider_workflow_id"],
+      "properties": {
+        "system": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "environment": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "provider_workflow_id": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "evidence_cutoff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cutoff_type", "cutoff_id", "cutoff_digest", "occurred_at"],
+      "properties": {
+        "cutoff_type": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "cutoff_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "cutoff_digest": { "$ref": "#/$defs/digest" },
+        "occurred_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "evidence_reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_type", "evidence_id", "evidence_digest", "observed_at"],
+      "properties": {
+        "evidence_type": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "evidence_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "evidence_digest": { "$ref": "#/$defs/digest" },
+        "observed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "gap": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gap_id", "code", "detail", "blocking"],
+      "properties": {
+        "gap_id": { "$ref": "#/$defs/digest" },
+        "code": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "detail": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "blocking": { "type": "boolean" }
+      }
+    },
+    "limitation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["limitation_id", "code", "detail", "blocking"],
+      "properties": {
+        "limitation_id": { "$ref": "#/$defs/digest" },
+        "code": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "detail": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "blocking": { "const": false }
+      }
+    },
+    "implementation_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "version", "artifact_digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "artifact_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "capability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "evidence_references", "gap_ids", "limitation_ids"],
+      "properties": {
+        "state": { "enum": ["established", "not_established", "indeterminate", "unavailable"] },
+        "evidence_references": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/evidence_reference" } },
+        "gap_ids": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/digest" } },
+        "limitation_ids": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/digest" } }
+      }
+    }
+  }
+}

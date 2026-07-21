@@ -168,7 +168,7 @@ export function createRouteHelpers(deps) {
     diagnosticDiagnosisService, diagnosticRepairDeliveryService,
     diagnosticVerificationService, diagnosticPromotionService,
     coverageOnboardingService, workflowInterpretationService, coverageReviewService,
-    coverageReviewApprovalService, coverageCompilationService
+    coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService
   } = deps;
 
   /**
@@ -348,6 +348,8 @@ export function createRouteHelpers(deps) {
     requireCoverageReviewApproval: () => requireOr(coverageReviewApprovalService, 503,
       "COVERAGE_REVIEW_APPROVAL_UNAVAILABLE", "Coverage Review Approval is not configured."),
     requireCoverageCompilation: () => requireOr(coverageCompilationService, 503,
-      "COVERAGE_COMPILATION_UNAVAILABLE", "Coverage compilation and validation are not configured.")
+      "COVERAGE_COMPILATION_UNAVAILABLE", "Coverage compilation and validation are not configured."),
+    requireCoverageCapability: () => requireOr(coverageCapabilityService, 503,
+      "COVERAGE_CAPABILITY_UNAVAILABLE", "Coverage capability projection is not configured.")
   };
 }

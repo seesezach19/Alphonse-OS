@@ -27,6 +27,7 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.coverage_specification.get",
     "diagnostic.coverage_specification.validate",
     "diagnostic.coverage_validation.get",
+    "diagnostic.workflow_coverage_capabilities.get",
     "diagnostic.agent_workflow.register",
     "diagnostic.agent_workflow.get",
     "diagnostic.agent_revision.register",
@@ -193,6 +194,18 @@ test("coverage compilation is implementation-bound, fail-closed, and never grant
   assert.equal(receipt.effect_class, "read_only");
   assert.doesNotMatch(JSON.stringify([compile, validate, receipt]),
     /workflow_execution_authority|registration_authority|repair_authority|promotion_authority/);
+});
+
+test("Accountable Coverage is read-only, non-binary, and cannot grant readiness or authority", () => {
+  const coverage = getDiagnosticOperationDescriptor("diagnostic.workflow_coverage_capabilities.get");
+  assert.equal(coverage.effect_class, "read_only_deterministic_projection");
+  assert.equal(coverage.authority_class, "authenticated_customer_reader");
+  assert.ok(coverage.outcomes.includes("partial_and_unavailable_states_disclosed"));
+  assert.deepEqual(coverage.output_schema.properties.accountable_coverage.properties.coverage_status.enum,
+    ["covered", "partial", "indeterminate", "not_covered", "unavailable"]);
+  assert.equal(coverage.output_schema.properties.accountable_coverage.properties
+    .claims_destination_commitment.const, false);
+  assert.doesNotMatch(JSON.stringify(coverage), /force_ready|execution_authority|promotion_authority/);
 });
 
 test("Diagnostic execution separates launch, running proof, and diagnosis ingestion", () => {

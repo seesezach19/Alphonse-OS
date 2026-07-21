@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.alphonse.local/coverage/coverage-verification-strategy.v0.1.json",
+  "title": "Coverage Verification Strategy v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "strategy_id", "version", "runner", "critical_path_fixture_digests", "deterministic_stub_digests", "assertion_digests", "prohibited_effects", "authority"],
+  "properties": {
+    "schema_version": { "const": "alphonse.coverage-verification-strategy.v0.1" },
+    "strategy_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "runner": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runner_id", "version", "artifact_digest"],
+      "properties": {
+        "runner_id": { "type": "string", "format": "uuid" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "artifact_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "critical_path_fixture_digests": { "$ref": "#/$defs/digests" },
+    "deterministic_stub_digests": { "$ref": "#/$defs/digests" },
+    "assertion_digests": { "$ref": "#/$defs/digests" },
+    "prohibited_effects": {
+      "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true,
+      "items": { "enum": ["external_effect", "provider_credential", "promotion"] }
+    },
+    "authority": { "const": "none" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "digests": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/digest" } }
+  }
+}

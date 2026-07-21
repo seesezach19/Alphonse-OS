@@ -751,6 +751,7 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
   }
   if (activeCompilation) legalNextOperations.push("diagnostic.coverage_specification.get");
   if (activeValidation) legalNextOperations.push("diagnostic.coverage_validation.get");
+  legalNextOperations.push("diagnostic.workflow_coverage_capabilities.get");
   return {
     schema_version: COVERAGE_ONBOARDING_SCHEMA_VERSION,
     onboarding_id: row.onboarding_id,

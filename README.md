@@ -123,7 +123,8 @@ tradeoffs.
 - pre-execution n8n revision binding;
 - deterministic cross-stream correlation projection;
 - durable workflow coverage discovery, evidence-linked interpretation, exact human review approval,
-  and deterministic authority-free Coverage Specification compilation and validation;
+  deterministic authority-free Coverage Specification compilation and validation, and independently evidenced
+  Accountable Coverage capability projection;
 - integration and behavior contracts, committed-effect interpretation, invariant evaluation,
   and automatic Diagnostic Case creation;
 - read-only Butler and a fixture-backed Operations Console;
