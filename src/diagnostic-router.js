@@ -24,7 +24,7 @@ export function createDiagnosticRouter(ctx) {
     diagnosticIndependentVerificationService, diagnosticAssignmentService,
     diagnosticMaterialAvailabilityService, diagnosticDispatchService,
     diagnosticDispatchAuthorizationService, diagnosticWorkerExecutionService,
-    diagnosticConsistencyService,
+    diagnosticConsistencyService, maintenanceAssuranceService,
     installationId, environmentId, environmentName,
     grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
     dataPlaneReceiptSecret, dataPlaneId,
@@ -48,10 +48,39 @@ export function createDiagnosticRouter(ctx) {
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
     requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding,
     requireWorkflowInterpretation, requireCoverageReview, requireCoverageCompilation,
-    requireCoverageCapability, requireCoverageReconciliation
+    requireCoverageCapability, requireCoverageReconciliation, requireMaintenanceAssurance
   } = ctx;
 
   return async function diagnosticRouter(request, response, url) {
+  if (request.method === "GET" && url.pathname === "/diagnostic/v0/maintenance-agent-profile") {
+    const service = requireMaintenanceAssurance();
+    authenticateBootstrapOperator(request);
+    sendJson(response, 200, { maintenance_agent_profile: service.getProfile() });
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/diagnostic/v0/maintenance-work-queue") {
+    const service = requireMaintenanceAssurance();
+    authenticateBootstrapOperator(request);
+    sendJson(response, 200, { maintenance_work_queue: await service.getQueue() });
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/maintenance-assurances") {
+    const service = requireMaintenanceAssurance();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.maintenance_assurance.export");
+    return sendCommandResult(response,
+      await service.createExport(await readJson(request, 64 * 1024), actor));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/maintenance-assurances/")) {
+    const service = requireMaintenanceAssurance();
+    authenticateBootstrapOperator(request);
+    sendJson(response, 200, { maintenance_assurance: await service.getExport(
+      pathId(url.pathname, "/diagnostic/v0/maintenance-assurances/")) });
+    return true;
+  }
+
   if (request.method === "GET" && /^\/diagnostic\/v0\/grant-projections\/[^/]+$/.test(url.pathname)) {
     const service = requireDiagnosticGrantApplication();
     authenticateBootstrapOperator(request);

@@ -310,7 +310,7 @@ export function createDiagnosticPromotionService({
             adapter: binding.adapter,
             target: binding.target
           },
-          owner: actor,
+          owner: { type: actor.type, id: actor.id },
           expectedTargetRevisionDigest: input.expected_target_revision_digest,
           candidateTargetRevisionDigest: source.target_candidate_revision_digest,
           verificationReceiptDigest: source.verification_receipt_digest,

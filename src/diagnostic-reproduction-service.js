@@ -107,6 +107,40 @@ function bundleView(row) {
   };
 }
 
+function deterministicEvidenceDetail(semanticPackage) {
+  const observations = semanticPackage?.manifest?.authenticated_observations?.observations ?? [];
+  const runtimes = observations.filter((entry) => entry.observation_type === "runtime.execution"
+    && entry.envelope?.claims?.lifecycle === "succeeded");
+  const effectDeliveries = new Set(observations.filter((entry) =>
+    entry.observation_type === "destination.effect")
+    .map((entry) => entry.envelope?.claims?.delivery_id).filter(Boolean));
+  const logicalOperations = [...new Set(runtimes.map((entry) =>
+    entry.envelope?.claims?.logical_operation_id).filter(Boolean))].sort();
+  const deliveries = runtimes.map((entry) => ({
+    provider_execution_id: String(entry.envelope.claims.execution_id).replace(/^n8n-/, ""),
+    delivery_id: entry.envelope.claims.delivery_id,
+    logical_operation_id: entry.envelope.claims.logical_operation_id,
+    destination_effect_node_succeeded: effectDeliveries.has(entry.envelope.claims.delivery_id)
+  })).sort((left, right) => left.delivery_id.localeCompare(right.delivery_id));
+  if (logicalOperations.length !== 1 || deliveries.length !== 2
+      || deliveries.some((entry) => !entry.delivery_id
+        || entry.logical_operation_id !== logicalOperations[0]
+        || entry.destination_effect_node_succeeded !== true)) {
+    throw new KernelError(409, "REPRODUCTION_EVIDENCE_SHAPE_UNSUPPORTED",
+      "Frozen evidence does not contain exactly two successful deliveries and effects for one logical operation.");
+  }
+  return {
+    external_execution_id: `n8n-${deliveries[0].provider_execution_id}`,
+    content: {
+      input: {},
+      fixtures: { deliveries, logical_operations: logicalOperations },
+      output: { actual_behavior: "two_deliveries -> two_committed_effects",
+        committed_effect_count: 2, duplicate_committed_effect: true }
+    },
+    source_detail_digest: sha256Digest(semanticPackage)
+  };
+}
+
 export function createDiagnosticReproductionService(
   database, artifactStore, installationId, runtimeDetailClient, detailPolicy, materialAuthority
 ) {
@@ -465,20 +499,52 @@ export function createDiagnosticReproductionService(
         let outcome = "incomplete";
         let reasonCode = "RUNTIME_DETAIL_INCOMPLETE";
         try {
-          const traceResult = await client.query(
-            `SELECT external_execution_id FROM diagnostic_external_activity_traces
-             WHERE installation_id=$1 AND trace_id=$2`, [installationId, caseView.trace_id]
-          );
-          const externalExecutionId = traceResult.rows[0].external_execution_id;
-          const detailResponse = await runtimeDetailClient.retrieveExecutionDetail({
-            external_execution_id: externalExecutionId,
-            payload_reference: null,
-            requested_fields: policy.extract_paths
-          });
-          if (detailResponse.external_execution_id !== externalExecutionId) {
-            throw new KernelError(409, "RUNTIME_DETAIL_IDENTITY_MISMATCH", "Runtime detail identity does not match the case trace.");
+          let externalExecutionId;
+          let frozenEvidenceDetail = null;
+          if (caseView.trace_id) {
+            const traceResult = await client.query(
+              `SELECT external_execution_id FROM diagnostic_external_activity_traces
+               WHERE installation_id=$1 AND trace_id=$2`, [installationId, caseView.trace_id]
+            );
+            externalExecutionId = traceResult.rows[0]?.external_execution_id;
+          } else {
+            const packageResult = await client.query(
+              `SELECT ep.semantic_package FROM diagnostic_assignments a
+               JOIN diagnostic_evidence_packages ep
+                 ON ep.installation_id=a.installation_id
+                AND ep.evidence_package_id=a.evidence_package_id
+               WHERE a.installation_id=$1 AND a.case_id=$2
+               ORDER BY a.ordinal,a.created_at,a.assignment_id LIMIT 1`,
+              [installationId, normalized.case_id]
+            );
+            frozenEvidenceDetail = deterministicEvidenceDetail(
+              packageResult.rows[0]?.semantic_package
+            );
+            externalExecutionId = frozenEvidenceDetail.external_execution_id;
           }
-          redacted = applyExtractionAndRedaction(detailResponse.detail, policy);
+          if (!externalExecutionId) {
+            throw new KernelError(409, "REPRODUCTION_EXECUTION_EVIDENCE_UNAVAILABLE",
+              "Case does not bind one retained successful runtime execution for reproduction.");
+          }
+          if (frozenEvidenceDetail) {
+            redacted = {
+              content: frozenEvidenceDetail.content,
+              redacted_paths: [],
+              omitted_paths: ["credentials", "runtime.logs", "raw_provider_execution_data"],
+              source_detail_digest: frozenEvidenceDetail.source_detail_digest,
+              policy_digest: policyDigest
+            };
+          } else {
+            const detailResponse = await runtimeDetailClient.retrieveExecutionDetail({
+              external_execution_id: externalExecutionId,
+              payload_reference: null,
+              requested_fields: policy.extract_paths
+            });
+            if (detailResponse.external_execution_id !== externalExecutionId) {
+              throw new KernelError(409, "RUNTIME_DETAIL_IDENTITY_MISMATCH", "Runtime detail identity does not match the case trace.");
+            }
+            redacted = applyExtractionAndRedaction(detailResponse.detail, policy);
+          }
           if (!redacted.content.input || !redacted.content.fixtures || !redacted.content.output) {
             throw new KernelError(422, "RUNTIME_DETAIL_INCOMPLETE", "Required reproduction detail is incomplete.");
           }

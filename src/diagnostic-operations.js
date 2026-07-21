@@ -1061,6 +1061,16 @@ function readDescriptor({ operationId, summary, path, idName, resultKey, issues,
   };
 }
 
+const maintenanceAssuranceInput = {
+  type: "object",
+  required: ["assignment_id", "worker_run_id", "diagnosis_id", "repair_candidate_id",
+    "repair_delivery_id", "verification_id", "promotion_id"],
+  additionalProperties: false,
+  properties: Object.fromEntries(["assignment_id", "worker_run_id", "diagnosis_id",
+    "repair_candidate_id", "repair_delivery_id", "verification_id", "promotion_id"]
+    .map((field) => [field, { type: "string", format: "uuid" }]))
+};
+
 const descriptors = [
   {
     operation_id: "diagnostic.workflow_runtime_adapter.contract.get",
@@ -1115,6 +1125,81 @@ const descriptors = [
     issues: ["DIAGNOSTIC_PLANE_UNAVAILABLE"],
     emitted_events: [],
     next_operations: ["diagnostic.repair_verification.create"]
+  },
+  {
+    operation_id: "diagnostic.maintenance_agent_profile.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read the certified bounded Maintenance Agent runtime and authority profile.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/maintenance-agent-profile" },
+    input_schema: { type: "object", additionalProperties: false },
+    output_schema: { type: "object", required: ["maintenance_agent_profile"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_customer_reader"],
+    outcomes: ["maintenance_agent_profile_returned"],
+    issues: ["MAINTENANCE_ASSURANCE_UNAVAILABLE"],
+    emitted_events: [],
+    next_operations: ["diagnostic.maintenance_work_queue.get"]
+  },
+  {
+    operation_id: "diagnostic.maintenance_work_queue.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read bounded diagnostic assignments and repair leases without creating authority.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/maintenance-work-queue" },
+    input_schema: { type: "object", additionalProperties: false },
+    output_schema: { type: "object", required: ["maintenance_work_queue"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_customer_reader"],
+    outcomes: ["maintenance_work_queue_returned"],
+    issues: ["MAINTENANCE_ASSURANCE_UNAVAILABLE"],
+    emitted_events: [],
+    next_operations: ["diagnostic.maintenance_assurance.export"]
+  },
+  {
+    operation_id: "diagnostic.maintenance_assurance.export",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Export one human-readable assurance document over an exact admitted maintenance journey.",
+    visibility: "public",
+    authority_class: "named_customer_owner",
+    effect_class: "append_only_assurance_record",
+    idempotency: "required_command_id_and_canonical_request_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/maintenance-assurances" },
+    input_schema: commandEnvelope("diagnostic.maintenance_assurance.export", maintenanceAssuranceInput),
+    output_schema: { type: "object", required: ["maintenance_assurance", "created"] },
+    supported_modes: ["live"],
+    preconditions: ["exact_single_case_journey", "inactive_candidate", "passing_verification",
+      "named_human_promotion", "target_confirmation"],
+    outcomes: ["maintenance_assurance_exported", "command_replayed"],
+    issues: ["MAINTENANCE_ASSURANCE_SOURCE_MISMATCH", "MAINTENANCE_ASSURANCE_NOT_ELIGIBLE",
+      "MAINTENANCE_ASSURANCE_IDENTITY_COLLISION"],
+    emitted_events: ["diagnostic.maintenance_assurance.exported"],
+    next_operations: ["diagnostic.maintenance_assurance.get"]
+  },
+  {
+    operation_id: "diagnostic.maintenance_assurance.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read and re-verify one immutable Maintenance Assurance export.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/maintenance-assurances/{export_id}" },
+    input_schema: { type: "object", required: ["export_id"], additionalProperties: false,
+      properties: { export_id: { type: "string", format: "uuid" } } },
+    output_schema: { type: "object", required: ["maintenance_assurance"] },
+    supported_modes: ["live"],
+    preconditions: ["maintenance_assurance_exists", "authenticated_customer_reader"],
+    outcomes: ["maintenance_assurance_returned"],
+    issues: ["MAINTENANCE_ASSURANCE_NOT_FOUND", "MAINTENANCE_ASSURANCE_INTEGRITY_VIOLATION"],
+    emitted_events: [],
+    next_operations: []
   },
   {
     operation_id: "diagnostic.coverage_onboarding.open",

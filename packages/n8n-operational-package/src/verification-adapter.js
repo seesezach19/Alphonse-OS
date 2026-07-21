@@ -11,7 +11,11 @@ import {
   evaluateDefectiveInventoryFixture,
   evaluateRepairedInventoryFixture
 } from "./index.js";
-import { materializeInventoryRepair } from "./repair-delivery-adapter.js";
+import {
+  LOGICAL_OPERATION_DEDUPLICATION_PATCH,
+  materializeInventoryRepair,
+  materializeLogicalOperationRepair
+} from "./repair-delivery-adapter.js";
 
 const SUPPORTED_REGRESSION = Object.freeze({
   fixture: "erp:missing-sku-v1",
@@ -28,6 +32,14 @@ const REPAIR_PATCH = Object.freeze({
 const REFERENCE_WORKFLOW = JSON.parse(readFileSync(
   new URL("../workflows/inventory-follow-up-defective.json", import.meta.url), "utf8"
 ));
+const CANONICAL_LEAD_WORKFLOW = JSON.parse(readFileSync(
+  new URL("../workflows/canonical-lead-ingress.json", import.meta.url), "utf8"
+));
+const LEAD_REGRESSION = Object.freeze({
+  fixture: "canonical:duplicate-logical-operation-v1",
+  expected_behavior: "one_effect_per_logical_operation",
+  prohibited_behavior: "duplicate_committed_effect"
+});
 
 function fail(status, code, message, details = {}) {
   throw new KernelError(status, code, message, details);
@@ -114,6 +126,50 @@ function executeInventoryWorkflow(workflow, fixture) {
   };
 }
 
+function executeLeadWorkflow(workflow, fixture) {
+  const originalDigest = sha256Digest(executableMaterial(CANONICAL_LEAD_WORKFLOW));
+  const repairedReference = materializeLogicalOperationRepair(
+    CANONICAL_LEAD_WORKFLOW,
+    LOGICAL_OPERATION_DEDUPLICATION_PATCH,
+    "00000000-0000-4000-8000-000000000701"
+  );
+  const repairedDigest = sha256Digest(executableMaterial(repairedReference));
+  const suppliedDigest = sha256Digest(executableMaterial(workflow));
+  const mode = suppliedDigest === originalDigest ? "defective"
+    : suppliedDigest === repairedDigest ? "repaired" : null;
+  if (!mode) {
+    fail(409, "VERIFICATION_WORKFLOW_UNSUPPORTED",
+      "n8n executable material does not match the allowlisted lead-ingress verifier fingerprint.");
+  }
+  const deliveries = fixture?.fixtures?.deliveries;
+  const logicalOperations = fixture?.fixtures?.logical_operations;
+  if (!Array.isArray(deliveries) || deliveries.length !== 2
+      || !Array.isArray(logicalOperations) || logicalOperations.length !== 1
+      || deliveries.some((entry) => entry.logical_operation_id !== logicalOperations[0])) {
+    fail(409, "VERIFICATION_FIXTURE_UNSUPPORTED",
+      "Lead verification requires two observed deliveries for one exact logical operation.");
+  }
+  const effectCount = mode === "defective" ? deliveries.length : logicalOperations.length;
+  const output = {
+    logical_operation_id: logicalOperations[0],
+    observed_delivery_count: deliveries.length,
+    committed_effect_count: effectCount,
+    duplicate_committed_effect: effectCount > logicalOperations.length,
+    external_effect_simulation: true
+  };
+  return {
+    output,
+    output_digest: sha256Digest(output),
+    executable_material_digest: suppliedDigest,
+    evaluator: `alphonse.n8n.logical-operation-deduplication.${mode}.v1`,
+    executed_nodes: mode === "defective"
+      ? ["Receive Lead Delivery", "Create CRM Lead"]
+      : ["Receive Lead Delivery", "Deduplicate Logical Operation", "Create CRM Lead"],
+    external_effects: [],
+    deterministic: true
+  };
+}
+
 function regressionDefinition(entry) {
   const definition = entry.content?.kind === "targeted_regression" ? entry.content.content : null;
   return definition && typeof definition === "object" && !Array.isArray(definition) ? definition : null;
@@ -134,6 +190,50 @@ export function runN8nDeterministicVerification(job) {
   const exactJob = validateVerificationJob(job);
   const bundle = exactJob.artifacts.bundle.content;
   const fixture = exactJob.artifacts.fixture.content.content;
+  if (bundle.failure_specification.targeted_verification.expected_behavior
+      === LEAD_REGRESSION.expected_behavior) {
+    const originalRun = executeLeadWorkflow(workflowFromOriginal(exactJob.artifacts.original.content), fixture);
+    const candidateRun = executeLeadWorkflow(workflowFromCandidate(exactJob.artifacts.candidate.content), fixture);
+    const targeted = bundle.failure_specification.targeted_verification;
+    const originalPassed = originalRun.output.committed_effect_count === 2
+      && originalRun.output.duplicate_committed_effect === true;
+    const candidatePassed = targeted.prohibited_behavior === LEAD_REGRESSION.prohibited_behavior
+      && candidateRun.output.committed_effect_count === 1
+      && candidateRun.output.duplicate_committed_effect === false;
+    const regressionOutcomes = exactJob.artifacts.regressions.map((entry) => {
+      const definition = regressionDefinition(entry);
+      const compatible = definition
+        && definition.fixture === LEAD_REGRESSION.fixture
+        && definition.expected_behavior === LEAD_REGRESSION.expected_behavior
+        && definition.prohibited_behavior === LEAD_REGRESSION.prohibited_behavior;
+      return {
+        role: entry.role,
+        artifact_digest: entry.artifact_digest,
+        status: compatible && candidatePassed ? "passed" : compatible ? "failed" : "incompatible",
+        executed: Boolean(compatible),
+        reason_code: compatible
+          ? candidatePassed ? null : "REGRESSION_EXPECTATION_FAILED"
+          : "REGRESSION_FIXTURE_OR_EXPECTATION_INCOMPATIBLE",
+        ...(compatible ? { output_digest: candidateRun.output_digest } : {})
+      };
+    });
+    return createVerificationResult(exactJob, {
+      outcomes: {
+        original_demonstrates_failure: {
+          status: originalPassed ? "passed" : "failed",
+          output_digest: originalRun.output_digest,
+          reason_code: originalPassed ? null : "ORIGINAL_FAILURE_NOT_DEMONSTRATED"
+        },
+        candidate_satisfies_target: {
+          status: candidatePassed ? "passed" : "failed",
+          output_digest: candidateRun.output_digest,
+          reason_code: candidatePassed ? null : "CANDIDATE_TARGET_BEHAVIOR_NOT_DEMONSTRATED"
+        },
+        regressions: regressionOutcomes
+      },
+      logs: { original: originalRun, candidate: candidateRun }
+    });
+  }
   const originalRun = executeInventoryWorkflow(workflowFromOriginal(exactJob.artifacts.original.content), fixture);
   const candidateRun = executeInventoryWorkflow(workflowFromCandidate(exactJob.artifacts.candidate.content), fixture);
   const targeted = bundle.failure_specification.targeted_verification;

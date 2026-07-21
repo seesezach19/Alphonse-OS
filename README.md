@@ -217,6 +217,7 @@ Useful checkpoints:
 npm test                                  # dependency-free unit suite
 npm run test:blackbox                     # clean bootstrap, replay, persistence
 npm run test:canonical-proof:ticket-09    # canonical observation-to-case proof
+npm run proof:maintenance                 # live bounded n8n diagnosis-to-assurance proof
 npm run rehearse:v0.2                     # repeatable diagnosis/repair/recovery loop
 npm run release:v0.2:qualify              # headless release qualification
 ```
@@ -259,6 +260,7 @@ remove only their own resources when complete.
 - [Independent verification](docs/independent-verification.md)
 - [Dispatch authority](docs/diagnostic-dispatch-authority.md)
 - [Worker execution boundary](docs/diagnostic-worker-execution.md)
+- [Bounded Maintenance Agent](docs/maintenance-agent.md)
 - [Restore and recovery](docs/environment-restore.md)
 
 ## Public Protocol Boundary

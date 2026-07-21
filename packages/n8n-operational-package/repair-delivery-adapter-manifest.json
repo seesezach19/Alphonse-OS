@@ -1,6 +1,6 @@
 {
   "adapter_id": "alphonse.n8n.repair-delivery",
-  "adapter_version": "0.2.0",
+  "adapter_version": "0.3.0",
   "target_system": "n8n",
   "operations": {
     "inspect": { "supported": true, "effect": "read_only" },

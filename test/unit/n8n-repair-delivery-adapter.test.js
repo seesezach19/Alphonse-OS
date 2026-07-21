@@ -4,8 +4,10 @@ import test from "node:test";
 import { sha256Digest } from "../../src/canonical-json.js";
 import {
   createN8nRepairDeliveryAdapter,
+  LOGICAL_OPERATION_DEDUPLICATION_PATCH,
   materializeInventoryCandidate,
   materializeInventoryRepair,
+  materializeLogicalOperationRepair,
   n8nTargetRevisionMaterial
 } from "../../packages/n8n-operational-package/src/repair-delivery-adapter.js";
 
@@ -33,6 +35,20 @@ const patch = {
     { operation: "replace", path: "missing_sku", value: "inventory_unknown" },
     { operation: "replace", path: "inventory_unknown.next", value: "human_review" }
   ]
+};
+
+const leadWorkflow = {
+  id: "CanonicalLeadIngress01", name: "Canonical Proof - Lead Ingress", active: true,
+  settings: { executionOrder: "v1" },
+  nodes: [
+    { id: "in", name: "Receive Lead Delivery", type: "n8n-nodes-base.webhook",
+      typeVersion: 2, position: [0, 0], parameters: {} },
+    { id: "out", name: "Create CRM Lead", type: "n8n-nodes-base.httpRequest",
+      typeVersion: 4.2, position: [280, 0], parameters: {} }
+  ],
+  connections: { "Receive Lead Delivery": { main: [[{
+    node: "Create CRM Lead", type: "main", index: 0
+  }]] } }
 };
 
 function jsonResponse(value, status = 200) {
@@ -87,6 +103,25 @@ test("n8n adapter may materialize an exact ineffective candidate for independent
   assert.equal(candidate.active, false);
   assert.match(JSON.stringify(candidate), /customer_delay_follow_up/);
   assert.doesNotMatch(JSON.stringify(candidate), /inventory_unknown/);
+});
+
+test("n8n adapter materializes only the exact logical-operation repair as an inactive candidate", () => {
+  const candidate = materializeLogicalOperationRepair(
+    leadWorkflow, LOGICAL_OPERATION_DEDUPLICATION_PATCH, "candidate-lead-1"
+  );
+  assert.equal(candidate.active, false);
+  assert.equal(candidate.nodes.some((node) => node.name === "Deduplicate Logical Operation"), true);
+  assert.deepEqual(candidate.connections["Receive Lead Delivery"].main[0], [{
+    node: "Deduplicate Logical Operation", type: "main", index: 0
+  }]);
+  assert.deepEqual(candidate.connections["Deduplicate Logical Operation"].main[0], [{
+    node: "Create CRM Lead", type: "main", index: 0
+  }]);
+  assert.equal(leadWorkflow.nodes.length, 2);
+  assert.throws(() => materializeLogicalOperationRepair(leadWorkflow, {
+    ...LOGICAL_OPERATION_DEDUPLICATION_PATCH,
+    changes: [{ operation: "insert", path: "before.destination_effect", value: "arbitrary" }]
+  }, "candidate-lead-2"), (error) => error.code === "N8N_REPAIR_PATCH_UNSUPPORTED");
 });
 
 test("n8n adapter inspects exact base then creates one inactive target-native candidate", async () => {

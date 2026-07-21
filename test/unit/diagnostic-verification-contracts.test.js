@@ -12,7 +12,9 @@ import {
 import { runN8nDeterministicVerification as runDeterministicVerification } from
   "../../packages/n8n-operational-package/src/verification-adapter.js";
 import {
+  LOGICAL_OPERATION_DEDUPLICATION_PATCH,
   materializeInventoryRepair,
+  materializeLogicalOperationRepair,
   n8nTargetRevisionMaterial
 } from "../../packages/n8n-operational-package/src/repair-delivery-adapter.js";
 import { createVerificationRunnerClient } from "../../src/verification-runner-client.js";
@@ -28,6 +30,10 @@ const repairPatch = {
     { operation: "replace", path: "inventory_unknown.next", value: "human_review" }
   ]
 };
+const leadWorkflow = JSON.parse(await readFile(new URL(
+  "../../packages/n8n-operational-package/workflows/canonical-lead-ingress.json",
+  import.meta.url
+), "utf8"));
 
 function artifact(content) {
   return { artifact_digest: sha256Digest(content), content };
@@ -97,6 +103,55 @@ function job(candidateRepresentation = n8nTargetRevisionMaterial(
   });
 }
 
+function leadJob() {
+  const original = artifact({ workflow_content: { primary_workflow: leadWorkflow } });
+  const candidate = artifact({
+    schema_version: "0.2.0", kind: "repair_delivery_inactive_candidate",
+    content: n8nTargetRevisionMaterial(materializeLogicalOperationRepair(
+      leadWorkflow, LOGICAL_OPERATION_DEDUPLICATION_PATCH,
+      "00000000-0000-4000-8000-000000000711"
+    ))
+  });
+  const fixtures = {
+    deliveries: [
+      { delivery_id: "delivery-1", logical_operation_id: "logical-1",
+        provider_execution_id: "101", destination_effect_node_succeeded: true },
+      { delivery_id: "delivery-2", logical_operation_id: "logical-1",
+        provider_execution_id: "102", destination_effect_node_succeeded: true }
+    ],
+    logical_operations: ["logical-1"]
+  };
+  const bundle = artifact({
+    schema_version: "0.2.0", case_id: "00000000-0000-4000-8000-000000000712",
+    revision: { revision_id: "00000000-0000-4000-8000-000000000713",
+      material_digest: sha256Digest(original.content) },
+    failure_specification: {
+      actual_behavior: "two_deliveries -> two_committed_effects",
+      targeted_verification: { expected_behavior: "one_effect_per_logical_operation",
+        prohibited_behavior: "duplicate_committed_effect" }
+    },
+    redacted_inputs: {}, fixtures
+  });
+  const fixture = artifact({ schema_version: "0.2.0", kind: "verification_fixture",
+    content: { redacted_inputs: {}, fixtures } });
+  const targeted = artifact({ schema_version: "0.2.0", kind: "targeted_regression",
+    declared_media_type: "application/json", content: {
+      fixture: "canonical:duplicate-logical-operation-v1",
+      expected_behavior: "one_effect_per_logical_operation",
+      prohibited_behavior: "duplicate_committed_effect"
+    } });
+  return buildVerificationJob({
+    verificationId: "00000000-0000-4000-8000-000000000714",
+    candidateId: "00000000-0000-4000-8000-000000000711",
+    deliveryId: "00000000-0000-4000-8000-000000000715",
+    runner: { runner_id: "00000000-0000-4000-8000-000000000716",
+      runner_version: "0.3.0", fixture_version: "logical-operation-v1" },
+    artifacts: { original, candidate, bundle, fixture,
+      regressions: [{ role: "targeted", ...targeted }] },
+    verifiedAt: "2026-07-21T12:00:00.000Z"
+  });
+}
+
 test("independent verification binds exact artifacts and proves original fail then candidate pass", () => {
   const input = job();
   const result = runDeterministicVerification(input);
@@ -110,6 +165,16 @@ test("independent verification binds exact artifacts and proves original fail th
   assert.equal(result.logs.content.original.output_digest.startsWith("sha256:"), true);
   assert.equal(result.logs.content.candidate.output_digest.startsWith("sha256:"), true);
   assert.equal(result.receipt.evidence.logs_artifact_digest, sha256Digest(result.logs));
+});
+
+test("independent verification proves the exact live lead defect and logical-operation candidate", () => {
+  const result = runDeterministicVerification(leadJob());
+  assert.equal(result.receipt.overall_result, "passed");
+  assert.equal(result.receipt.outcomes.original_demonstrates_failure.status, "passed");
+  assert.equal(result.receipt.outcomes.candidate_satisfies_target.status, "passed");
+  assert.equal(result.logs.content.original.output.committed_effect_count, 2);
+  assert.equal(result.logs.content.candidate.output.committed_effect_count, 1);
+  assert.equal(result.logs.content.candidate.output.duplicate_committed_effect, false);
 });
 
 test("bad candidate fails and incompatible retained regressions are reported explicitly", () => {

@@ -30,6 +30,11 @@ const n8nApiUrl = process.env.N8N_API_URL?.replace(/\/$/, "");
 const n8nApiKey = process.env.N8N_API_KEY;
 const inventoryCursorSecret = process.env.N8N_INVENTORY_CURSOR_SECRET;
 const executionHistoryCursorSecret = process.env.N8N_EXECUTION_HISTORY_CURSOR_SECRET;
+const maintenanceLiveEnabled = process.env.N8N_MAINTENANCE_LIVE === "true";
+const maintenanceFaultDelayMs = Number(process.env.N8N_MAINTENANCE_FAULT_DELAY_MS ?? 1_500);
+if (!Number.isSafeInteger(maintenanceFaultDelayMs) || maintenanceFaultDelayMs < 1) {
+  throw new Error("N8N_MAINTENANCE_FAULT_DELAY_MS must be a positive integer.");
+}
 const inventoryScopeInput = process.env.N8N_INVENTORY_SCOPE
   ? JSON.parse(process.env.N8N_INVENTORY_SCOPE) : null;
 const inventoryScope = inventoryScopeInput ? normalizeN8nInventoryScope(inventoryScopeInput) : null;
@@ -59,6 +64,7 @@ const inventoryConfigured = Boolean(
 const executionHistoryConfigured = Boolean(
   n8nApiUrl && n8nApiKey && executionHistoryCursorSecret && inventoryScope
 );
+const repairProxyConfigured = Boolean(maintenanceLiveEnabled && n8nApiUrl && n8nApiKey);
 const attestationJobs = new Map();
 const attestationReceipts = new Map();
 if (!token) throw new Error("N8N_DETAIL_ADAPTER_TOKEN is required.");
@@ -69,6 +75,9 @@ const baseWorkflow = {
   updatedAt: "2026-01-01T00:00:00.000Z",
   versionId: "fixture-base-v1"
 };
+const canonicalLeadWorkflow = JSON.parse(await readFile(
+  new URL("../workflows/canonical-lead-ingress.json", import.meta.url), "utf8"
+));
 async function loadState() {
   if (!stateFile) return null;
   try {
@@ -185,6 +194,132 @@ function canonicalize(value) {
     .map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(",")}}`;
 }
 
+async function n8nApi(pathname, init = {}) {
+  const response = await fetch(`${n8nApiUrl}${pathname}`, {
+    ...init,
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "x-n8n-api-key": n8nApiKey,
+      ...(init.headers ?? {})
+    }
+  });
+  const body = await response.json().catch(() => null);
+  return { response, body };
+}
+
+function executionInput(execution) {
+  const runData = execution?.data?.resultData?.runData ?? execution?.resultData?.runData ?? {};
+  for (const runs of Object.values(runData)) {
+    for (const run of Array.isArray(runs) ? runs : []) {
+      const items = run?.data?.main?.flat(3) ?? [];
+      for (const item of items) {
+        const headers = item?.json?.headers;
+        if (headers?.["x-alphonse-logical-operation-id"]
+            && headers?.["x-alphonse-delivery-id"]) return item.json;
+      }
+    }
+  }
+  return null;
+}
+
+function destinationSucceeded(execution) {
+  return Array.isArray(execution?.data?.resultData?.runData?.["Create CRM Lead"])
+    && execution.data.resultData.runData["Create CRM Lead"].length > 0;
+}
+
+async function liveLeadDetail(externalExecutionId) {
+  const providerExecutionId = String(externalExecutionId).replace(/^n8n-/, "");
+  if (!/^[0-9]+$/.test(providerExecutionId)) throw new Error("invalid execution identity");
+  const selected = await n8nApi(
+    `/api/v1/executions/${encodeURIComponent(providerExecutionId)}?includeData=true`
+  );
+  if (!selected.response.ok) throw new Error("selected execution unavailable");
+  const selectedExecution = unwrapN8nApiEntity(selected.body);
+  const logicalOperationId = executionInput(selectedExecution)?.headers
+    ?.["x-alphonse-logical-operation-id"];
+  if (typeof logicalOperationId !== "string" || !logicalOperationId) {
+    throw new Error("logical operation identity unavailable");
+  }
+  const listed = await n8nApi(
+    `/api/v1/executions?workflowId=${encodeURIComponent(canonicalLeadWorkflow.id)}&status=success&limit=100`
+  );
+  if (!listed.response.ok) throw new Error("execution history unavailable");
+  const summaries = Array.isArray(listed.body?.data) ? listed.body.data : [];
+  const details = await Promise.all(summaries.map(async (summary) => {
+    const result = await n8nApi(`/api/v1/executions/${encodeURIComponent(summary.id)}?includeData=true`);
+    return result.response.ok ? unwrapN8nApiEntity(result.body) : null;
+  }));
+  const deliveries = details.filter(Boolean).map((execution) => {
+    const input = executionInput(execution);
+    return {
+      provider_execution_id: String(execution.id),
+      delivery_id: input?.headers?.["x-alphonse-delivery-id"] ?? null,
+      logical_operation_id: input?.headers?.["x-alphonse-logical-operation-id"] ?? null,
+      destination_effect_node_succeeded: destinationSucceeded(execution)
+    };
+  }).filter((entry) => entry.logical_operation_id === logicalOperationId
+    && typeof entry.delivery_id === "string" && entry.destination_effect_node_succeeded);
+  const uniqueDeliveries = [...new Map(deliveries.map((entry) => [entry.delivery_id, entry])).values()]
+    .sort((left, right) => left.delivery_id.localeCompare(right.delivery_id));
+  if (uniqueDeliveries.length !== 2) {
+    throw new Error("exact duplicate-delivery reproduction evidence unavailable");
+  }
+  return {
+    input: { logical_operation_id: logicalOperationId, provider_execution_id: providerExecutionId },
+    fixtures: { deliveries: uniqueDeliveries, logical_operations: [logicalOperationId] },
+    output: {
+      actual_behavior: "two_deliveries -> two_committed_effects",
+      committed_effect_count: 2,
+      duplicate_committed_effect: true
+    }
+  };
+}
+
+function executableMaterial(workflow) {
+  return {
+    nodes: workflow?.nodes ?? [],
+    connections: workflow?.connections ?? {},
+    settings: workflow?.settings ?? {}
+  };
+}
+
+async function proxyWorkflowRequest(request, response) {
+  const route = request.url;
+  let body;
+  if (["POST", "PUT"].includes(request.method)) body = await readJson(request);
+  let mode = "normal";
+  let current = null;
+  if (request.method === "PUT") {
+    current = await n8nApi(route);
+    if (!current.response.ok) return send(response, current.response.status, current.body);
+    mode = nextPromotionMode;
+    nextPromotionMode = "normal";
+    if (mode === "no_apply_timeout") {
+      await new Promise((resolve) => setTimeout(resolve, maintenanceFaultDelayMs));
+      return send(response, 200, { result: "not_applied" });
+    }
+    if (mode === "mismatch_then_timeout") {
+      body = { ...body, settings: { ...(body.settings ?? {}), injectedTargetMismatch: true } };
+    }
+  }
+  const upstream = await n8nApi(route, {
+    method: request.method,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  });
+  let result = upstream;
+  if (request.method === "PUT" && upstream.response.ok && current.body?.active === true) {
+    result = await n8nApi(`${route}/activate`, {
+      method: "POST",
+      body: JSON.stringify({ versionId: upstream.body?.versionId })
+    });
+  }
+  if (request.method === "PUT" && mode !== "normal") {
+    await new Promise((resolve) => setTimeout(resolve, maintenanceFaultDelayMs));
+  }
+  return send(response, result.response.status, result.body ?? { message: "Empty provider response" });
+}
+
 async function fetchN8nExecution(executionId) {
   const response = await fetch(`${n8nApiUrl}/api/v1/executions/${encodeURIComponent(executionId)}?includeData=true`, {
     headers: { "x-n8n-api-key": n8nApiKey, accept: "application/json" }
@@ -266,7 +401,9 @@ const server = http.createServer(async (request, response) => {
         state_persistence: stateFile ? "configured" : "ephemeral",
         runtime_attestation: attestationConfigured ? "independent_n8n_api_observation" : "not_configured",
         workflow_inventory: inventoryConfigured ? "credential_scoped_n8n_api" : "not_configured",
-        execution_history: executionHistoryConfigured ? "cursor_reconciled_n8n_api" : "not_configured"
+        execution_history: executionHistoryConfigured ? "cursor_reconciled_n8n_api" : "not_configured",
+        repair_delivery: repairProxyConfigured ? "credential_scoped_n8n_api_proxy" : "fixture_only",
+        provider_credential_location: n8nApiKey ? "adapter_edge_only" : "not_configured"
       });
     }
     if (request.method === "POST" && request.url === "/v0/runtime-attestations") {
@@ -306,6 +443,7 @@ const server = http.createServer(async (request, response) => {
       if (!repairApiAuthenticated(request)) {
         return send(response, 401, { message: "Unauthorized" });
       }
+      if (repairProxyConfigured) return proxyWorkflowRequest(request, response);
       if (request.method === "GET" && /^\/api\/v1\/workflows\/[^/?]+$/.test(request.url)) {
         const workflowId = decodeURIComponent(request.url.split("/").at(-1));
         const workflow = workflows.get(workflowId);
@@ -344,7 +482,7 @@ const server = http.createServer(async (request, response) => {
         const mode = nextPromotionMode;
         nextPromotionMode = "normal";
         if (mode === "no_apply_timeout") {
-          await new Promise((resolve) => setTimeout(resolve, 1_500));
+          await new Promise((resolve) => setTimeout(resolve, maintenanceFaultDelayMs));
           return send(response, 200, current);
         }
         const updated = {
@@ -360,7 +498,9 @@ const server = http.createServer(async (request, response) => {
         }
         workflows.set(workflowId, updated);
         await persistState();
-        if (mode !== "normal") await new Promise((resolve) => setTimeout(resolve, 1_500));
+        if (mode !== "normal") {
+          await new Promise((resolve) => setTimeout(resolve, maintenanceFaultDelayMs));
+        }
         return send(response, 200, updated);
       }
       return send(response, 404, { message: "Not found" });
@@ -402,8 +542,10 @@ const server = http.createServer(async (request, response) => {
       if (!Array.isArray(requested) || requested.some((field) => !policy.extract_paths.includes(field))) {
         return send(response, 400, { error: { code: "DETAIL_SCOPE_REJECTED" } });
       }
+      const detailSource = maintenanceLiveEnabled
+        ? await liveLeadDetail(body.external_execution_id) : source;
       const detail = {};
-      for (const field of requested) setAtPath(detail, field, getAtPath(source, field));
+      for (const field of requested) setAtPath(detail, field, getAtPath(detailSource, field));
       return send(response, 200, {
         external_execution_id: body.external_execution_id,
         detail,
@@ -412,6 +554,34 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "POST" && request.url === "/v0/reproductions:run") {
       const bindings = body.fixture_bindings ?? {};
+      const liveSupported = maintenanceLiveEnabled
+        && bindings.erp === "canonical:delivery-evidence-v1"
+        && bindings.storefront === "canonical:logical-operation-v1"
+        && bindings.model === "model:deterministic-identity-analysis-v1"
+        && bindings.review === "review:local-only-v1";
+      if (liveSupported) {
+        const workflow = body.revision_material?.workflow_content?.primary_workflow;
+        const exactWorkflow = digest(executableMaterial(workflow))
+          === digest(executableMaterial(canonicalLeadWorkflow));
+        const fixtures = body.fixtures ?? {};
+        const exactEvidence = Array.isArray(fixtures.deliveries) && fixtures.deliveries.length === 2
+          && Array.isArray(fixtures.logical_operations) && fixtures.logical_operations.length === 1
+          && fixtures.deliveries.every((entry) =>
+            entry.logical_operation_id === fixtures.logical_operations[0]
+            && entry.destination_effect_node_succeeded === true);
+        if (digest(body.revision_material) !== body.revision?.material_digest
+            || !exactWorkflow || !exactEvidence) {
+          return send(response, 200, { status: "incomplete", actual_behavior: null,
+            output_digest: null });
+        }
+        const output = { logical_operation_id: fixtures.logical_operations[0],
+          delivery_count: 2, committed_effect_count: 2, duplicate_committed_effect: true };
+        return send(response, 200, {
+          status: "completed",
+          actual_behavior: "two_deliveries -> two_committed_effects",
+          output_digest: digest(output)
+        });
+      }
       const supported = ["erp:missing-sku-v1", "erp:matching-sku-v1"].includes(bindings.erp)
         && bindings.storefront === "storefront:in-stock-v1"
         && bindings.model === "model:deterministic-follow-up-v1"
