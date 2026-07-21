@@ -26,11 +26,12 @@ services:
       N8N_API_URL: http://n8n:5678
       N8N_API_KEY: ${N8N_API_KEY:-}
       N8N_INVENTORY_CURSOR_SECRET: ${N8N_INVENTORY_CURSOR_SECRET:-local-n8n-inventory-cursor-secret-with-sufficient-length-v1}
+      N8N_EXECUTION_HISTORY_CURSOR_SECRET: ${N8N_EXECUTION_HISTORY_CURSOR_SECRET:-local-n8n-execution-history-cursor-secret-with-sufficient-length-v1}
       N8N_INVENTORY_SCOPE: '${N8N_INVENTORY_SCOPE:-{"scope_id":"n8n:customer-primary","environment":"local","project_id":null,"active":null,"allowed_workflow_ids":[]}}'
       N8N_ATTESTATION_BINDINGS: '{"InventoryDefect1":{"workflow_id":"workflow:inventory-follow-up","revision_id":"${ALPHONSE_REVISION_ID:-00000000-0000-4000-8000-000000000000}","execution_workflow_material_digest":"${N8N_EXECUTION_WORKFLOW_MATERIAL_DIGEST:-sha256:637f6033e8dcd5bd15e5e10f2043cd93d9f972ec0de105b9bc4c6213d3ff1841}","fingerprint_rules_digest":"${N8N_FINGERPRINT_RULES_DIGEST:-sha256:a301859f43ad4f171e6a8849b360d8a2e98f273add09e736b016534bec5050bd}"}}'
       ALPHONSE_RUNTIME_EVENT_URL: http://kernel:3000/diagnostic/v0/runtime-events
       ALPHONSE_RUNTIME_ADAPTER_ID: alphonse.n8n.runtime
-      ALPHONSE_RUNTIME_ADAPTER_VERSION: 0.3.0
+      ALPHONSE_RUNTIME_ADAPTER_VERSION: 0.4.0
       ALPHONSE_RUNTIME_ADAPTER_KEY_ID: ${ALPHONSE_RUNTIME_ADAPTER_KEY_ID:-n8n-runtime-key-v1}
       ALPHONSE_RUNTIME_ADAPTER_SECRET: ${ALPHONSE_RUNTIME_ADAPTER_SECRET:-local-n8n-runtime-event-secret-with-sufficient-length-v1}
     volumes:

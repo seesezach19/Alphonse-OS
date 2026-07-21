@@ -1,6 +1,6 @@
 import { KernelError } from "./errors.js";
 
-export const WORKFLOW_RUNTIME_ADAPTER_CONTRACT_VERSION = "0.3.0";
+export const WORKFLOW_RUNTIME_ADAPTER_CONTRACT_VERSION = "0.4.0";
 
 const objectSchema = (required, properties = {}) => ({
   type: "object",
@@ -98,6 +98,53 @@ const CAPABILITIES = Object.freeze({
           status: { enum: ["healthy", "degraded", "unavailable", "unknown"] },
           observed_at: { type: "string", format: "date-time" },
           issues: { type: "array", maxItems: 100, items: { type: "string", maxLength: 500 } }
+        }),
+        authority: { const: "none" }
+      })
+    }
+  },
+  execution_history: {
+    requirement: "required",
+    purpose: "Walk credential-scoped retained execution history with a workflow-, cutoff-, and page-bound cursor while preserving run class, gaps, and revision evidence.",
+    operation: {
+      operation_id: "runtime_adapter.execution_history.list",
+      direction: "alphonse_to_adapter",
+      input_schema: objectSchema(["scope_id", "provider_workflow_id", "page_size", "cursor"], {
+        scope_id: { type: "string", minLength: 3, maxLength: 160 },
+        provider_workflow_id: { type: "string", minLength: 1, maxLength: 200 },
+        page_size: { type: "integer", minimum: 1, maximum: 100 },
+        cursor: { type: ["string", "null"], maxLength: 4096 }
+      }),
+      output_schema: objectSchema([
+        "schema_version", "scope", "executions", "page", "omissions", "health",
+        "completeness", "authority"
+      ], {
+        schema_version: { const: "alphonse.workflow-execution-history-page.v0.1" },
+        scope: objectSchema(["scope_id", "provider", "environment", "provider_workflow_id",
+          "scope_digest"]),
+        executions: { type: "array", maxItems: 100, items: objectSchema([
+          "provider_execution_id", "provider_workflow_id", "provider_status", "execution_class",
+          "provider_mode", "retry_of", "retry_success_id", "started_at", "stopped_at",
+          "wait_until", "revision", "observation_digest", "authority"
+        ], {
+          provider_status: { enum: ["success", "error", "crashed", "canceled", "new", "running", "waiting"] },
+          execution_class: { enum: ["production", "retry", "manual", "test", "unknown"] },
+          revision: objectSchema(["status", "provider_workflow_version_id",
+            "execution_workflow_material_digest", "binding_digest"], {
+            status: { enum: ["matched", "mismatched", "unavailable"] }
+          }),
+          observation_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+          authority: { const: "none" }
+        }) },
+        page: objectSchema(["current_cursor", "next_cursor", "page_index", "item_count",
+          "scope_complete", "source_cutoff", "page_digest"]),
+        omissions: { type: "array" },
+        health: objectSchema(["status", "observed_at", "issues"]),
+        completeness: objectSchema(["basis", "embedded_signals_are_completeness_proof",
+          "provider_retention_and_deletion_visible_as_limitations"], {
+          basis: { const: "credential_scoped_public_api_cursor_walk" },
+          embedded_signals_are_completeness_proof: { const: false },
+          provider_retention_and_deletion_visible_as_limitations: { const: true }
         }),
         authority: { const: "none" }
       })

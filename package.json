@@ -84,6 +84,7 @@
     "test:v0.2-ticket-11": "node scripts/acceptance-v0.2-ticket-11.js",
     "test:v0.2-ticket-12": "node scripts/acceptance-v0.2-ticket-12.js",
     "test:coverage-onboarding-snapshot": "node scripts/acceptance-coverage-onboarding-snapshot.js",
+    "test:coverage-reconciliation": "node scripts/acceptance-coverage-onboarding-snapshot.js",
     "test:workflow-interpretation": "node scripts/acceptance-workflow-interpretation.js",
     "test:coverage-review": "node scripts/acceptance-coverage-review.js",
     "test:coverage-compilation": "node scripts/acceptance-coverage-compilation.js",

@@ -16,6 +16,10 @@ import {
   N8nInventoryError,
   normalizeN8nInventoryScope
 } from "./workflow-inventory.js";
+import {
+  listN8nExecutionHistory,
+  N8nExecutionHistoryError
+} from "./execution-history.js";
 
 const port = Number(process.env.PORT ?? 5680);
 const token = process.env.N8N_DETAIL_ADAPTER_TOKEN;
@@ -25,6 +29,7 @@ const stateFile = process.env.N8N_ADAPTER_STATE_FILE;
 const n8nApiUrl = process.env.N8N_API_URL?.replace(/\/$/, "");
 const n8nApiKey = process.env.N8N_API_KEY;
 const inventoryCursorSecret = process.env.N8N_INVENTORY_CURSOR_SECRET;
+const executionHistoryCursorSecret = process.env.N8N_EXECUTION_HISTORY_CURSOR_SECRET;
 const inventoryScopeInput = process.env.N8N_INVENTORY_SCOPE
   ? JSON.parse(process.env.N8N_INVENTORY_SCOPE) : null;
 const inventoryScope = inventoryScopeInput ? normalizeN8nInventoryScope(inventoryScopeInput) : null;
@@ -50,6 +55,9 @@ const attestationConfigured = Boolean(
 );
 const inventoryConfigured = Boolean(
   n8nApiUrl && n8nApiKey && inventoryCursorSecret && inventoryScope
+);
+const executionHistoryConfigured = Boolean(
+  n8nApiUrl && n8nApiKey && executionHistoryCursorSecret && inventoryScope
 );
 const attestationJobs = new Map();
 const attestationReceipts = new Map();
@@ -254,10 +262,11 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/healthz") {
       return send(response, 200, {
         status: "healthy",
-        api: "alphonse.n8n.runtime.detail/0.3.0",
+        api: "alphonse.n8n.runtime.detail/0.4.0",
         state_persistence: stateFile ? "configured" : "ephemeral",
         runtime_attestation: attestationConfigured ? "independent_n8n_api_observation" : "not_configured",
-        workflow_inventory: inventoryConfigured ? "credential_scoped_n8n_api" : "not_configured"
+        workflow_inventory: inventoryConfigured ? "credential_scoped_n8n_api" : "not_configured",
+        execution_history: executionHistoryConfigured ? "cursor_reconciled_n8n_api" : "not_configured"
       });
     }
     if (request.method === "POST" && request.url === "/v0/runtime-attestations") {
@@ -371,6 +380,20 @@ const server = http.createServer(async (request, response) => {
       });
       return send(response, 200, inventory);
     }
+    if (request.method === "POST" && request.url === "/v0/execution-history:list") {
+      if (!executionHistoryConfigured) {
+        return send(response, 503, { error: { code: "N8N_EXECUTION_HISTORY_NOT_CONFIGURED" } });
+      }
+      const history = await listN8nExecutionHistory({
+        baseUrl: n8nApiUrl,
+        apiKey: n8nApiKey,
+        scope: inventoryScopeInput,
+        cursorSecret: executionHistoryCursorSecret,
+        input: body,
+        attestationBindings: Object.fromEntries(attestationBindings)
+      });
+      return send(response, 200, history);
+    }
     if (request.method === "POST" && request.url === "/v0/execution-details:retrieve") {
       if (!/^n8n-[0-9]+$/.test(body.external_execution_id ?? "")) {
         return send(response, 404, { error: { code: "EXECUTION_NOT_FOUND" } });
@@ -417,7 +440,7 @@ const server = http.createServer(async (request, response) => {
     }
     return send(response, 404, { error: { code: "NOT_FOUND" } });
   } catch (error) {
-    if (error instanceof N8nInventoryError) {
+    if (error instanceof N8nInventoryError || error instanceof N8nExecutionHistoryError) {
       return send(response, error.status, { error: { code: error.code } });
     }
     return send(response, 400, { error: { code: "INVALID_REQUEST" } });
