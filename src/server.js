@@ -10,6 +10,7 @@ import {
 import { createWorkflowInterpretationService } from "./workflow-interpretation-service.js";
 import { createCoverageReviewService } from "./coverage-review-service.js";
 import { createCoverageReviewApprovalService } from "./coverage-review-approval-service.js";
+import { createCoverageCompilationService } from "./coverage-compilation-service.js";
 import { createContextService } from "./context-service.js";
 import { createDatabase } from "./database.js";
 import { createDeploymentService } from "./deployment-service.js";
@@ -198,6 +199,7 @@ let coverageOnboardingService = null;
 let workflowInterpretationService = null;
 let coverageReviewService = null;
 let coverageReviewApprovalService = null;
+let coverageCompilationService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -324,6 +326,15 @@ if (diagnosticDatabase) {
     database,
     identityIntent,
     coverageReviewService,
+    installationId,
+    environmentId
+  });
+  coverageCompilationService = createCoverageCompilationService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    coverageOnboardingService,
+    coverageReviewService,
+    coverageReviewApprovalService,
     installationId,
     environmentId
   });
@@ -604,7 +615,7 @@ const routeHelpers = createRouteHelpers({
   diagnosticDiagnosisService, diagnosticRepairDeliveryService,
   diagnosticVerificationService, diagnosticPromotionService,
   coverageOnboardingService, workflowInterpretationService, coverageReviewService,
-  coverageReviewApprovalService
+  coverageReviewApprovalService, coverageCompilationService
 });
 
 const routeContext = createRouteContext({
@@ -621,7 +632,7 @@ const routeContext = createRouteContext({
   diagnosticDispatchAuthorizationService, diagnosticWorkerExecutionService,
   diagnosticConsistencyService,
   coverageOnboardingService, workflowInterpretationService, coverageReviewService,
-  coverageReviewApprovalService,
+  coverageReviewApprovalService, coverageCompilationService,
   installationId, environmentId, environmentName,
   grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
   dataPlaneReceiptSecret, dataPlaneId,

@@ -178,8 +178,18 @@ export function createCoverageOnboardingService({ database, artifactStore, ident
        WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY event_index`,
       [installationId, onboardingId]
     )).rows;
+    const compilations = (await client.query(
+      `SELECT * FROM diagnostic_coverage_compilations
+       WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY event_index`,
+      [installationId, onboardingId]
+    )).rows;
+    const validations = (await client.query(
+      `SELECT * FROM diagnostic_coverage_validations
+       WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY event_index`,
+      [installationId, onboardingId]
+    )).rows;
     return projectCoverageOnboarding(row, events, snapshots, interpretations, ambiguities,
-      resolutions, assignments, reviewBundles);
+      resolutions, assignments, reviewBundles, compilations, validations);
   }
 
   async function appendEvent(client, { onboardingId, eventIndex, eventType, priorEventDigest,

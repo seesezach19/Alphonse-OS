@@ -415,6 +415,102 @@ const coverageReviewBundleSchema = {
   }
 };
 
+const implementationIdentitySchema = {
+  type: "object",
+  required: ["id", "version", "artifact_digest"],
+  additionalProperties: false,
+  properties: {
+    id: { type: "string", minLength: 1, maxLength: 160 },
+    version: { type: "string", minLength: 1, maxLength: 80 },
+    artifact_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" }
+  }
+};
+
+const coverageCompilationInput = {
+  type: "object",
+  required: ["onboarding_id", "review_bundle_digest", "approval_id", "approval_digest",
+    "expected_review_state_digest", "base_manifest_reference", "compiler"],
+  additionalProperties: false,
+  properties: {
+    onboarding_id: { type: "string", format: "uuid" },
+    review_bundle_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    approval_id: { type: "string", format: "uuid" },
+    approval_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    expected_review_state_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    base_manifest_reference: { anyOf: [{ type: "null" }, coverageReviewArtifactReference] },
+    compiler: implementationIdentitySchema
+  }
+};
+
+const coverageValidationInput = {
+  type: "object",
+  required: ["onboarding_id", "compilation_id", "compilation_input_digest",
+    "coverage_specification_digest", "workflow_manifest_proposal_digest", "validator"],
+  additionalProperties: false,
+  properties: {
+    onboarding_id: { type: "string", format: "uuid" },
+    compilation_id: { type: "string", format: "uuid" },
+    compilation_input_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    coverage_specification_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    workflow_manifest_proposal_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    validator: implementationIdentitySchema
+  }
+};
+
+const coverageCompilationSchema = {
+  type: "object",
+  required: ["compilation_id", "onboarding_id", "review_bundle_digest", "approval_id",
+    "approval_digest", "review_state_digest", "compilation_input", "compilation_input_digest",
+    "compiler", "coverage_specification_digest", "workflow_manifest_proposal_digest",
+    "coverage_specification", "workflow_manifest_proposal", "compiled_by", "compiled_at",
+    "side_effects", "authority", "immutable"],
+  additionalProperties: false,
+  properties: {
+    compilation_id: { type: "string", format: "uuid" },
+    onboarding_id: { type: "string", format: "uuid" },
+    review_bundle_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    approval_id: { type: "string", format: "uuid" },
+    approval_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    review_state_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    compilation_input: { type: "object" },
+    compilation_input_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    compiler: implementationIdentitySchema,
+    coverage_specification_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    workflow_manifest_proposal_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    coverage_specification: { type: "object" },
+    workflow_manifest_proposal: { type: "object" },
+    compiled_by: { type: "object" },
+    compiled_at: { type: "string", format: "date-time" },
+    side_effects: { const: "none" },
+    authority: { const: "none" },
+    immutable: { const: true }
+  }
+};
+
+const coverageValidationSchema = {
+  type: "object",
+  required: ["validation_id", "compilation_id", "onboarding_id", "validation_input_digest",
+    "validation_receipt_digest", "validator", "status", "workflow_manifest_proposal_digest",
+    "receipt", "validated_by", "validated_at", "registration_request_eligible", "authority", "immutable"],
+  additionalProperties: false,
+  properties: {
+    validation_id: { type: "string", format: "uuid" },
+    compilation_id: { type: "string", format: "uuid" },
+    onboarding_id: { type: "string", format: "uuid" },
+    validation_input_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    validation_receipt_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    validator: implementationIdentitySchema,
+    status: { enum: ["valid", "invalid"] },
+    workflow_manifest_proposal_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
+    receipt: { type: "object" },
+    validated_by: { type: "object" },
+    validated_at: { type: "string", format: "date-time" },
+    registration_request_eligible: { const: false },
+    authority: { const: "none" },
+    immutable: { const: true }
+  }
+};
+
 const coverageProjectionSchema = {
   type: "object",
   required: [
@@ -422,8 +518,12 @@ const coverageProjectionSchema = {
     "prior_onboarding_id", "workflow_reference", "work_intent", "agent", "adapter_binding",
     "identity_digest", "revision", "event_head_digest", "status", "active_snapshot_digest",
     "active_interpretation_digest", "active_review_bundle_digest", "latest_review_invalidation_event_digest",
+    "active_compilation_id", "active_coverage_specification_digest",
+    "active_workflow_manifest_proposal_digest", "active_validation_id",
+    "active_validation_receipt_digest", "validation_status",
     "superseded_snapshot_digests", "superseded_interpretation_digests",
-    "snapshot_history", "interpretation_history", "interpretation_assignments", "review_bundle_history", "ambiguities",
+    "snapshot_history", "interpretation_history", "interpretation_assignments", "review_bundle_history",
+    "compilation_history", "validation_history", "ambiguities",
     "blocking_ambiguity_ids", "unresolved_nonblocking_ambiguity_ids", "limitations", "review_eligible",
     "legal_next_operations", "events", "opened_at",
     "authority", "immutable"
@@ -444,13 +544,25 @@ const coverageProjectionSchema = {
     revision: { type: "integer", minimum: 1 },
     event_head_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
     status: { enum: ["gathering_evidence", "interpreting", "resolving_ambiguity", "reviewable",
-      "awaiting_approval", "review_required"] },
+      "awaiting_approval", "compiled", "validated", "validation_failed", "review_required"] },
     active_snapshot_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
     active_interpretation_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
     active_review_bundle_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
     latest_review_invalidation_event_digest: {
       type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$"
     },
+    active_compilation_id: { type: ["string", "null"], format: "uuid" },
+    active_coverage_specification_digest: {
+      type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$"
+    },
+    active_workflow_manifest_proposal_digest: {
+      type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$"
+    },
+    active_validation_id: { type: ["string", "null"], format: "uuid" },
+    active_validation_receipt_digest: {
+      type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$"
+    },
+    validation_status: { type: ["string", "null"], enum: ["valid", "invalid", null] },
     superseded_snapshot_digests: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
     superseded_interpretation_digests: { type: "array",
       items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
@@ -458,6 +570,8 @@ const coverageProjectionSchema = {
     interpretation_history: { type: "array" },
     interpretation_assignments: { type: "array" },
     review_bundle_history: { type: "array" },
+    compilation_history: { type: "array" },
+    validation_history: { type: "array" },
     ambiguities: { type: "array" },
     blocking_ambiguity_ids: { type: "array", items: { type: "string" } },
     unresolved_nonblocking_ambiguity_ids: { type: "array", items: { type: "string" } },
@@ -1027,7 +1141,93 @@ const descriptors = [
     outcomes: ["verified_review_bundle_returned"],
     issues: ["COVERAGE_REVIEW_BUNDLE_NOT_FOUND", "COVERAGE_REVIEW_INTEGRITY_VIOLATION"],
     emitted_events: [],
-    next_operations: ["kernel.coverage_review.approve"]
+    next_operations: ["kernel.coverage_review.approve", "diagnostic.coverage_specification.compile"]
+  },
+  {
+    operation_id: "diagnostic.coverage_specification.compile",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Compile one exact eligible Coverage Review approval into deterministic authority-free proposal bytes.",
+    visibility: "public",
+    authority_class: "authenticated_bound_coverage_onboarding_agent",
+    effect_class: "deterministic_content_addressed_proposal_compilation",
+    idempotency: "required_command_id_and_canonical_request_digest_plus_semantic_reuse",
+    transport: { method: "POST", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/coverage-compilations" },
+    input_schema: commandEnvelope("diagnostic.coverage_specification.compile", coverageCompilationInput),
+    output_schema: coverageInterpretationCommandOutput(
+      "diagnostic.coverage_specification.compile", "coverage_compilation", coverageCompilationSchema, true
+    ),
+    supported_modes: ["live"],
+    preconditions: ["exact_active_review_bundle", "exact_current_eligible_kernel_approval",
+      "exact_compiler_artifact_identity"],
+    outcomes: ["deterministic_coverage_specification_compiled",
+      "workflow_manifest_proposal_compiled_without_authority", "semantic_compilation_reused"],
+    issues: ["COVERAGE_COMPILATION_APPROVAL_CONFLICT", "COVERAGE_COMPILER_IDENTITY_MISMATCH",
+      "COVERAGE_COMPILATION_AGENT_MISMATCH", "IDEMPOTENCY_CONFLICT"],
+    emitted_events: ["diagnostic.coverage_specification.compiled"],
+    next_operations: ["diagnostic.coverage_specification.get", "diagnostic.coverage_specification.validate"]
+  },
+  {
+    operation_id: "diagnostic.coverage_specification.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read and verify one immutable Coverage compilation and its exact semantic proposal artifacts.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/coverage-compilations/{compilation_id}" },
+    input_schema: { type: "object", required: ["compilation_id"], additionalProperties: false,
+      properties: { compilation_id: { type: "string", format: "uuid" } } },
+    output_schema: { type: "object", required: ["coverage_compilation"], additionalProperties: false,
+      properties: { coverage_compilation: coverageCompilationSchema } },
+    supported_modes: ["live"],
+    preconditions: ["authenticated_customer_reader", "coverage_compilation_exists"],
+    outcomes: ["verified_coverage_compilation_returned"],
+    issues: ["COVERAGE_COMPILATION_NOT_FOUND", "COVERAGE_COMPILATION_INTEGRITY_VIOLATION"],
+    emitted_events: [],
+    next_operations: ["diagnostic.coverage_specification.validate"]
+  },
+  {
+    operation_id: "diagnostic.coverage_specification.validate",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Validate exact compiled proposal bytes and persist a visible fail-closed authority-free receipt.",
+    visibility: "public",
+    authority_class: "authenticated_bound_coverage_onboarding_agent",
+    effect_class: "deterministic_validation_receipt_without_registration",
+    idempotency: "required_command_id_and_canonical_request_digest_plus_semantic_reuse",
+    transport: { method: "POST", path: "/diagnostic/v0/coverage-compilations/{compilation_id}/validations" },
+    input_schema: commandEnvelope("diagnostic.coverage_specification.validate", coverageValidationInput),
+    output_schema: coverageInterpretationCommandOutput(
+      "diagnostic.coverage_specification.validate", "coverage_validation", coverageValidationSchema, true
+    ),
+    supported_modes: ["live"],
+    preconditions: ["exact_active_compilation", "exact_current_eligible_kernel_approval",
+      "exact_validator_artifact_identity"],
+    outcomes: ["valid_proposal_receipt_created", "invalid_proposal_receipt_visible",
+      "registration_request_not_granted"],
+    issues: ["COVERAGE_VALIDATION_INPUT_CONFLICT", "COVERAGE_VALIDATOR_IDENTITY_MISMATCH",
+      "COVERAGE_VALIDATION_COMPILATION_STALE", "IDEMPOTENCY_CONFLICT"],
+    emitted_events: ["diagnostic.coverage_specification.validated"],
+    next_operations: ["diagnostic.coverage_validation.get"]
+  },
+  {
+    operation_id: "diagnostic.coverage_validation.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read and verify one immutable Coverage Validation Receipt and its downstream authority boundary.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/coverage-validations/{validation_id}" },
+    input_schema: { type: "object", required: ["validation_id"], additionalProperties: false,
+      properties: { validation_id: { type: "string", format: "uuid" } } },
+    output_schema: { type: "object", required: ["coverage_validation"], additionalProperties: false,
+      properties: { coverage_validation: coverageValidationSchema } },
+    supported_modes: ["live"],
+    preconditions: ["authenticated_customer_reader", "coverage_validation_exists"],
+    outcomes: ["verified_coverage_validation_returned"],
+    issues: ["COVERAGE_VALIDATION_NOT_FOUND", "COVERAGE_VALIDATION_INTEGRITY_VIOLATION"],
+    emitted_events: [],
+    next_operations: []
   },
   commandDescriptor({
     operationId: "diagnostic.agent_workflow.register",

@@ -202,7 +202,8 @@ export function createCoverageReviewService({ database, artifactStore, coverageO
   async function getBundleState(reference) {
     const reviewBundle = await get(reference);
     const onboarding = await coverageInternal.loadOnboarding(reviewBundle.onboarding_id);
-    if (onboarding.status !== "awaiting_approval"
+    if (!["awaiting_approval", "compiled", "validated", "validation_failed"]
+      .includes(onboarding.status)
         || onboarding.active_review_bundle_digest !== reviewBundle.review_bundle_digest) {
       throw new KernelError(409, "COVERAGE_REVIEW_BUNDLE_NOT_CURRENT",
         "Coverage Review Bundle is historical and no longer approval-eligible.");

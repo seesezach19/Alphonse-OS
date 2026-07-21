@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.alphonse.local/coverage/coverage-compilation-input.v0.1.json",
+  "title": "Coverage Compilation Input v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "onboarding_id", "review_bundle_digest", "approval_id", "approval_digest", "review_state", "review_state_digest", "base_manifest_reference", "compiler"],
+  "properties": {
+    "schema_version": { "const": "alphonse.coverage-compilation-input.v0.1" },
+    "onboarding_id": { "type": "string", "format": "uuid" },
+    "review_bundle_digest": { "$ref": "#/$defs/digest" },
+    "approval_id": { "type": "string", "format": "uuid" },
+    "approval_digest": { "$ref": "#/$defs/digest" },
+    "review_state": {
+      "type": "object", "additionalProperties": false,
+      "required": ["onboarding_revision", "event_head_digest", "status"],
+      "properties": {
+        "onboarding_revision": { "type": "integer", "minimum": 5 },
+        "event_head_digest": { "$ref": "#/$defs/digest" },
+        "status": { "const": "awaiting_approval" }
+      }
+    },
+    "review_state_digest": { "$ref": "#/$defs/digest" },
+    "base_manifest_reference": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/reference" }] },
+    "compiler": { "$ref": "#/$defs/implementation" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reference_kind", "reference_id", "artifact_digest"],
+      "properties": {
+        "reference_kind": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "reference_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "artifact_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "implementation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "version", "artifact_digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "artifact_digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}
