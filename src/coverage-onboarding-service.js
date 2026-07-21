@@ -153,7 +153,28 @@ export function createCoverageOnboardingService({ database, artifactStore, ident
        WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY event_index`,
       [installationId, onboardingId]
     )).rows;
-    return projectCoverageOnboarding(row, events, snapshots);
+    const interpretations = (await client.query(
+      `SELECT * FROM diagnostic_workflow_interpretations
+       WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY event_index`,
+      [installationId, onboardingId]
+    )).rows;
+    const ambiguities = (await client.query(
+      `SELECT * FROM diagnostic_coverage_ambiguities
+       WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY projected_event_index,ambiguity_id`,
+      [installationId, onboardingId]
+    )).rows;
+    const resolutions = (await client.query(
+      `SELECT * FROM diagnostic_coverage_ambiguity_resolutions
+       WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY resolved_event_index`,
+      [installationId, onboardingId]
+    )).rows;
+    const assignments = (await client.query(
+      `SELECT * FROM diagnostic_coverage_interpretation_assignments
+       WHERE installation_id=$1 AND onboarding_id=$2 ORDER BY assigned_at,assignment_id`,
+      [installationId, onboardingId]
+    )).rows;
+    return projectCoverageOnboarding(row, events, snapshots, interpretations, ambiguities,
+      resolutions, assignments);
   }
 
   async function appendEvent(client, { onboardingId, eventIndex, eventType, priorEventDigest,
@@ -373,5 +394,10 @@ export function createCoverageOnboardingService({ database, artifactStore, ident
     });
   }
 
-  return { open, captureEvidence, get: loadOnboarding };
+  return {
+    open,
+    captureEvidence,
+    get: loadOnboarding,
+    internal: Object.freeze({ loadOnboarding, appendEvent })
+  };
 }

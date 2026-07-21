@@ -431,7 +431,8 @@ function eventView(row) {
   };
 }
 
-export function projectCoverageOnboarding(row, eventRows, snapshotRows = []) {
+export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], interpretationRows = [],
+  ambiguityRows = [], resolutionRows = [], assignmentRows = []) {
   const events = eventRows.map(eventView);
   if (events.length === 0 || events[0].event_index !== 1 || events[0].event_type !== "opened") {
     throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
@@ -484,6 +485,178 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = []) {
     ?.payload.snapshot_digest ?? null;
   const superseded = events.filter((event) => event.event_type === "snapshot_replaced")
     .map((event) => event.payload.prior_snapshot_digest);
+  const interpretationsByEvent = new Map(interpretationRows.map((item) => [Number(item.event_index), item]));
+  for (const event of events) {
+    const interpretation = interpretationsByEvent.get(event.event_index);
+    if (event.event_type === "interpretation_submitted") {
+      if (!interpretation || interpretation.interpretation_digest !== event.payload.interpretation_digest
+          || interpretation.snapshot_digest !== event.payload.snapshot_digest
+          || interpretation.claims_digest !== event.payload.claims_digest
+          || interpretation.supersedes_interpretation_digest
+            !== event.payload.supersedes_interpretation_digest) {
+        throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+          "Workflow Interpretation row does not match its append-only event.");
+      }
+    } else if (interpretation) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Workflow Interpretation is not bound to a submission event.");
+    }
+  }
+  const ambiguitiesByProjectionEvent = new Map();
+  for (const ambiguity of ambiguityRows) {
+    if (sha256Digest(ambiguity.ambiguity_document) !== ambiguity.ambiguity_digest
+        || ambiguity.ambiguity_document.ambiguity_id !== ambiguity.ambiguity_id
+        || ambiguity.ambiguity_document.source_interpretation_digest !== ambiguity.interpretation_digest
+        || ambiguity.ambiguity_document.blocking !== ambiguity.blocking) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Coverage Ambiguity row does not match its immutable document.");
+    }
+    const eventIndex = Number(ambiguity.projected_event_index);
+    const rows = ambiguitiesByProjectionEvent.get(eventIndex) ?? [];
+    rows.push(ambiguity);
+    ambiguitiesByProjectionEvent.set(eventIndex, rows);
+  }
+  for (const event of events) {
+    const projected = ambiguitiesByProjectionEvent.get(event.event_index) ?? [];
+    if (event.event_type === "ambiguities_projected") {
+      const manifest = projected
+        .sort((left, right) => left.ambiguity_id.localeCompare(right.ambiguity_id))
+        .map((item) => ({ ambiguity_id: item.ambiguity_id,
+          ambiguity_digest: item.ambiguity_digest, blocking: item.blocking }));
+      const sourceInterpretation = interpretationRows.find((item) =>
+        item.interpretation_digest === event.payload.interpretation_digest);
+      if (event.payload.ambiguity_manifest_digest !== sha256Digest(manifest)
+          || !sourceInterpretation
+          || sourceInterpretation.ambiguity_manifest_digest !== event.payload.ambiguity_manifest_digest
+          || projected.some((item) => item.interpretation_digest !== sourceInterpretation.interpretation_digest)
+          || event.payload.ambiguity_count !== projected.length
+          || event.payload.blocking_count !== projected.filter((item) => item.blocking).length
+          || event.payload.nonblocking_count !== projected.filter((item) => !item.blocking).length) {
+        throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+          "Coverage Ambiguity projection does not match its append-only event.");
+      }
+    } else if (projected.length > 0) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Coverage Ambiguities are not bound to a projection event.");
+    }
+  }
+  const resolutionsByEvent = new Map(resolutionRows.map((item) => [Number(item.resolved_event_index), item]));
+  for (const event of events) {
+    const resolution = resolutionsByEvent.get(event.event_index);
+    if (event.event_type === "ambiguity_resolved") {
+      if (!resolution || sha256Digest(resolution.confirmation_document) !== resolution.confirmation_digest
+          || sha256Digest(resolution.resolution_document) !== resolution.resolution_digest
+          || resolution.ambiguity_digest !== event.payload.ambiguity_digest
+          || resolution.confirmation_document.subject?.type !== "ambiguity"
+          || resolution.confirmation_document.subject?.digest !== resolution.ambiguity_digest
+          || resolution.confirmation_document.principal_id !== resolution.resolved_by_principal_id
+          || resolution.resolution_document.resolution_id !== resolution.resolution_id
+          || resolution.resolution_document.ambiguity_digest !== resolution.ambiguity_digest
+          || resolution.resolution_document.confirmation_digest !== resolution.confirmation_digest
+          || resolution.confirmation_digest !== event.payload.confirmation_digest
+          || resolution.resolution_digest !== event.payload.resolution_digest
+          || resolution.status !== event.payload.status) {
+        throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+          "Coverage Ambiguity resolution does not match its append-only event.");
+      }
+    } else if (resolution) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Coverage Ambiguity resolution is not bound to a resolution event.");
+    }
+  }
+  for (const assignment of assignmentRows) {
+    if (sha256Digest(assignment.assignment_document) !== assignment.assignment_digest
+        || assignment.assignment_document.assignment_id !== assignment.assignment_id
+        || assignment.assignment_document.onboarding_id !== row.onboarding_id
+        || assignment.assignment_document.snapshot_digest !== assignment.snapshot_digest
+        || Number(assignment.assignment_document.onboarding_revision) !== Number(assignment.onboarding_revision)
+        || assignment.assignment_document.event_head_digest !== assignment.event_head_digest
+        || assignment.assignment_document.assignee?.passport_id !== assignment.passport_id
+        || assignment.assignment_document.assignee?.agent_principal_id !== assignment.agent_principal_id
+        || assignment.assignment_document.assignee?.work_intent_id !== assignment.work_intent_id
+        || assignment.assignment_document.assignee?.work_intent_digest !== assignment.work_intent_digest
+        || assignment.assignment_document.assigned_by_principal_id !== assignment.assigned_by_principal_id) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Coverage Interpretation Assignment does not match its immutable document.");
+    }
+  }
+  const assignmentsById = new Map(assignmentRows.map((item) => [item.assignment_id, item]));
+  for (const interpretation of interpretationRows) {
+    const assignment = assignmentsById.get(interpretation.assignment_id);
+    if (!assignment || interpretation.onboarding_id !== row.onboarding_id
+        || interpretation.snapshot_digest !== assignment.snapshot_digest
+        || Number(interpretation.base_onboarding_revision) !== Number(assignment.onboarding_revision)
+        || interpretation.base_event_head_digest !== assignment.event_head_digest
+        || interpretation.submitted_by_agent_principal_id !== assignment.agent_principal_id) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Workflow Interpretation does not match its exact immutable Assignment.");
+    }
+  }
+  const latestInterpretationEvent = [...events].reverse()
+    .find((event) => event.event_type === "interpretation_submitted");
+  const latestInterpretation = latestInterpretationEvent
+    ? interpretationsByEvent.get(latestInterpretationEvent.event_index) : null;
+  const activeInterpretation = latestInterpretation?.snapshot_digest === activeSnapshotDigest
+    ? latestInterpretation : null;
+  const activeAmbiguities = activeInterpretation ? ambiguityRows
+    .filter((item) => item.interpretation_digest === activeInterpretation.interpretation_digest)
+    .sort((left, right) => left.ambiguity_id.localeCompare(right.ambiguity_id)) : [];
+  const resolutionsByAmbiguity = new Map(resolutionRows.map((item) => [item.ambiguity_digest, item]));
+  const ambiguityProjection = activeAmbiguities.map((item) => {
+    const resolution = resolutionsByAmbiguity.get(item.ambiguity_digest) ?? null;
+    return {
+      ambiguity_id: item.ambiguity_id,
+      ambiguity_digest: item.ambiguity_digest,
+      kind: item.ambiguity_document.kind,
+      claim_references: item.ambiguity_document.claim_references,
+      question: item.ambiguity_document.question,
+      blocking: item.blocking,
+      choices: item.ambiguity_document.choices,
+      evidence_references: item.ambiguity_document.evidence_references,
+      status: resolution?.status ?? "open",
+      resolution: resolution ? {
+        resolution_id: resolution.resolution_id,
+        confirmation_digest: resolution.confirmation_digest,
+        resolution_digest: resolution.resolution_digest,
+        status: resolution.status,
+        resolved_by_principal_id: resolution.resolved_by_principal_id,
+        resolved_at: new Date(resolution.resolved_at).toISOString()
+      } : null,
+      authority: "none",
+      immutable: true
+    };
+  });
+  const blockingAmbiguityIds = ambiguityProjection
+    .filter((item) => item.blocking && item.status === "open").map((item) => item.ambiguity_id);
+  const unresolvedNonblockingAmbiguityIds = ambiguityProjection
+    .filter((item) => !item.blocking && item.status === "open").map((item) => item.ambiguity_id);
+  const limitations = [
+    ...(activeInterpretation?.claim_index ?? []).filter((item) => item.status === "unknown")
+      .map((item) => ({ type: "unknown_claim", subject_id: item.claim_id,
+        reason: item.unknown_reason, blocking: false })),
+    ...ambiguityProjection.filter((item) => !item.blocking && item.status !== "resolved")
+      .map((item) => ({ type: "coverage_ambiguity", subject_id: item.ambiguity_id,
+        reason: item.question, blocking: false }))
+  ];
+  const status = activeSnapshotDigest === null ? "gathering_evidence"
+    : activeInterpretation === null ? "interpreting"
+      : blockingAmbiguityIds.length > 0 ? "resolving_ambiguity" : "reviewable";
+  const legalNextOperations = [
+    "diagnostic.coverage_onboarding.get",
+    "diagnostic.coverage_onboarding.evidence_capture"
+  ];
+  const eligibleAssignment = assignmentRows.some((assignment) =>
+    assignment.snapshot_digest === activeSnapshotDigest
+    && Number(assignment.onboarding_revision) === events.length
+    && assignment.event_head_digest === prior
+    && !interpretationRows.some((interpretation) => interpretation.assignment_id === assignment.assignment_id));
+  if (activeSnapshotDigest && !activeInterpretation && !eligibleAssignment) {
+    legalNextOperations.push("diagnostic.coverage_interpretation.assign");
+  }
+  if (eligibleAssignment) legalNextOperations.push("diagnostic.coverage_interpretation.submit");
+  if (blockingAmbiguityIds.length > 0 || unresolvedNonblockingAmbiguityIds.length > 0) {
+    legalNextOperations.push("diagnostic.coverage_ambiguity.resolve");
+  }
   return {
     schema_version: COVERAGE_ONBOARDING_SCHEMA_VERSION,
     onboarding_id: row.onboarding_id,
@@ -498,9 +671,13 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = []) {
     identity_digest: row.identity_digest,
     revision: events.length,
     event_head_digest: prior,
-    status: activeSnapshotDigest ? "interpreting" : "gathering_evidence",
+    status,
     active_snapshot_digest: activeSnapshotDigest,
+    active_interpretation_digest: activeInterpretation?.interpretation_digest ?? null,
     superseded_snapshot_digests: [...new Set(superseded)],
+    superseded_interpretation_digests: interpretationRows
+      .filter((item) => item.interpretation_digest !== activeInterpretation?.interpretation_digest)
+      .map((item) => item.interpretation_digest),
     snapshot_history: snapshotRows.map((snapshot) => ({
       snapshot_digest: snapshot.snapshot_digest,
       source_scope_digest: snapshot.source_scope_digest,
@@ -511,10 +688,41 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = []) {
       captured_at: new Date(snapshot.captured_at).toISOString(),
       immutable: true
     })),
-    legal_next_operations: [
-      "diagnostic.coverage_onboarding.get",
-      "diagnostic.coverage_onboarding.evidence_capture"
-    ],
+    interpretation_history: interpretationRows.map((item) => ({
+      interpretation_id: item.interpretation_id,
+      interpretation_digest: item.interpretation_digest,
+      assignment_id: item.assignment_id,
+      snapshot_digest: item.snapshot_digest,
+      claims_digest: item.claims_digest,
+      claim_index: item.claim_index,
+      ambiguity_manifest_digest: item.ambiguity_manifest_digest,
+      supersedes_interpretation_digest: item.supersedes_interpretation_digest,
+      submitted_by_agent_principal_id: item.submitted_by_agent_principal_id,
+      proposed_at: new Date(item.proposed_at).toISOString(),
+      accepted_at: new Date(item.accepted_at).toISOString(),
+      immutable: true
+    })),
+    interpretation_assignments: assignmentRows.map((item) => ({
+      assignment_id: item.assignment_id,
+      assignment_digest: item.assignment_digest,
+      snapshot_digest: item.snapshot_digest,
+      onboarding_revision: Number(item.onboarding_revision),
+      event_head_digest: item.event_head_digest,
+      passport_id: item.passport_id,
+      agent_principal_id: item.agent_principal_id,
+      work_intent_id: item.work_intent_id,
+      assigned_by_principal_id: item.assigned_by_principal_id,
+      assigned_at: new Date(item.assigned_at).toISOString(),
+      expires_at: new Date(item.expires_at).toISOString(),
+      submitted: interpretationRows.some((interpretation) => interpretation.assignment_id === item.assignment_id),
+      immutable: true
+    })),
+    ambiguities: ambiguityProjection,
+    blocking_ambiguity_ids: blockingAmbiguityIds,
+    unresolved_nonblocking_ambiguity_ids: unresolvedNonblockingAmbiguityIds,
+    limitations,
+    review_eligible: status === "reviewable",
+    legal_next_operations: legalNextOperations,
     events,
     opened_at: new Date(row.opened_at).toISOString(),
     authority: {

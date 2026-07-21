@@ -17,6 +17,10 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.coverage_onboarding.open",
     "diagnostic.coverage_onboarding.evidence_capture",
     "diagnostic.coverage_onboarding.get",
+    "diagnostic.coverage_interpretation.assign",
+    "diagnostic.coverage_interpretation_assignment.get",
+    "diagnostic.coverage_interpretation.submit",
+    "diagnostic.coverage_ambiguity.resolve",
     "diagnostic.agent_workflow.register",
     "diagnostic.agent_workflow.get",
     "diagnostic.agent_revision.register",
@@ -142,6 +146,21 @@ test("Coverage Onboarding discovery is closed, append-only, and grants no downst
   assert.equal(read.effect_class, "read_only");
   assert.doesNotMatch(JSON.stringify([open, capture, read]),
     /provider_credential_value|registration_authority|execution_authority/);
+});
+
+test("workflow interpretation separates bounded agent proposals from named-human ambiguity resolution", () => {
+  const assign = getDiagnosticOperationDescriptor("diagnostic.coverage_interpretation.assign");
+  const submit = getDiagnosticOperationDescriptor("diagnostic.coverage_interpretation.submit");
+  const resolve = getDiagnosticOperationDescriptor("diagnostic.coverage_ambiguity.resolve");
+  assert.equal(assign.input_schema.properties.input.additionalProperties, false);
+  assert.equal(submit.input_schema.properties.input.additionalProperties, false);
+  assert.equal(submit.input_schema.properties.input.properties.claims.items.additionalProperties, false);
+  assert.equal(submit.authority_class, "authenticated_exactly_assigned_agent_passport");
+  assert.equal(resolve.authority_class, "named_customer_owner_or_exact_trusted_operator");
+  assert.ok(submit.preconditions.includes("all_citations_exist_in_assigned_snapshot"));
+  assert.ok(resolve.preconditions.includes("exact_active_ambiguity_digest"));
+  assert.doesNotMatch(JSON.stringify(submit.input_schema), /operator_confirmed|authority_granted/);
+  assert.doesNotMatch(JSON.stringify([assign, submit, resolve]), /external_effect|registration_authority/);
 });
 
 test("Diagnostic execution separates launch, running proof, and diagnosis ingestion", () => {
