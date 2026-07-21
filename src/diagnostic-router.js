@@ -46,7 +46,7 @@ export function createDiagnosticRouter(ctx) {
     requireDiagnosticDispatch, requireDiagnosticWorkerExecution, requireDiagnosticConsistency,
     requireDiagnosticDispatchAuthority, requireIndependentDiagnosticVerification,
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
-    requireDiagnosticVerification, requireDiagnosticPromotion
+    requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding
   } = ctx;
 
   return async function diagnosticRouter(request, response, url) {
@@ -502,6 +502,34 @@ export function createDiagnosticRouter(ctx) {
     if (!descriptor) throw new KernelError(404, "OPERATION_NOT_FOUND", "Diagnostic operation does not exist.");
     return sendJson(response, 200, descriptor);
     return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/diagnostic/v0/coverage-onboardings") {
+    const service = requireCoverageOnboarding();
+    const passport = await authenticateAgent(request);
+    return sendCommandResult(response,
+      await service.open(await readJson(request, 64 * 1024), passport));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/evidence-captures$/.test(url.pathname)) {
+    const service = requireCoverageOnboarding();
+    const passport = await authenticateAgent(request);
+    const body = await readJson(request, 64 * 1024);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    if (body?.input?.onboarding_id !== onboardingId) {
+      throw new KernelError(409, "COVERAGE_ONBOARDING_ROUTE_MISMATCH",
+        "Route onboarding ID must match evidence capture input.");
+    }
+    return sendCommandResult(response, await service.captureEvidence(body, passport));
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/coverage-onboardings/")) {
+    const service = requireCoverageOnboarding();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { coverage_onboarding: await service.get(
+      pathId(url.pathname, "/diagnostic/v0/coverage-onboardings/")
+    ) });
   }
 
   if (request.method === "POST" && url.pathname === "/diagnostic/v0/agent-workflows") {

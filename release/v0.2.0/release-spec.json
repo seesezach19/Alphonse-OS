@@ -81,7 +81,8 @@
     "021_material_availability_and_erasure.sql",
     "022_diagnostic_dispatch_claims.sql",
     "023_diagnostic_worker_execution.sql",
-    "024_diagnostic_consistency_tests.sql"
+    "024_diagnostic_consistency_tests.sql",
+    "025_coverage_onboarding.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

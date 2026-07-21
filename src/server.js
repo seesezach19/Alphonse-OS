@@ -3,6 +3,10 @@ import http from "node:http";
 
 import { canonicalize, sha256Digest } from "./canonical-json.js";
 import { createContentAddressedArtifactStore } from "./content-addressed-artifact-store.js";
+import {
+  createCoverageInventoryClient,
+  createCoverageOnboardingService
+} from "./coverage-onboarding-service.js";
 import { createContextService } from "./context-service.js";
 import { createDatabase } from "./database.js";
 import { createDeploymentService } from "./deployment-service.js";
@@ -51,7 +55,10 @@ import { createRuntimeDetailClient } from "./runtime-detail-client.js";
 import { createSupportService } from "./support-service.js";
 import { createUpgradeService } from "./upgrade-service.js";
 import { validateProfileUpdateCommand } from "./validation.js";
-import { getWorkflowRuntimeAdapterContract } from "./workflow-runtime-adapter-contract.js";
+import {
+  getWorkflowRuntimeAdapterContract,
+  WORKFLOW_RUNTIME_ADAPTER_CONTRACT_VERSION
+} from "./workflow-runtime-adapter-contract.js";
 import { getRepairDeliveryAdapterContract } from "./repair-delivery-adapter-contract.js";
 import { getVerificationRunnerContract } from "./diagnostic-verification-contracts.js";
 import { createVerificationRunnerClient } from "./verification-runner-client.js";
@@ -184,6 +191,7 @@ let diagnosticDispatchService = null;
 let diagnosticDispatchAuthorizationService = null;
 let diagnosticWorkerExecutionService = null;
 let diagnosticConsistencyService = null;
+let coverageOnboardingService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -273,6 +281,24 @@ const grantAuthorityService = grantAuthorityConfigured
   })
   : null;
 if (diagnosticDatabase) {
+  coverageOnboardingService = createCoverageOnboardingService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    identityIntent,
+    inventoryClient: diagnosticRuntimeDetailUrl && diagnosticRuntimeDetailToken
+      ? createCoverageInventoryClient({
+        baseUrl: diagnosticRuntimeDetailUrl,
+        token: diagnosticRuntimeDetailToken
+      })
+      : null,
+    installationId,
+    environmentId,
+    runtimeAdapter: {
+      adapter_id: diagnosticRuntimeAdapterId,
+      adapter_version: diagnosticRuntimeAdapterVersion,
+      contract_version: WORKFLOW_RUNTIME_ADAPTER_CONTRACT_VERSION
+    }
+  });
   if (grantAuthorityConfigured) {
     diagnosticGrantApplicationService = createDiagnosticGrantApplicationService(
       diagnosticDatabase, installationId, {
@@ -548,7 +574,8 @@ const routeHelpers = createRouteHelpers({
   diagnosticConsistencyService, diagnosticDispatchAuthorizationService,
   diagnosticIndependentVerificationService, diagnosticRepairWorkerService,
   diagnosticDiagnosisService, diagnosticRepairDeliveryService,
-  diagnosticVerificationService, diagnosticPromotionService
+  diagnosticVerificationService, diagnosticPromotionService,
+  coverageOnboardingService
 });
 
 const routeContext = createRouteContext({
@@ -564,6 +591,7 @@ const routeContext = createRouteContext({
   diagnosticMaterialAvailabilityService, diagnosticDispatchService,
   diagnosticDispatchAuthorizationService, diagnosticWorkerExecutionService,
   diagnosticConsistencyService,
+  coverageOnboardingService,
   installationId, environmentId, environmentName,
   grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
   dataPlaneReceiptSecret, dataPlaneId,

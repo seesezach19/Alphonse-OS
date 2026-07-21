@@ -14,6 +14,9 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.workflow_runtime_adapter.contract.get",
     "diagnostic.repair_delivery_adapter.contract.get",
     "diagnostic.verification_runner.contract.get",
+    "diagnostic.coverage_onboarding.open",
+    "diagnostic.coverage_onboarding.evidence_capture",
+    "diagnostic.coverage_onboarding.get",
     "diagnostic.agent_workflow.register",
     "diagnostic.agent_workflow.get",
     "diagnostic.agent_revision.register",
@@ -123,6 +126,22 @@ test("Diagnostic dispatch consumes exact Kernel authority without launching work
 
   const run = getDiagnosticOperationDescriptor("diagnostic.worker_run.get");
   assert.equal(run.effect_class, "read_only");
+});
+
+test("Coverage Onboarding discovery is closed, append-only, and grants no downstream authority", () => {
+  const open = getDiagnosticOperationDescriptor("diagnostic.coverage_onboarding.open");
+  const capture = getDiagnosticOperationDescriptor("diagnostic.coverage_onboarding.evidence_capture");
+  const read = getDiagnosticOperationDescriptor("diagnostic.coverage_onboarding.get");
+  assert.equal(open.input_schema.additionalProperties, false);
+  assert.equal(open.input_schema.properties.input.additionalProperties, false);
+  assert.equal(capture.input_schema.properties.input.additionalProperties, false);
+  assert.equal(capture.input_schema.properties.input.properties.selection.additionalProperties, false);
+  assert.equal(open.output_schema.additionalProperties, false);
+  assert.equal(capture.output_schema.additionalProperties, false);
+  assert.equal(capture.effect_class, "content_addressed_evidence_and_append_only_state_transition");
+  assert.equal(read.effect_class, "read_only");
+  assert.doesNotMatch(JSON.stringify([open, capture, read]),
+    /provider_credential_value|registration_authority|execution_authority/);
 });
 
 test("Diagnostic execution separates launch, running proof, and diagnosis ingestion", () => {
