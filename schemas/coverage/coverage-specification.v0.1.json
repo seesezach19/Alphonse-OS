@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.alphonse.local/coverage/coverage-specification.v0.1.json",
+  "title": "Coverage Specification v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "compilation_input_digest", "review_bundle_digest", "approval_digest", "workflow_identity", "revision_closure", "effect_inventory", "evidence_and_redaction_policy", "capability_prerequisites", "unknowns", "limitations", "contract_references", "fixture_references", "adapter_and_binding_references", "authority"],
+  "properties": {
+    "schema_version": { "const": "alphonse.coverage-specification.v0.1" },
+    "compilation_input_digest": { "$ref": "#/$defs/digest" },
+    "review_bundle_digest": { "$ref": "#/$defs/digest" },
+    "approval_digest": { "$ref": "#/$defs/digest" },
+    "workflow_identity": { "type": "object", "additionalProperties": false, "required": ["system", "environment", "provider_workflow_id", "workflow_reference_digest"], "properties": { "system": { "type": "string" }, "environment": { "type": "string" }, "provider_workflow_id": { "type": "string" }, "workflow_reference_digest": { "$ref": "#/$defs/digest" } } },
+    "revision_closure": { "type": "object", "additionalProperties": false, "required": ["onboarding_id", "onboarding_revision", "event_head_digest", "snapshot_digest", "interpretation_digest"], "properties": { "onboarding_id": { "type": "string", "format": "uuid" }, "onboarding_revision": { "type": "integer" }, "event_head_digest": { "$ref": "#/$defs/digest" }, "snapshot_digest": { "$ref": "#/$defs/digest" }, "interpretation_digest": { "$ref": "#/$defs/digest" } } },
+    "effect_inventory": { "type": "array", "items": { "type": "object" } },
+    "evidence_and_redaction_policy": { "type": "object" },
+    "capability_prerequisites": { "type": "object" },
+    "unknowns": { "type": "array", "items": { "type": "object" } },
+    "limitations": { "type": "array", "items": { "type": "string" } },
+    "contract_references": { "type": "array", "items": { "$ref": "#/$defs/reference" } },
+    "fixture_references": { "type": "array", "items": { "$ref": "#/$defs/reference" } },
+    "adapter_and_binding_references": { "type": "object" },
+    "authority": { "const": "none" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "reference": { "type": "object", "additionalProperties": false, "required": ["reference_kind", "reference_id", "artifact_digest"], "properties": { "reference_kind": { "type": "string" }, "reference_id": { "type": "string" }, "artifact_digest": { "$ref": "#/$defs/digest" } } }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.alphonse.local/coverage/workflow-manifest.v0.1.json",
+  "title": "Workflow Manifest Proposal v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "semantic_material", "authority"],
+  "properties": {
+    "schema_version": { "const": "alphonse.workflow-manifest.v0.1" },
+    "semantic_material": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workflow_identity", "revision", "coverage", "contracts", "fixtures", "bindings", "base_manifest_reference"],
+      "properties": {
+        "workflow_identity": { "type": "object" },
+        "revision": { "type": "object" },
+        "coverage": { "type": "object" },
+        "contracts": { "type": "object" },
+        "fixtures": { "type": "array" },
+        "bindings": { "type": "object" },
+        "base_manifest_reference": { "type": ["object", "null"] }
+      }
+    },
+    "authority": { "const": "none" }
+  }
+}

@@ -23,6 +23,10 @@ test("Diagnostic Protocol is self-describing and authority-free", () => {
     "diagnostic.coverage_ambiguity.resolve",
     "diagnostic.coverage_review_bundle.create",
     "diagnostic.coverage_review_bundle.get",
+    "diagnostic.coverage_specification.compile",
+    "diagnostic.coverage_specification.get",
+    "diagnostic.coverage_specification.validate",
+    "diagnostic.coverage_validation.get",
     "diagnostic.agent_workflow.register",
     "diagnostic.agent_workflow.get",
     "diagnostic.agent_revision.register",
@@ -175,6 +179,20 @@ test("coverage review discovery freezes exact bytes and exposes no execution aut
     "content_addressed_review_bundle_and_append_only_state_transition");
   assert.equal(read.effect_class, "read_only");
   assert.doesNotMatch(JSON.stringify([create, read]), /provider_credential_value|workflow_execution_authority/);
+});
+
+test("coverage compilation is implementation-bound, fail-closed, and never grants registration", () => {
+  const compile = getDiagnosticOperationDescriptor("diagnostic.coverage_specification.compile");
+  const validate = getDiagnosticOperationDescriptor("diagnostic.coverage_specification.validate");
+  const receipt = getDiagnosticOperationDescriptor("diagnostic.coverage_validation.get");
+  assert.equal(compile.input_schema.properties.input.additionalProperties, false);
+  assert.equal(compile.input_schema.properties.input.properties.compiler.additionalProperties, false);
+  assert.equal(validate.input_schema.properties.input.additionalProperties, false);
+  assert.ok(validate.outcomes.includes("invalid_proposal_receipt_visible"));
+  assert.ok(validate.outcomes.includes("registration_request_not_granted"));
+  assert.equal(receipt.effect_class, "read_only");
+  assert.doesNotMatch(JSON.stringify([compile, validate, receipt]),
+    /workflow_execution_authority|registration_authority|repair_authority|promotion_authority/);
 });
 
 test("Diagnostic execution separates launch, running proof, and diagnosis ingestion", () => {

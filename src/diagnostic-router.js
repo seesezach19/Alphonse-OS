@@ -47,7 +47,7 @@ export function createDiagnosticRouter(ctx) {
     requireDiagnosticDispatchAuthority, requireIndependentDiagnosticVerification,
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
     requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding,
-    requireWorkflowInterpretation, requireCoverageReview
+    requireWorkflowInterpretation, requireCoverageReview, requireCoverageCompilation
   } = ctx;
 
   return async function diagnosticRouter(request, response, url) {
@@ -583,6 +583,50 @@ export function createDiagnosticRouter(ctx) {
     authenticateBootstrapOperator(request);
     return sendJson(response, 200, { coverage_review_bundle: await service.get(
       pathId(url.pathname, "/diagnostic/v0/coverage-review-bundles/")
+    ) });
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/coverage-compilations$/.test(url.pathname)) {
+    const service = requireCoverageCompilation();
+    const passport = await authenticateAgent(request);
+    const body = await readJson(request, 2 * 1024 * 1024);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    if (body?.input?.onboarding_id !== onboardingId) {
+      throw new KernelError(409, "COVERAGE_ONBOARDING_ROUTE_MISMATCH",
+        "Route onboarding ID must match Coverage Compilation input.");
+    }
+    return sendCommandResult(response, await service.compile(body, passport));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/coverage-compilations\/[^/]+\/validations$/.test(url.pathname)) {
+    const service = requireCoverageCompilation();
+    const passport = await authenticateAgent(request);
+    const body = await readJson(request, 2 * 1024 * 1024);
+    const compilationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    if (body?.input?.compilation_id !== compilationId) {
+      throw new KernelError(409, "COVERAGE_COMPILATION_ROUTE_MISMATCH",
+        "Route compilation ID must match Coverage Validation input.");
+    }
+    return sendCommandResult(response, await service.validate(body, passport));
+  }
+
+  if (request.method === "GET"
+      && url.pathname.startsWith("/diagnostic/v0/coverage-compilations/")) {
+    const service = requireCoverageCompilation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { coverage_compilation: await service.getCompilation(
+      pathId(url.pathname, "/diagnostic/v0/coverage-compilations/")
+    ) });
+  }
+
+  if (request.method === "GET"
+      && url.pathname.startsWith("/diagnostic/v0/coverage-validations/")) {
+    const service = requireCoverageCompilation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { coverage_validation: await service.getValidation(
+      pathId(url.pathname, "/diagnostic/v0/coverage-validations/")
     ) });
   }
 

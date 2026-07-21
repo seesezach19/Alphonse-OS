@@ -432,7 +432,8 @@ function eventView(row) {
 }
 
 export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], interpretationRows = [],
-  ambiguityRows = [], resolutionRows = [], assignmentRows = [], reviewBundleRows = []) {
+  ambiguityRows = [], resolutionRows = [], assignmentRows = [], reviewBundleRows = [],
+  compilationRows = [], validationRows = []) {
   const events = eventRows.map(eventView);
   if (events.length === 0 || events[0].event_index !== 1 || events[0].event_type !== "opened") {
     throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
@@ -478,6 +479,44 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
     } else if (snapshot) {
       throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
         "Workflow Discovery Snapshot is not bound to a capture event.");
+    }
+  }
+  const compilationsByEvent = new Map(compilationRows.map((item) => [Number(item.event_index), item]));
+  const validationsByEvent = new Map(validationRows.map((item) => [Number(item.event_index), item]));
+  for (const event of events) {
+    const compilation = compilationsByEvent.get(event.event_index);
+    const validation = validationsByEvent.get(event.event_index);
+    if (event.event_type === "coverage_compiled") {
+      if (!compilation || compilation.compilation_id !== event.payload.compilation_id
+          || compilation.compilation_input_digest !== event.payload.compilation_input_digest
+          || compilation.compiler_artifact_digest !== event.payload.compiler_artifact_digest
+          || compilation.coverage_specification_digest !== event.payload.coverage_specification_digest
+          || compilation.workflow_manifest_proposal_digest
+            !== event.payload.workflow_manifest_proposal_digest
+          || compilation.review_bundle_digest !== event.payload.review_bundle_digest
+          || compilation.approval_digest !== event.payload.approval_digest) {
+        throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+          "Coverage compilation row does not match its append-only event.");
+      }
+    } else if (compilation) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Coverage compilation is not bound to a compilation event.");
+    }
+    if (event.event_type === "coverage_validated") {
+      if (!validation || validation.validation_id !== event.payload.validation_id
+          || validation.compilation_id !== event.payload.compilation_id
+          || validation.validation_input_digest !== event.payload.validation_input_digest
+          || validation.validator_artifact_digest !== event.payload.validator_artifact_digest
+          || validation.validation_receipt_digest !== event.payload.validation_receipt_digest
+          || validation.status !== event.payload.status
+          || validation.eligible_workflow_manifest_proposal_digest
+            !== event.payload.workflow_manifest_proposal_digest) {
+        throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+          "Coverage validation row does not match its append-only event.");
+      }
+    } else if (validation) {
+      throw new KernelError(500, "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION",
+        "Coverage validation is not bound to a validation event.");
     }
   }
   const activeSnapshotDigest = [...events].reverse().find((event) =>
@@ -674,8 +713,16 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
   const activeReviewBundle = latestBundleEvent
     && (!latestInvalidationEvent || latestInvalidationEvent.event_index < latestBundleEvent.event_index)
     ? reviewBundlesByEvent.get(latestBundleEvent.event_index) : null;
+  const activeCompilation = activeReviewBundle ? [...compilationRows].reverse()
+    .find((item) => item.review_bundle_digest === activeReviewBundle.review_bundle_digest
+      && Number(item.event_index) > Number(activeReviewBundle.event_index)) ?? null : null;
+  const activeValidation = activeCompilation ? [...validationRows].reverse()
+    .find((item) => item.compilation_id === activeCompilation.compilation_id
+      && Number(item.event_index) > Number(activeCompilation.event_index)) ?? null : null;
   const reviewRequired = reviewBundleRows.length > 0 && !activeReviewBundle;
-  const status = activeReviewBundle ? "awaiting_approval" : reviewRequired ? "review_required" : baseStatus;
+  const status = activeValidation ? activeValidation.status === "valid" ? "validated" : "validation_failed"
+    : activeCompilation ? "compiled"
+      : activeReviewBundle ? "awaiting_approval" : reviewRequired ? "review_required" : baseStatus;
   const legalNextOperations = [
     "diagnostic.coverage_onboarding.get",
     "diagnostic.coverage_onboarding.evidence_capture"
@@ -695,7 +742,15 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
   if (!activeReviewBundle && baseStatus === "reviewable") {
     legalNextOperations.push("diagnostic.coverage_review_bundle.create");
   }
-  if (activeReviewBundle) legalNextOperations.push("kernel.coverage_review.approve");
+  if (activeReviewBundle && !activeCompilation) {
+    legalNextOperations.push("kernel.coverage_review.approve");
+    legalNextOperations.push("diagnostic.coverage_specification.compile");
+  }
+  if (activeCompilation && !activeValidation) {
+    legalNextOperations.push("diagnostic.coverage_specification.validate");
+  }
+  if (activeCompilation) legalNextOperations.push("diagnostic.coverage_specification.get");
+  if (activeValidation) legalNextOperations.push("diagnostic.coverage_validation.get");
   return {
     schema_version: COVERAGE_ONBOARDING_SCHEMA_VERSION,
     onboarding_id: row.onboarding_id,
@@ -715,6 +770,13 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
     active_interpretation_digest: activeInterpretation?.interpretation_digest ?? null,
     active_review_bundle_digest: activeReviewBundle?.review_bundle_digest ?? null,
     latest_review_invalidation_event_digest: latestInvalidationEvent?.event_digest ?? null,
+    active_compilation_id: activeCompilation?.compilation_id ?? null,
+    active_coverage_specification_digest: activeCompilation?.coverage_specification_digest ?? null,
+    active_workflow_manifest_proposal_digest:
+      activeCompilation?.workflow_manifest_proposal_digest ?? null,
+    active_validation_id: activeValidation?.validation_id ?? null,
+    active_validation_receipt_digest: activeValidation?.validation_receipt_digest ?? null,
+    validation_status: activeValidation?.status ?? null,
     superseded_snapshot_digests: [...new Set(superseded)],
     superseded_interpretation_digests: interpretationRows
       .filter((item) => item.interpretation_digest !== activeInterpretation?.interpretation_digest)
@@ -770,6 +832,32 @@ export function projectCoverageOnboarding(row, eventRows, snapshotRows = [], int
       event_index: Number(item.event_index),
       created_by: { type: item.created_by_actor_type, id: item.created_by_actor_id },
       created_at: new Date(item.created_at).toISOString(),
+      immutable: true
+    })),
+    compilation_history: compilationRows.map((item) => ({
+      compilation_id: item.compilation_id,
+      review_bundle_digest: item.review_bundle_digest,
+      approval_id: item.approval_id,
+      approval_digest: item.approval_digest,
+      compilation_input_digest: item.compilation_input_digest,
+      compiler_artifact_digest: item.compiler_artifact_digest,
+      coverage_specification_digest: item.coverage_specification_digest,
+      workflow_manifest_proposal_digest: item.workflow_manifest_proposal_digest,
+      event_index: Number(item.event_index),
+      compiled_at: new Date(item.compiled_at).toISOString(),
+      immutable: true
+    })),
+    validation_history: validationRows.map((item) => ({
+      validation_id: item.validation_id,
+      compilation_id: item.compilation_id,
+      validation_input_digest: item.validation_input_digest,
+      validator_artifact_digest: item.validator_artifact_digest,
+      validation_receipt_digest: item.validation_receipt_digest,
+      status: item.status,
+      workflow_manifest_proposal_digest: item.eligible_workflow_manifest_proposal_digest,
+      event_index: Number(item.event_index),
+      validated_at: new Date(item.validated_at).toISOString(),
+      authority: "none",
       immutable: true
     })),
     ambiguities: ambiguityProjection,

@@ -11,6 +11,7 @@ import { WORKFLOW_DISCOVERY_EXCLUDED_FIELDS } from "../src/coverage-onboarding-c
 import { createCoverageOnboardingService } from "../src/coverage-onboarding-service.js";
 import { createCoverageReviewService } from "../src/coverage-review-service.js";
 import { createCoverageReviewApprovalService } from "../src/coverage-review-approval-service.js";
+import { createCoverageCompilationService } from "../src/coverage-compilation-service.js";
 import {
   COVERAGE_REVIEW_AUTHORITY_DENIED,
   COVERAGE_REVIEW_AUTHORITY_GRANTED
@@ -224,7 +225,40 @@ function createServices(identityIntent, artifactStore, inventoryClient) {
     installationId,
     environmentId
   });
-  return { onboarding, interpretation, review, approval };
+  const compilation = createCoverageCompilationService({
+    database: diagnosticDatabase,
+    artifactStore,
+    coverageOnboardingService: onboarding,
+    coverageReviewService: review,
+    coverageReviewApprovalService: approval,
+    installationId,
+    environmentId
+  });
+  return { onboarding, interpretation, review, approval, compilation };
+}
+
+async function seedReviewReferences(artifactStore) {
+  const definitions = [
+    ["integration_contract", "inventory-api-v1", { operation: "inventory.lookup", version: "1" }],
+    ["behavior_contract", "inventory-behavior-v1", { invariant: "failure_is_visible", version: "1" }],
+    ["fixture", "empty-inventory-v1", { fixture: "empty_inventory", expected: "no_items" }],
+    ["repair_binding", "inventory-repair-v1", { binding: "inventory-repair", version: "1" }],
+    ["verification_strategy", "inventory-verification-v1", { strategy: "deterministic_fixture", version: "1" }],
+    ["coverage_profile", "inventory-coverage-v1", { profile: "inventory-baseline", version: "1" }]
+  ];
+  const references = {};
+  for (const [referenceKind, referenceId, content] of definitions) {
+    const stored = await artifactStore.putJson(content);
+    await diagnosticDatabase.pool.query(
+      `INSERT INTO diagnostic_artifacts
+        (installation_id,artifact_digest,size_bytes,media_type,storage_key,created_at)
+       VALUES ($1,$2,$3,$4,$5,now()) ON CONFLICT (installation_id,artifact_digest) DO NOTHING`,
+      [installationId, stored.artifact_digest, stored.size_bytes, stored.media_type, stored.storage_key]
+    );
+    references[referenceKind] = { reference_kind: referenceKind,
+      reference_id: referenceId, artifact_digest: stored.artifact_digest };
+  }
+  return references;
 }
 
 function openInput(identity) {
@@ -518,18 +552,19 @@ try {
     item.subject_id === "fixture.edge_case"), true);
   assert.deepEqual(resolvedNonblocking.result.coverage_onboarding.unresolved_nonblocking_ambiguity_ids, []);
 
+  const references = await seedReviewReferences(artifactStore);
   const reviewInput = {
     onboarding_id: onboardingId,
     expected_revision: 6,
     expected_event_head_digest: resolvedNonblocking.result.coverage_onboarding.event_head_digest,
     snapshot_digest: snapshotDigest,
     interpretation_digest: interpretationDigest,
-    integration_contract_references: [],
-    behavior_contract_references: [],
-    fixture_references: [],
-    repair_binding_reference: null,
-    verification_strategy_reference: null,
-    coverage_profile_reference: null
+    integration_contract_references: [references.integration_contract],
+    behavior_contract_references: [references.behavior_contract],
+    fixture_references: [references.fixture],
+    repair_binding_reference: references.repair_binding,
+    verification_strategy_reference: references.verification_strategy,
+    coverage_profile_reference: references.coverage_profile
   };
   const reviewCommand = command(
     "coverage-review-bundle", "diagnostic.coverage_review_bundle.create", reviewInput
@@ -590,10 +625,71 @@ try {
     `UPDATE kernel_coverage_review_approvals SET rationale='changed' WHERE approval_id=$1`, [approvalId]
   ), /immutable Kernel record cannot be updated or deleted/);
 
+  const approvalRecord = approved.result.coverage_review_approval;
+  const compileInput = {
+    onboarding_id: onboardingId,
+    review_bundle_digest: reviewBundle.review_bundle_digest,
+    approval_id: approvalId,
+    approval_digest: approvalRecord.approval_digest,
+    expected_review_state_digest: approvalRecord.review_state_digest,
+    base_manifest_reference: null,
+    compiler: services.compilation.compiler
+  };
+  const compiled = await services.compilation.compile(command(
+    "coverage-compile", "diagnostic.coverage_specification.compile", compileInput
+  ), resumedPassport);
+  const compilation = compiled.result.coverage_compilation;
+  assert.equal(compiled.result.coverage_onboarding.revision, 8);
+  assert.equal(compiled.result.coverage_onboarding.status, "compiled");
+  assert.equal(compilation.compilation_input_digest, sha256Digest(compilation.compilation_input));
+  assert.equal(compilation.coverage_specification_digest,
+    sha256Digest(compilation.coverage_specification));
+  assert.equal(compilation.workflow_manifest_proposal_digest,
+    sha256Digest(compilation.workflow_manifest_proposal));
+  assert.equal(compilation.authority, "none");
+  assert.doesNotMatch(JSON.stringify(compilation.workflow_manifest_proposal),
+    /statement|unknown_reason|rationale|proposed_at|compiled_at/i);
+  const compileReuse = await services.compilation.compile(command(
+    "coverage-compile-semantic-reuse", "diagnostic.coverage_specification.compile", compileInput
+  ), resumedPassport);
+  assert.equal(compileReuse.result.created, false);
+  assert.equal(compileReuse.result.coverage_compilation.compilation_id, compilation.compilation_id);
+  assert.equal(compileReuse.result.coverage_onboarding.revision, 8);
+  await assert.rejects(() => services.compilation.compile(command(
+    "coverage-compile", "diagnostic.coverage_specification.compile",
+    { ...compileInput, base_manifest_reference: references.coverage_profile }
+  ), resumedPassport), (error) => error.code === "IDEMPOTENCY_CONFLICT");
+  assert.equal((await services.approval.get(approvalId)).status, "eligible");
+
+  const validationInput = {
+    onboarding_id: onboardingId,
+    compilation_id: compilation.compilation_id,
+    compilation_input_digest: compilation.compilation_input_digest,
+    coverage_specification_digest: compilation.coverage_specification_digest,
+    workflow_manifest_proposal_digest: compilation.workflow_manifest_proposal_digest,
+    validator: services.compilation.validator
+  };
+  const validated = await services.compilation.validate(command(
+    "coverage-validate", "diagnostic.coverage_specification.validate", validationInput
+  ), resumedPassport);
+  const validation = validated.result.coverage_validation;
+  assert.equal(validated.result.coverage_onboarding.revision, 9);
+  assert.equal(validated.result.coverage_onboarding.status, "validated");
+  assert.equal(validation.status, "valid");
+  assert.equal(validation.receipt.downstream_eligibility.source_control_proposal, true);
+  assert.equal(validation.receipt.downstream_eligibility.registration_request, false);
+  assert.equal(validation.registration_request_eligible, false);
+  assert.equal(validation.authority, "none");
+  assert.equal((await services.compilation.getCompilation(compilation.compilation_id))
+    .workflow_manifest_proposal_digest, compilation.workflow_manifest_proposal_digest);
+  assert.equal((await services.compilation.getValidation(validation.validation_id))
+    .validation_receipt_digest, validation.validation_receipt_digest);
+  assert.equal((await services.approval.get(approvalId)).status, "eligible");
+
   const secondAssignment = await services.interpretation.assign(command(
     "interpretation-assign-stale", "diagnostic.coverage_interpretation.assign", {
       ...assignCommand.input,
-      expected_revision: 7,
+      expected_revision: 9,
       expires_at: new Date(Date.now() + 25 * 60_000).toISOString()
     }
   ), owner);
@@ -605,9 +701,9 @@ try {
   });
   const recaptured = await services.onboarding.captureEvidence(command(
     "interpretation-recapture", "diagnostic.coverage_onboarding.evidence_capture",
-    captureInput(identity, onboardingId, 7, page)
+    captureInput(identity, onboardingId, 9, page)
   ), resumedPassport);
-  assert.equal(recaptured.result.coverage_onboarding.revision, 9);
+  assert.equal(recaptured.result.coverage_onboarding.revision, 11);
   assert.equal(recaptured.result.coverage_onboarding.status, "review_required");
   assert.equal(recaptured.result.coverage_onboarding.active_review_bundle_digest, null);
   assert.ok(recaptured.result.coverage_onboarding.latest_review_invalidation_event_digest);
@@ -637,9 +733,11 @@ try {
   services = createServices(identityIntent, artifactStore, inventoryClient);
   const recovered = await services.onboarding.get(onboardingId);
   assert.equal(recovered.event_head_digest, headBeforeRestart);
-  assert.equal(recovered.revision, 9);
+  assert.equal(recovered.revision, 11);
   assert.equal(recovered.status, "review_required");
   assert.equal(recovered.review_bundle_history.length, 1);
+  assert.equal(recovered.compilation_history.length, 1);
+  assert.equal(recovered.validation_history.length, 1);
   assert.equal(recovered.interpretation_history.length, 1);
   assert.equal(recovered.ambiguities.length, 0, "stale ambiguity material must not project as active");
   const counts = await Promise.all([
@@ -650,15 +748,19 @@ try {
     diagnosticDatabase.pool.query(
       "SELECT count(*) FROM diagnostic_coverage_ambiguity_resolutions WHERE installation_id=$1", [installationId]),
     diagnosticDatabase.pool.query(
-      "SELECT count(*) FROM diagnostic_coverage_review_bundles WHERE installation_id=$1", [installationId])
+      "SELECT count(*) FROM diagnostic_coverage_review_bundles WHERE installation_id=$1", [installationId]),
+    diagnosticDatabase.pool.query(
+      "SELECT count(*) FROM diagnostic_coverage_compilations WHERE installation_id=$1", [installationId]),
+    diagnosticDatabase.pool.query(
+      "SELECT count(*) FROM diagnostic_coverage_validations WHERE installation_id=$1", [installationId])
   ]);
-  assert.deepEqual(counts.map((item) => item.rows[0].count), ["1", "2", "2", "1"]);
+  assert.deepEqual(counts.map((item) => item.rows[0].count), ["1", "2", "2", "1", "1", "1"]);
   const kernelRuns = await kernelDatabase.pool.query("SELECT count(*) FROM kernel_runs");
   assert.equal(kernelRuns.rows[0].count, "0");
 
   passed = true;
   console.log(JSON.stringify({
-    proof: "workflow-interpretation-coverage-review-and-exact-human-approval",
+    proof: "workflow-interpretation-review-approval-deterministic-compilation-and-validation",
     fresh_database: true,
     pause_resume_recovered: true,
     restart_recovered: true,
@@ -677,6 +779,14 @@ try {
     immutable_resolutions: 2,
     immutable_review_bundles: 1,
     immutable_review_approvals: 1,
+    immutable_coverage_compilations: 1,
+    immutable_coverage_validations: 1,
+    deterministic_semantic_compile_reuse: true,
+    compilation_and_validation_implementation_bound: true,
+    compiled_manifest_contains_agent_prose: false,
+    validation_status: "valid",
+    source_control_proposal_eligible: true,
+    validation_registration_request_eligible: false,
     exact_human_review_approval_bound: identity.humanPrincipalId,
     machine_approval_admitted: false,
     expanded_authority_admitted: false,

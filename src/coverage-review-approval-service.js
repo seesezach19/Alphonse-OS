@@ -74,9 +74,7 @@ export function createCoverageReviewApprovalService({ database, identityIntent, 
     const expired = row.valid_until !== null && Date.now() >= Date.parse(row.valid_until);
     const current = bundleState !== null
       && bundleState.review_bundle.review_bundle_digest === row.review_bundle_digest
-      && bundleState.onboarding.revision === Number(row.review_state.onboarding_revision)
-      && bundleState.onboarding.event_head_digest === row.review_state.event_head_digest
-      && bundleState.onboarding.status === row.review_state.status;
+      && bundleState.onboarding.active_review_bundle_digest === row.review_bundle_digest;
     const eligible = current && !expired;
     return {
       approval_id: row.approval_id,

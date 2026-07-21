@@ -1,8 +1,8 @@
 # Workflow Coverage Onboarding Domain And Compilation Contract
 
-Issue #3 defines the documentation boundary for agent-driven reverse specification of existing n8n workflows. It
-adds no implementation code and changes no existing authority, diagnostic, repair, verification, or promotion
-semantics.
+This document began as Issue #3's architecture boundary for agent-driven reverse specification of existing n8n
+workflows. It now also records the incrementally implemented Coverage Onboarding contracts while preserving the
+existing authority, diagnostic, repair, verification, and promotion separations.
 
 ## Current-State Map
 
@@ -20,6 +20,7 @@ semantics.
 | Coverage Onboarding evidence | The Diagnostic Plane now opens one Work Intent-, Passport-, environment-, workflow-, and adapter-bound Coverage Onboarding and freezes selected inventory metadata into immutable content-addressed Workflow Discovery Snapshots (`src/coverage-onboarding-contracts.js`, `src/coverage-onboarding-service.js`, `diagnostic-migrations/025_coverage_onboarding.sql`). Current state is derived from a digest-chained append-only event stream; material recapture preserves and visibly supersedes the prior snapshot. | Reuse for durable discovery evidence only. The projection grants no registration, execution, monitoring, repair, activation, or coverage-claim authority; interpretation consumes this evidence through the separate bounded seam below. |
 | Workflow interpretation and ambiguity | The Diagnostic Plane now creates immutable named-owner Interpretation Assignments over one exact active snapshot, admits closed evidence-linked agent claims, projects typed Coverage Ambiguities, and appends exact named-human resolutions (`src/workflow-interpretation-contracts.js`, `src/workflow-interpretation-service.js`, `diagnostic-migrations/026_workflow_interpretation.sql`). Every claim cites existing JSON-pointer material in the admitted snapshot; recapture makes stale assignments and interpretations ineligible without erasing them. | Reuse for authority-free proposed meaning and review eligibility. Blocking ambiguities prevent reviewability; nonblocking unknowns remain explicit limitations. |
 | Coverage Review Bundle and Approval | Diagnostic assembles one immutable content-addressed bundle over the exact snapshot, interpretation, confirmation, and admitted reference digests (`src/coverage-review-contracts.js`, `src/coverage-review-service.js`, `diagnostic-migrations/027_coverage_review_bundles.sql`). Kernel records a named-human Approval over the exact bundle, Work Intent, workflow scope, rationale, and validity (`src/coverage-review-approval-service.js`, `migrations/024_coverage_review_approvals.sql`). Later material change appends `review_invalidated`; the historical bytes and Approval remain immutable while current eligibility derives as `review_required`. | Approval grants only eligibility to compile the exact bundle and request its exact registration. It grants no source-control, import, registration, credential, execution, repair, verification, promotion, target-change, or external-effect authority. |
+| Coverage compilation and validation | Diagnostic deterministically compiles one exact currently eligible review approval into immutable content-addressed Coverage Specification and Workflow Manifest proposal bytes, then records a fail-closed Coverage Validation Receipt (`src/coverage-compilation-contracts.js`, `src/coverage-compilation-service.js`, `diagnostic-migrations/028_coverage_compilation_validation.sql`). Compiler and validator identities bind their transitive source, schemas, migrations, runtime, and lockfile. | A valid receipt makes the proposal eligible for a separate source-control proposal only. It never requests or grants manifest import, registration, activation, execution, repair, verification, promotion, target change, or external effects. |
 | n8n observation | The current observer polls only execution IDs previously nominated through its internal signal endpoint and keeps pending state locally (`src/canonical-n8n-observer.js:24-27`, `src/canonical-n8n-observer.js:108-123`, `src/canonical-n8n-observer.js:136-161`). | Complete cursor-based reconciliation and durable intervals are separate follow-on work. This issue defines only their capability boundary. |
 | Contracts and policy | Reference deployment code manually constructs Integration Behavior Contract, Behavior Contract, evidence selection, and retention exports (`scripts/canonical-proof-deployment-fixture.js:245-363`). Behavior Contracts are already optional (`CONTEXT.md:659-681`). Package validation accepts a finite export-kind set and currently rejects `coverage_profile` as unknown (`src/package-service.js:21`, `src/package-service.js:237-240`). | Reuse exact contract exports. Extend the Operational Package export contract with versioned `coverage_profile` validation while reusing package validation and publication operations; no contract becomes mandatory. |
 | Repair and verification | Repair Task/Candidate, delivery binding, Verification Receipt, promotion, reconciliation, and rollback are separate existing lifecycles (`src/diagnostic-router.js:682-887`, ADRs 0048 and 0052). | Onboarding records bindings and readiness references only. It does not change or collapse these lifecycles. |
@@ -255,11 +256,16 @@ coverage_onboarding_projection:
   schema_version: alphonse.coverage-onboarding-projection.v0.1
   onboarding_id: uuid
   revision: nonnegative-integer
-  status: opened | gathering_evidence | interpreting | resolving_ambiguity | reviewable | approved | review_required | compiled | validated | source_control_proposed | manifest_imported | registered | cancelled | superseded
+  status: gathering_evidence | interpreting | resolving_ambiguity | reviewable | awaiting_approval | compiled | validated | validation_failed | review_required
   active_snapshot_digest: sha256 | null
   active_interpretation_digest: sha256 | null
   active_review_bundle_digest: sha256 | null
-  active_approval: { approval_id: uuid, approval_digest: sha256 } | null
+  active_compilation_id: uuid | null
+  active_coverage_specification_digest: sha256 | null
+  active_workflow_manifest_proposal_digest: sha256 | null
+  active_validation_id: uuid | null
+  active_validation_receipt_digest: sha256 | null
+  validation_status: valid | invalid | null
   latest_invalidation_event_digest: sha256 | null
   blocking_ambiguity_ids: [stable-string]
   unresolved_nonblocking_ambiguity_ids: [stable-string]
@@ -268,8 +274,9 @@ coverage_onboarding_projection:
 ```
 
 The append-only invalidation event revokes eligibility within this onboarding aggregate; it grants no authority and
-does not erase or mutate the Kernel approval. Compilation must bind a projection revision and event-head digest whose
-derived status is `approved`. Any later material event changes that head and makes the compilation input stale.
+does not erase or mutate the Kernel approval. Compilation must bind the exact active Review Bundle and a live Kernel
+approval over its original review-state digest. The non-material `coverage_compiled` and `coverage_validated` events
+preserve that eligibility; a later material invalidation event revokes it and makes downstream material historical.
 
 ### Coverage Specification, Compilation, And Validation
 
@@ -280,7 +287,7 @@ compilation_input:
   review_bundle_digest: sha256
   approval_id: uuid
   approval_digest: sha256
-  review_state: { onboarding_revision: nonnegative-integer, event_head_digest: sha256, status: approved }
+  review_state: { onboarding_revision: nonnegative-integer, event_head_digest: sha256, status: awaiting_approval }
   base_manifest_reference: exact-reference | null
   compiler: { id: namespaced-string, version: semver, artifact_digest: sha256 }
 coverage_specification:
@@ -405,7 +412,7 @@ and policy contracts, not authority or a parallel protocol.
 | Operational Package | Add a versioned `coverage_profile` export schema and validator to Package Candidate validation. | Package Version identity, validation receipts, simulation, publication, and dependency semantics are reusable, but the current finite export-kind set rejects the proposed profile. |
 | Agent Gateway | Project the exact Kernel and Diagnostic descriptors listed below into a Work Intent-scoped task tool set. | Gateway is an ergonomic projection, not a system of record; it must not rename operations, merge plane semantics, hold provider credentials, or create ambient access. |
 
-### Genuinely missing operations
+### Implemented canonical onboarding operations
 
 | Canonical surface | Exact proposed operations | Authority/effect boundary | Agent Gateway treatment |
 | --- | --- | --- | --- |
@@ -415,6 +422,11 @@ and policy contracts, not authority or a parallel protocol.
 | Kernel Protocol | `kernel.coverage_review.approve`, `kernel.coverage_review.get` | Named human Principal only; exact bundle digest; narrowly grants deterministic compilation eligibility. | Human-facing approval projection only; never exposed to the onboarding agent. |
 | Diagnostic Protocol | `diagnostic.coverage_specification.compile`, `diagnostic.coverage_specification.get` | Deterministic, side-effect-free compiler; exact valid approval required; emits artifacts only. | Agent may request compilation but cannot supply or synthesize approval. |
 | Diagnostic Protocol | `diagnostic.coverage_specification.validate` | Deterministic checks and receipt; no source-control, registration, or activation authority. | Project as a bounded deterministic operation. |
+
+### Genuinely missing operations
+
+| Canonical surface | Exact proposed operations | Authority/effect boundary | Agent Gateway treatment |
+| --- | --- | --- | --- |
 | Diagnostic Protocol | `diagnostic.workflow_manifest.import`, `diagnostic.workflow_manifest.get` | Read-only repository import under scoped importer identity; binds exact landed commit, tree, path, manifest and validated proposal digests in an immutable receipt. | Not an ambient repository tool; projection accepts exact landed references only. |
 | Diagnostic Protocol | `diagnostic.coverage_registration.request` | Requires one exact valid review approval, validation receipt, and matching landed-manifest import receipt; may invoke existing workflow and revision registration internally but grants no activation or business authority. | Project only after deterministic preconditions expose eligibility. |
 | Diagnostic Protocol | `diagnostic.workflow_coverage_capabilities.get` | Read-only projection with exact evidence, limitations, cutoff, and policy identity. | Safe read projection; unavailable capabilities and omitted evidence remain explicit. |

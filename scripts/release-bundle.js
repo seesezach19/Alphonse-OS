@@ -5,7 +5,7 @@ import path from "node:path";
 const RELEASE_VERSION = "0.1.0";
 const TEXT_EXTENSIONS = new Set([".js", ".json", ".md", ".sql", ".yaml", ".yml", ".ps1", ".sh"]);
 const STATIC_FILES = ["Dockerfile", "package.json", "package-lock.json"];
-const TREES = ["src", "migrations", "diagnostic-migrations", "docs", "runtime"];
+const TREES = ["src", "schemas", "migrations", "diagnostic-migrations", "docs", "runtime"];
 const RELEASE_FILES = {
   "release/v0.1.0/compose.yaml": "compose.yaml",
   "release/v0.1.0/install-local.ps1": "install-local.ps1",

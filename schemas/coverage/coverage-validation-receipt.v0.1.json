@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.alphonse.local/coverage/coverage-validation-receipt.v0.1.json",
+  "title": "Coverage Validation Receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "compilation_input_digest", "coverage_specification_digest", "review_bundle_digest", "approval_digest", "review_state_digest", "compiler", "validator", "checks", "issues", "unknowns", "limitations", "workflow_manifest_proposal_digest", "status", "downstream_eligibility", "authority"],
+  "properties": {
+    "schema_version": { "const": "alphonse.coverage-validation-receipt.v0.1" },
+    "compilation_input_digest": { "$ref": "#/$defs/digest" },
+    "coverage_specification_digest": { "$ref": "#/$defs/digest" },
+    "review_bundle_digest": { "$ref": "#/$defs/digest" },
+    "approval_digest": { "$ref": "#/$defs/digest" },
+    "review_state_digest": { "$ref": "#/$defs/digest" },
+    "compiler": { "type": "object" },
+    "validator": { "type": "object" },
+    "checks": { "type": "array", "items": { "type": "object" } },
+    "issues": { "type": "array", "items": { "type": "object" } },
+    "unknowns": { "type": "array", "items": { "type": "object" } },
+    "limitations": { "type": "array", "items": { "type": "string" } },
+    "workflow_manifest_proposal_digest": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
+    "status": { "enum": ["valid", "invalid"] },
+    "downstream_eligibility": { "type": "object" },
+    "authority": { "const": "none" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

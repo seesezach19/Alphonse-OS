@@ -122,6 +122,8 @@ tradeoffs.
 - durable ingress journal and separately scoped source, runtime, request, and ledger observers;
 - pre-execution n8n revision binding;
 - deterministic cross-stream correlation projection;
+- durable workflow coverage discovery, evidence-linked interpretation, exact human review approval,
+  and deterministic authority-free Coverage Specification compilation and validation;
 - integration and behavior contracts, committed-effect interpretation, invariant evaluation,
   and automatic Diagnostic Case creation;
 - read-only Butler and a fixture-backed Operations Console;
