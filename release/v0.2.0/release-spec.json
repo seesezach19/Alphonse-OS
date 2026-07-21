@@ -82,7 +82,8 @@
     "022_diagnostic_dispatch_claims.sql",
     "023_diagnostic_worker_execution.sql",
     "024_diagnostic_consistency_tests.sql",
-    "025_coverage_onboarding.sql"
+    "025_coverage_onboarding.sql",
+    "026_workflow_interpretation.sql"
   ],
   "qualification": [
     "v0.2_release_policy",

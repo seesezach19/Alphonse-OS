@@ -7,6 +7,7 @@ import {
   createCoverageInventoryClient,
   createCoverageOnboardingService
 } from "./coverage-onboarding-service.js";
+import { createWorkflowInterpretationService } from "./workflow-interpretation-service.js";
 import { createContextService } from "./context-service.js";
 import { createDatabase } from "./database.js";
 import { createDeploymentService } from "./deployment-service.js";
@@ -192,6 +193,7 @@ let diagnosticDispatchAuthorizationService = null;
 let diagnosticWorkerExecutionService = null;
 let diagnosticConsistencyService = null;
 let coverageOnboardingService = null;
+let workflowInterpretationService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -298,6 +300,14 @@ if (diagnosticDatabase) {
       adapter_version: diagnosticRuntimeAdapterVersion,
       contract_version: WORKFLOW_RUNTIME_ADAPTER_CONTRACT_VERSION
     }
+  });
+  workflowInterpretationService = createWorkflowInterpretationService({
+    database: diagnosticDatabase,
+    artifactStore: diagnosticArtifactStore,
+    identityIntent,
+    coverageOnboardingService,
+    installationId,
+    environmentId
   });
   if (grantAuthorityConfigured) {
     diagnosticGrantApplicationService = createDiagnosticGrantApplicationService(
@@ -575,7 +585,7 @@ const routeHelpers = createRouteHelpers({
   diagnosticIndependentVerificationService, diagnosticRepairWorkerService,
   diagnosticDiagnosisService, diagnosticRepairDeliveryService,
   diagnosticVerificationService, diagnosticPromotionService,
-  coverageOnboardingService
+  coverageOnboardingService, workflowInterpretationService
 });
 
 const routeContext = createRouteContext({
@@ -591,7 +601,7 @@ const routeContext = createRouteContext({
   diagnosticMaterialAvailabilityService, diagnosticDispatchService,
   diagnosticDispatchAuthorizationService, diagnosticWorkerExecutionService,
   diagnosticConsistencyService,
-  coverageOnboardingService,
+  coverageOnboardingService, workflowInterpretationService,
   installationId, environmentId, environmentName,
   grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
   dataPlaneReceiptSecret, dataPlaneId,

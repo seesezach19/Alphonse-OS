@@ -209,13 +209,155 @@ const coverageEvidenceCaptureInput = {
   }
 };
 
+const coverageEvidenceReference = {
+  type: "object",
+  required: ["artifact_digest", "json_pointer"],
+  additionalProperties: false,
+  properties: {
+    artifact_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    json_pointer: { type: "string", minLength: 1, maxLength: 1000, pattern: "^/" }
+  }
+};
+
+const coverageInterpretationAssignInput = {
+  type: "object",
+  required: [
+    "onboarding_id", "snapshot_digest", "expected_revision", "passport_id", "agent_principal_id",
+    "work_intent_id", "expires_at"
+  ],
+  additionalProperties: false,
+  properties: {
+    onboarding_id: { type: "string", format: "uuid" },
+    snapshot_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    expected_revision: { type: "integer", minimum: 2 },
+    passport_id: { type: "string", format: "uuid" },
+    agent_principal_id: { type: "string", format: "uuid" },
+    work_intent_id: { type: "string", format: "uuid" },
+    expires_at: { type: "string", format: "date-time" }
+  }
+};
+
+const coverageClaimInput = {
+  type: "object",
+  required: [
+    "claim_id", "kind", "status", "statement", "evidence_references", "confidence",
+    "conflicting_evidence_references", "unknown_reason", "limitations"
+  ],
+  additionalProperties: false,
+  properties: {
+    claim_id: { type: "string", minLength: 1, maxLength: 160 },
+    kind: { enum: ["objective", "consequence", "integration", "effect", "dependency", "limitation"] },
+    status: { enum: ["observed", "inferred", "conflicted", "unknown"] },
+    statement: { type: "string", minLength: 1, maxLength: 3000 },
+    evidence_references: { type: "array", minItems: 1, maxItems: 30, items: coverageEvidenceReference },
+    confidence: { type: ["string", "null"], enum: ["low", "medium", "high", null] },
+    conflicting_evidence_references: {
+      type: "array", maxItems: 30, items: coverageEvidenceReference
+    },
+    unknown_reason: { type: ["string", "null"], maxLength: 1000 },
+    limitations: { type: "array", maxItems: 20,
+      items: { type: "string", minLength: 1, maxLength: 1000 } }
+  }
+};
+
+const coverageAmbiguityInput = {
+  type: "object",
+  required: [
+    "ambiguity_id", "kind", "claim_references", "question", "blocking", "choices",
+    "evidence_references"
+  ],
+  additionalProperties: false,
+  properties: {
+    ambiguity_id: { type: "string", minLength: 1, maxLength: 160 },
+    kind: { enum: [
+      "objective", "consequence", "evidence", "effect", "privacy", "fixture", "repair", "promotion", "rollback"
+    ] },
+    claim_references: { type: "array", minItems: 1, maxItems: 30,
+      items: { type: "string", minLength: 1, maxLength: 160 } },
+    question: { type: "string", minLength: 1, maxLength: 2000 },
+    blocking: { type: "boolean" },
+    choices: { type: "array", minItems: 2, maxItems: 20, items: {
+      type: "object", required: ["choice_id", "meaning"], additionalProperties: false,
+      properties: {
+        choice_id: { type: "string", minLength: 1, maxLength: 160 },
+        meaning: { type: "string", minLength: 1, maxLength: 1000 }
+      }
+    } },
+    evidence_references: { type: "array", minItems: 1, maxItems: 30, items: coverageEvidenceReference }
+  }
+};
+
+const coverageInterpretationSubmitInput = {
+  type: "object",
+  required: [
+    "assignment_id", "onboarding_id", "snapshot_digest", "expected_revision", "proposed_at",
+    "claims", "ambiguities", "provenance", "supersedes_interpretation_digest"
+  ],
+  additionalProperties: false,
+  properties: {
+    assignment_id: { type: "string", format: "uuid" },
+    onboarding_id: { type: "string", format: "uuid" },
+    snapshot_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    expected_revision: { type: "integer", minimum: 2 },
+    proposed_at: { type: "string", format: "date-time" },
+    claims: { type: "array", minItems: 1, maxItems: 100, items: coverageClaimInput },
+    ambiguities: { type: "array", maxItems: 100, items: coverageAmbiguityInput },
+    provenance: {
+      type: "object",
+      required: [
+        "passport_id", "work_intent_id", "instruction_digest", "model", "runtime",
+        "input_artifact_digests"
+      ],
+      additionalProperties: false,
+      properties: {
+        passport_id: { type: "string", format: "uuid" },
+        work_intent_id: { type: "string", format: "uuid" },
+        instruction_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        model: { type: "object", required: ["provider", "model", "version"], additionalProperties: false,
+          properties: { provider: { type: "string" }, model: { type: "string" }, version: { type: "string" } } },
+        runtime: { type: "object", required: ["name", "version"], additionalProperties: false,
+          properties: { name: { type: "string" }, version: { type: "string" } } },
+        input_artifact_digests: { type: "array", minItems: 1, maxItems: 30,
+          items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } }
+      }
+    },
+    supersedes_interpretation_digest: {
+      type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$"
+    }
+  }
+};
+
+const coverageAmbiguityResolveInput = {
+  type: "object",
+  required: [
+    "onboarding_id", "ambiguity_id", "ambiguity_digest", "expected_revision", "disposition",
+    "choice_id", "supplied_value", "work_intent_id", "scope", "rationale"
+  ],
+  additionalProperties: false,
+  properties: {
+    onboarding_id: { type: "string", format: "uuid" },
+    ambiguity_id: { type: "string", minLength: 1, maxLength: 160 },
+    ambiguity_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    expected_revision: { type: "integer", minimum: 4 },
+    disposition: { enum: ["selected_choice", "supplied_value", "accepted_unknown"] },
+    choice_id: { type: ["string", "null"], maxLength: 160 },
+    supplied_value: { type: ["string", "number", "boolean", "null"] },
+    work_intent_id: { type: "string", format: "uuid" },
+    scope: { enum: ["exact_workflow", "exact_revision", "exact_profile_version"] },
+    rationale: { type: "string", minLength: 1, maxLength: 2000 }
+  }
+};
+
 const coverageProjectionSchema = {
   type: "object",
   required: [
     "schema_version", "onboarding_id", "installation_id", "environment_id", "reason",
     "prior_onboarding_id", "workflow_reference", "work_intent", "agent", "adapter_binding",
     "identity_digest", "revision", "event_head_digest", "status", "active_snapshot_digest",
-    "superseded_snapshot_digests", "snapshot_history", "legal_next_operations", "events", "opened_at",
+    "active_interpretation_digest", "superseded_snapshot_digests", "superseded_interpretation_digests",
+    "snapshot_history", "interpretation_history", "interpretation_assignments", "ambiguities",
+    "blocking_ambiguity_ids", "unresolved_nonblocking_ambiguity_ids", "limitations", "review_eligible",
+    "legal_next_operations", "events", "opened_at",
     "authority", "immutable"
   ],
   additionalProperties: false,
@@ -233,10 +375,20 @@ const coverageProjectionSchema = {
     identity_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
     revision: { type: "integer", minimum: 1 },
     event_head_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-    status: { enum: ["gathering_evidence", "interpreting"] },
+    status: { enum: ["gathering_evidence", "interpreting", "resolving_ambiguity", "reviewable"] },
     active_snapshot_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
+    active_interpretation_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
     superseded_snapshot_digests: { type: "array", items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
+    superseded_interpretation_digests: { type: "array",
+      items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } },
     snapshot_history: { type: "array" },
+    interpretation_history: { type: "array" },
+    interpretation_assignments: { type: "array" },
+    ambiguities: { type: "array" },
+    blocking_ambiguity_ids: { type: "array", items: { type: "string" } },
+    unresolved_nonblocking_ambiguity_ids: { type: "array", items: { type: "string" } },
+    limitations: { type: "array" },
+    review_eligible: { type: "boolean" },
     legal_next_operations: { type: "array", items: { type: "string" } },
     events: { type: "array", minItems: 1 },
     opened_at: { type: "string", format: "date-time" },
@@ -276,6 +428,109 @@ const coverageCommandOutput = (operationId, capture = false) => ({
     transition: { type: "object" }
   }
 });
+
+const coverageInterpretationCommandOutput = (operationId, resultKey, resultSchema,
+  includeProjection = false) => ({
+  type: "object",
+  required: [
+    "command_id", "request_digest", "accepted_at", "operation_id", "actor", "authorization",
+    ...(includeProjection ? ["coverage_onboarding"] : []), resultKey, "created", "transition"
+  ],
+  additionalProperties: false,
+  properties: {
+    command_id: { type: "string" },
+    request_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    accepted_at: { type: "string", format: "date-time" },
+    operation_id: { const: operationId },
+    actor: { type: "object" },
+    authorization: { type: "object" },
+    ...(includeProjection ? { coverage_onboarding: coverageProjectionSchema } : {}),
+    [resultKey]: resultSchema,
+    created: { type: "boolean" },
+    transition: { type: "object" }
+  }
+});
+
+const coverageInterpretationAssignmentSchema = {
+  type: "object",
+  required: [
+    "assignment_id", "onboarding_id", "snapshot_digest", "onboarding_revision", "event_head_digest",
+    "passport_id", "agent_principal_id", "work_intent_id", "work_intent_digest", "assignment_digest",
+    "assigned_by_principal_id", "executed_by", "assigned_at", "expires_at", "constraints", "authority",
+    "immutable"
+  ],
+  additionalProperties: false,
+  properties: {
+    assignment_id: { type: "string", format: "uuid" },
+    onboarding_id: { type: "string", format: "uuid" },
+    snapshot_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    onboarding_revision: { type: "integer", minimum: 2 },
+    event_head_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    passport_id: { type: "string", format: "uuid" },
+    agent_principal_id: { type: "string", format: "uuid" },
+    work_intent_id: { type: "string", format: "uuid" },
+    work_intent_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    assignment_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    assigned_by_principal_id: { type: "string" },
+    executed_by: { type: "object" },
+    assigned_at: { type: "string", format: "date-time" },
+    expires_at: { type: "string", format: "date-time" },
+    constraints: { type: "object" },
+    authority: { const: "none" },
+    immutable: { const: true }
+  }
+};
+
+const workflowInterpretationSchema = {
+  type: "object",
+  required: [
+    "interpretation_id", "artifact_digest", "size_bytes", "media_type", "onboarding_id",
+    "snapshot_digest", "claims_digest", "ambiguity_manifest_digest", "claim_count", "ambiguity_count",
+    "supersedes_interpretation_digest", "content_class", "instruction_authority", "authority", "immutable"
+  ],
+  additionalProperties: false,
+  properties: {
+    interpretation_id: { type: "string", format: "uuid" },
+    artifact_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    size_bytes: { type: "integer", minimum: 0 },
+    media_type: { const: "application/json" },
+    onboarding_id: { type: "string", format: "uuid" },
+    snapshot_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    claims_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    ambiguity_manifest_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    claim_count: { type: "integer", minimum: 1 },
+    ambiguity_count: { type: "integer", minimum: 0 },
+    supersedes_interpretation_digest: { type: ["string", "null"], pattern: "^sha256:[0-9a-f]{64}$" },
+    content_class: { const: "untrusted_agent_proposal" },
+    instruction_authority: { const: "none" },
+    authority: { const: "none" },
+    immutable: { const: true }
+  }
+};
+
+const coverageAmbiguityResolutionSchema = {
+  type: "object",
+  required: [
+    "schema_version", "resolution_id", "onboarding_id", "ambiguity_id", "ambiguity_digest",
+    "confirmation_id", "confirmation_digest", "status", "authority", "confirmation",
+    "resolution_digest", "immutable"
+  ],
+  additionalProperties: false,
+  properties: {
+    schema_version: { const: "alphonse.coverage-ambiguity-resolution.v0.1" },
+    resolution_id: { type: "string", format: "uuid" },
+    onboarding_id: { type: "string", format: "uuid" },
+    ambiguity_id: { type: "string" },
+    ambiguity_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    confirmation_id: { type: "string", format: "uuid" },
+    confirmation_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    status: { enum: ["resolved", "accepted_nonblocking_unknown"] },
+    authority: { const: "none" },
+    confirmation: { type: "object" },
+    resolution_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    immutable: { const: true }
+  }
+};
 
 const repairTaskReference = {
   type: "object",
@@ -496,7 +751,7 @@ const descriptors = [
       "diagnostic.coverage_onboarding.evidence_reused",
       "diagnostic.coverage_onboarding.snapshot_replaced"
     ],
-    next_operations: ["diagnostic.coverage_onboarding.get"]
+    next_operations: ["diagnostic.coverage_onboarding.get", "diagnostic.coverage_interpretation.assign"]
   },
   {
     operation_id: "diagnostic.coverage_onboarding.get",
@@ -521,7 +776,141 @@ const descriptors = [
     issues: ["AUTHENTICATION_REQUIRED", "COVERAGE_ONBOARDING_NOT_FOUND",
       "COVERAGE_ONBOARDING_INTEGRITY_VIOLATION"],
     emitted_events: [],
-    next_operations: ["diagnostic.coverage_onboarding.evidence_capture"]
+    next_operations: [
+      "diagnostic.coverage_onboarding.evidence_capture", "diagnostic.coverage_interpretation.assign"
+    ]
+  },
+  {
+    operation_id: "diagnostic.coverage_interpretation.assign",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Create one immutable, expiring agent assignment over the exact active discovery snapshot.",
+    visibility: "public",
+    authority_class: "named_customer_owner_or_exact_trusted_operator",
+    effect_class: "authority_free_interpretation_assignment",
+    idempotency: "required_command_id_and_canonical_request_digest",
+    transport: {
+      method: "POST",
+      path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/interpretation-assignments"
+    },
+    input_schema: commandEnvelope(
+      "diagnostic.coverage_interpretation.assign", coverageInterpretationAssignInput
+    ),
+    output_schema: coverageInterpretationCommandOutput(
+      "diagnostic.coverage_interpretation.assign", "coverage_interpretation_assignment",
+      coverageInterpretationAssignmentSchema
+    ),
+    supported_modes: ["live"],
+    preconditions: [
+      "coverage_onboarding_exists", "named_human_authorization", "exact_active_snapshot",
+      "exact_onboarding_agent_and_confirmed_work_intent", "exact_expected_revision"
+    ],
+    outcomes: ["interpretation_assignment_created", "command_replayed"],
+    issues: [
+      "COVERAGE_INTERPRETATION_OWNER_REQUIRED", "COVERAGE_INTERPRETATION_BASE_CONFLICT",
+      "COVERAGE_INTERPRETATION_ASSIGNEE_MISMATCH", "COVERAGE_INTERPRETATION_EXPIRY_INVALID",
+      "IDEMPOTENCY_CONFLICT"
+    ],
+    emitted_events: ["diagnostic.coverage_interpretation.assigned"],
+    next_operations: [
+      "diagnostic.coverage_interpretation_assignment.get", "diagnostic.coverage_interpretation.submit"
+    ]
+  },
+  {
+    operation_id: "diagnostic.coverage_interpretation_assignment.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read one immutable Coverage Interpretation Assignment without evidence contents.",
+    visibility: "public",
+    authority_class: "authenticated_customer_reader",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: {
+      method: "GET", path: "/diagnostic/v0/coverage-interpretation-assignments/{assignment_id}"
+    },
+    input_schema: {
+      type: "object", required: ["assignment_id"], additionalProperties: false,
+      properties: { assignment_id: { type: "string", format: "uuid" } }
+    },
+    output_schema: {
+      type: "object", required: ["coverage_interpretation_assignment"], additionalProperties: false,
+      properties: { coverage_interpretation_assignment: coverageInterpretationAssignmentSchema }
+    },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_customer_reader", "assignment_exists"],
+    outcomes: ["interpretation_assignment_returned", "assignment_not_found"],
+    issues: ["AUTHENTICATION_REQUIRED", "COVERAGE_INTERPRETATION_ASSIGNMENT_NOT_FOUND"],
+    emitted_events: [],
+    next_operations: ["diagnostic.coverage_interpretation.submit"]
+  },
+  {
+    operation_id: "diagnostic.coverage_interpretation.submit",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Admit one closed evidence-linked agent interpretation and deterministically project typed ambiguities.",
+    visibility: "public",
+    authority_class: "authenticated_exactly_assigned_agent_passport",
+    effect_class: "content_addressed_proposal_and_append_only_projection",
+    idempotency: "required_command_id_and_canonical_request_digest",
+    transport: { method: "POST", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/interpretations" },
+    input_schema: commandEnvelope(
+      "diagnostic.coverage_interpretation.submit", coverageInterpretationSubmitInput
+    ),
+    output_schema: coverageInterpretationCommandOutput(
+      "diagnostic.coverage_interpretation.submit", "workflow_interpretation",
+      workflowInterpretationSchema, true
+    ),
+    supported_modes: ["live"],
+    preconditions: [
+      "exact_unexpired_assignment", "authenticated_assignee_passport", "exact_active_snapshot",
+      "unchanged_onboarding_revision_and_event_head", "all_citations_exist_in_assigned_snapshot"
+    ],
+    outcomes: [
+      "workflow_interpretation_admitted", "typed_ambiguities_projected", "review_blocked_or_reviewable",
+      "command_replayed"
+    ],
+    issues: [
+      "COVERAGE_INTERPRETATION_INPUT_INVALID", "COVERAGE_INTERPRETATION_ASSIGNMENT_MISMATCH",
+      "COVERAGE_INTERPRETATION_ASSIGNMENT_STALE", "COVERAGE_INTERPRETATION_CITATION_INVALID",
+      "COVERAGE_INTERPRETATION_SUPERSESSION_CONFLICT", "COVERAGE_INTERPRETATION_PROPOSED_AT_INVALID",
+      "IDEMPOTENCY_CONFLICT"
+    ],
+    emitted_events: [
+      "diagnostic.coverage_onboarding.interpretation_submitted",
+      "diagnostic.coverage_onboarding.ambiguities_projected"
+    ],
+    next_operations: ["diagnostic.coverage_onboarding.get", "diagnostic.coverage_ambiguity.resolve"]
+  },
+  {
+    operation_id: "diagnostic.coverage_ambiguity.resolve",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Append one named-human resolution over the exact active Coverage Ambiguity digest.",
+    visibility: "public",
+    authority_class: "named_customer_owner_or_exact_trusted_operator",
+    effect_class: "human_confirmation_without_business_authority",
+    idempotency: "required_command_id_and_canonical_request_digest",
+    transport: {
+      method: "POST", path: "/diagnostic/v0/coverage-onboardings/{onboarding_id}/ambiguity-resolutions"
+    },
+    input_schema: commandEnvelope(
+      "diagnostic.coverage_ambiguity.resolve", coverageAmbiguityResolveInput
+    ),
+    output_schema: coverageInterpretationCommandOutput(
+      "diagnostic.coverage_ambiguity.resolve", "coverage_ambiguity_resolution",
+      coverageAmbiguityResolutionSchema, true
+    ),
+    supported_modes: ["live"],
+    preconditions: [
+      "named_human_authorization", "exact_active_ambiguity_digest", "exact_expected_revision",
+      "exact_confirmed_work_intent"
+    ],
+    outcomes: [
+      "blocking_ambiguity_resolved", "nonblocking_unknown_retained_as_limitation", "command_replayed"
+    ],
+    issues: [
+      "COVERAGE_AMBIGUITY_NOT_OPEN", "COVERAGE_AMBIGUITY_REVISION_CONFLICT",
+      "COVERAGE_AMBIGUITY_CHOICE_INVALID", "COVERAGE_AMBIGUITY_BLOCKING_UNKNOWN",
+      "IDEMPOTENCY_CONFLICT"
+    ],
+    emitted_events: ["diagnostic.coverage_onboarding.ambiguity_resolved"],
+    next_operations: ["diagnostic.coverage_onboarding.get"]
   },
   commandDescriptor({
     operationId: "diagnostic.agent_workflow.register",

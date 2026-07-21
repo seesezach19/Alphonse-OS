@@ -84,6 +84,7 @@
     "test:v0.2-ticket-11": "node scripts/acceptance-v0.2-ticket-11.js",
     "test:v0.2-ticket-12": "node scripts/acceptance-v0.2-ticket-12.js",
     "test:coverage-onboarding-snapshot": "node scripts/acceptance-coverage-onboarding-snapshot.js",
+    "test:workflow-interpretation": "node scripts/acceptance-workflow-interpretation.js",
     "release:v0.2:build": "node scripts/build-release-v0.2.js",
     "release:v0.2:qualify": "node scripts/qualify-release-v0.2.js",
     "release:build": "node scripts/build-release-v0.1.js",

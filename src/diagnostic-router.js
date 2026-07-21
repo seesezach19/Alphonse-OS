@@ -46,7 +46,8 @@ export function createDiagnosticRouter(ctx) {
     requireDiagnosticDispatch, requireDiagnosticWorkerExecution, requireDiagnosticConsistency,
     requireDiagnosticDispatchAuthority, requireIndependentDiagnosticVerification,
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
-    requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding
+    requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding,
+    requireWorkflowInterpretation
   } = ctx;
 
   return async function diagnosticRouter(request, response, url) {
@@ -522,6 +523,54 @@ export function createDiagnosticRouter(ctx) {
         "Route onboarding ID must match evidence capture input.");
     }
     return sendCommandResult(response, await service.captureEvidence(body, passport));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/interpretation-assignments$/.test(url.pathname)) {
+    const service = requireWorkflowInterpretation();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.coverage_interpretation.assign");
+    const body = await readJson(request, 1024 * 1024);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    if (body?.input?.onboarding_id !== onboardingId) {
+      throw new KernelError(409, "COVERAGE_ONBOARDING_ROUTE_MISMATCH",
+        "Route onboarding ID must match Interpretation Assignment input.");
+    }
+    return sendCommandResult(response, await service.assign(body, actor));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/interpretations$/.test(url.pathname)) {
+    const service = requireWorkflowInterpretation();
+    const passport = await authenticateAgent(request);
+    const body = await readJson(request, 2 * 1024 * 1024);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    if (body?.input?.onboarding_id !== onboardingId) {
+      throw new KernelError(409, "COVERAGE_ONBOARDING_ROUTE_MISMATCH",
+        "Route onboarding ID must match Interpretation submission input.");
+    }
+    return sendCommandResult(response, await service.submit(body, passport));
+  }
+
+  if (request.method === "POST"
+      && /^\/diagnostic\/v0\/coverage-onboardings\/[^/]+\/ambiguity-resolutions$/.test(url.pathname)) {
+    const service = requireWorkflowInterpretation();
+    const actor = await authenticateDiagnosticOwner(request, "diagnostic.coverage_ambiguity.resolve");
+    const body = await readJson(request, 256 * 1024);
+    const onboardingId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+    if (body?.input?.onboarding_id !== onboardingId) {
+      throw new KernelError(409, "COVERAGE_ONBOARDING_ROUTE_MISMATCH",
+        "Route onboarding ID must match Coverage Ambiguity resolution input.");
+    }
+    return sendCommandResult(response, await service.resolveAmbiguity(body, actor));
+  }
+
+  if (request.method === "GET"
+      && url.pathname.startsWith("/diagnostic/v0/coverage-interpretation-assignments/")) {
+    const service = requireWorkflowInterpretation();
+    authenticateBootstrapOperator(request);
+    return sendJson(response, 200, { coverage_interpretation_assignment: await service.getAssignment(
+      pathId(url.pathname, "/diagnostic/v0/coverage-interpretation-assignments/")
+    ) });
   }
 
   if (request.method === "GET" && url.pathname.startsWith("/diagnostic/v0/coverage-onboardings/")) {
