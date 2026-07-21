@@ -71,6 +71,7 @@ import {
 import { getRepairDeliveryAdapterContract } from "./repair-delivery-adapter-contract.js";
 import { getVerificationRunnerContract } from "./diagnostic-verification-contracts.js";
 import { createVerificationRunnerClient } from "./verification-runner-client.js";
+import { createMaintenanceAssuranceService } from "./maintenance-assurance-service.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const databaseUrl = process.env.DATABASE_URL;
@@ -207,6 +208,7 @@ let coverageReviewApprovalService = null;
 let coverageCompilationService = null;
 let coverageCapabilityService = null;
 let coverageReconciliationService = null;
+let maintenanceAssuranceService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -296,6 +298,9 @@ const grantAuthorityService = grantAuthorityConfigured
   })
   : null;
 if (diagnosticDatabase) {
+  maintenanceAssuranceService = createMaintenanceAssuranceService({
+    database: diagnosticDatabase, installationId
+  });
   coverageOnboardingService = createCoverageOnboardingService({
     database: diagnosticDatabase,
     artifactStore: diagnosticArtifactStore,
@@ -645,7 +650,7 @@ const routeHelpers = createRouteHelpers({
   diagnosticVerificationService, diagnosticPromotionService,
   coverageOnboardingService, workflowInterpretationService, coverageReviewService,
   coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService,
-  coverageReconciliationService
+  coverageReconciliationService, maintenanceAssuranceService
 });
 
 const routeContext = createRouteContext({
@@ -664,6 +669,7 @@ const routeContext = createRouteContext({
   coverageOnboardingService, workflowInterpretationService, coverageReviewService,
   coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService,
   coverageReconciliationService,
+  maintenanceAssuranceService,
   installationId, environmentId, environmentName,
   grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
   dataPlaneReceiptSecret, dataPlaneId,

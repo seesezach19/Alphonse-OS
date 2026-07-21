@@ -88,6 +88,13 @@ services:
       DIAGNOSTIC_MODEL_BROKER_GRANT_KEY_ID: ${DIAGNOSTIC_MODEL_BROKER_GRANT_KEY_ID:-local-diagnostic-broker-grant-key-v1}
       DIAGNOSTIC_MODEL_BROKER_GRANT_SIGNING_SECRET: ${DIAGNOSTIC_MODEL_BROKER_GRANT_SIGNING_SECRET:-local-diagnostic-broker-grant-signing-secret-with-sufficient-length-v1}
       DIAGNOSTIC_MODEL_BROKER_RECEIPT_KEY_ID: ${DIAGNOSTIC_MODEL_BROKER_RECEIPT_KEY_ID:-local-diagnostic-broker-receipt-key-v1}
+      DIAGNOSTIC_RUNTIME_DETAIL_URL: ${DIAGNOSTIC_RUNTIME_DETAIL_URL:-}
+      DIAGNOSTIC_RUNTIME_DETAIL_TOKEN: ${DIAGNOSTIC_RUNTIME_DETAIL_TOKEN:-}
+      DIAGNOSTIC_RUNTIME_DETAIL_POLICY: '${DIAGNOSTIC_RUNTIME_DETAIL_POLICY:-{"policy_id":"diagnostic-detail-not-configured","extract_paths":["detail"],"redact_paths":[],"omit_paths":["unconfigured"],"replacement":"[REDACTED]"}}'
+      N8N_REPAIR_DELIVERY_URL: ${N8N_REPAIR_DELIVERY_URL:-}
+      N8N_REPAIR_DELIVERY_API_KEY: ${N8N_REPAIR_DELIVERY_API_KEY:-}
+      N8N_REPAIR_DELIVERY_CREDENTIAL_BINDING_REF: ${N8N_REPAIR_DELIVERY_CREDENTIAL_BINDING_REF:-}
+      N8N_REPAIR_DELIVERY_TIMEOUT_MS: ${N8N_REPAIR_DELIVERY_TIMEOUT_MS:-5000}
       DIAGNOSTIC_MODEL_BROKER_RECEIPT_SECRET: ${DIAGNOSTIC_MODEL_BROKER_RECEIPT_SECRET:-local-diagnostic-broker-receipt-secret-with-sufficient-length-v1}
       DIAGNOSTIC_RUNNER_ATTESTATION_KEY_ID: ${DIAGNOSTIC_RUNNER_ATTESTATION_KEY_ID:-local-diagnostic-runner-attestation-key-v1}
       DIAGNOSTIC_RUNNER_ATTESTATION_SECRET: ${DIAGNOSTIC_RUNNER_ATTESTATION_SECRET:-local-diagnostic-runner-attestation-secret-with-sufficient-length-v1}
@@ -170,7 +177,7 @@ services:
         condition: service_completed_successfully
 
   canonical-n8n:
-    profiles: ["canonical-ingress"]
+    profiles: ["canonical-ingress", "maintenance"]
     image: n8nio/n8n@sha256:761374d4eb841b0a22771d6bd68f0e8d827b4979ae4e490045517b13fc1259dd
     environment:
       N8N_PORT: 5678
@@ -190,6 +197,29 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  n8n-maintenance-adapter:
+    profiles: ["maintenance"]
+    image: node@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
+    command: ["node", "/package/src/detail-adapter-server.js"]
+    environment:
+      PORT: 5680
+      N8N_DETAIL_ADAPTER_TOKEN: ${N8N_DETAIL_ADAPTER_TOKEN:-local-maintenance-detail-adapter-token-v1}
+      N8N_REPAIR_API_KEY: ${N8N_REPAIR_DELIVERY_API_KEY:-local-maintenance-edge-key-v1}
+      N8N_ADAPTER_TEST_CONTROLS_ENABLED: "true"
+      N8N_MAINTENANCE_LIVE: "true"
+      N8N_MAINTENANCE_FAULT_DELAY_MS: "5000"
+      N8N_API_URL: http://canonical-n8n:5678
+      N8N_API_KEY: ${CANONICAL_N8N_API_KEY:-}
+    volumes:
+      - ./packages/n8n-operational-package:/package:ro
+    depends_on:
+      canonical-n8n: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5680/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
 
   customer-ingress-api:
     profiles: ["canonical-ingress"]

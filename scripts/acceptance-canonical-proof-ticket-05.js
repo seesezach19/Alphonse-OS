@@ -14,6 +14,7 @@ import {
 } from "../src/diagnostic-consistency-contracts.js";
 import { runDiagnosticWorker } from "../src/diagnostic-runner.js";
 import { createCanonicalProofDeployment } from "./canonical-proof-deployment-fixture.js";
+import { runMaintenanceAssuranceJourney } from "./maintenance-assurance-journey.js";
 
 const root = new URL("..", import.meta.url);
 const baseUrl = "http://127.0.0.1:43205";
@@ -36,7 +37,8 @@ const offlineVerifierTimeoutMs = Number(
 if (!Number.isSafeInteger(offlineVerifierTimeoutMs) || offlineVerifierTimeoutMs <= 0) {
   throw new Error("CANONICAL_OFFLINE_VERIFIER_TIMEOUT_MS must be a positive safe integer.");
 }
-const through17 = process.argv.includes("--through-17");
+const throughMaintenance = process.argv.includes("--through-maintenance");
+const through17 = throughMaintenance || process.argv.includes("--through-17");
 const through16 = through17 || process.argv.includes("--through-16");
 const through15 = through16 || process.argv.includes("--through-15");
 const through14 = process.argv.includes("--through-14");
@@ -97,7 +99,8 @@ function assertVerificationReportDigest(report) {
   assert.equal(report.report_digest, sha256Digest(material), "verification report digest must be self-consistent");
 }
 const compose = (...args) => run("docker", ["compose", "--profile", "canonical-tokenization",
-  "--profile", "canonical-ingress", "--profile", "canonical-destination", "--profile", "canonical-runtime", ...args]);
+  "--profile", "canonical-ingress", "--profile", "canonical-destination", "--profile", "canonical-runtime",
+  "--profile", "maintenance", ...args]);
 async function request(base, route, options = {}) {
   let response;
   let transportError;
@@ -331,7 +334,8 @@ try {
     const cookie = owner.response.headers.getSetCookie().map((value) => value.split(";", 1)[0]).join("; ");
     const key = await n8nRequest("/rest/api-keys", { method: "POST", headers: { cookie },
       body: JSON.stringify({ label: "Canonical runtime observer", expiresAt: null,
-        scopes: ["execution:read", "workflow:read"] }) });
+        scopes: ["execution:read", "workflow:read", "workflow:list", "workflow:create",
+          "workflow:update", "workflow:activate"] }) });
     assert.equal(key.response.status, 200, JSON.stringify(key.body));
     const runtimeAdapter = { adapter_binding_id: "adapter:n8n-runtime", version: "0.1.0",
       digest: `sha256:${"c".repeat(64)}` };
@@ -967,6 +971,7 @@ try {
         let dispatchClaim = null;
         let workerExecution = null;
         let consistencyTest = null;
+        let maintenanceAssurance = null;
         let finalCollection = initialCollection;
         if (through10) {
           const frozen = await post("/diagnostic/v0/evidence-collections/process", {
@@ -2288,6 +2293,18 @@ try {
               provider_limitation: "synthetic-reference-provider"
             };
 
+            if (throughMaintenance) {
+              maintenanceAssurance = await runMaintenanceAssuranceJourney({
+                baseUrl, environment, compose, post, kernel, command,
+                caseId: diagnosticCase.case_id,
+                revisionId: extended.revisionId,
+                assignmentId: diagnosticAssignment.assignment_id,
+                workerRunId,
+                diagnosisId: completion.diagnosis.diagnosis_id,
+                sponsorPrincipalId
+              });
+            }
+
             if (through17) {
               const consistencyTestId = randomUUID();
               const packageBinding = {
@@ -2565,7 +2582,7 @@ try {
           diagnosticAssignment, assignmentVerificationMaterial, evidenceRevision,
           replacementAssignment, replacementVerificationMaterial, lateObservationCounts,
           independentVerification, materialErasure, dispatchClaim, workerExecution,
-          consistencyTest };
+          consistencyTest, maintenanceAssurance };
       }
     }
     extendedResult = { runtime, requests, ledger, correlation, interpretation };
@@ -2586,7 +2603,8 @@ try {
   assert.equal(final.reported_count, 2);
 
   process.stdout.write(`${JSON.stringify({
-    schema_version: "0.1.0", ticket: through17 ? "canonical-diagnostic-proof-17"
+    schema_version: "0.1.0", ticket: throughMaintenance ? "maintenance-assurance-live-proof"
+      : through17 ? "canonical-diagnostic-proof-17"
       : through16 ? "canonical-diagnostic-proof-16"
       : through15 ? "canonical-diagnostic-proof-15"
       : through14 ? "canonical-diagnostic-proof-14"
@@ -2597,7 +2615,9 @@ try {
       : through09 ? "canonical-diagnostic-proof-09"
       : through08 ? "canonical-diagnostic-proof-08"
       : through07 ? "canonical-diagnostic-proof-06-07" : "canonical-diagnostic-proof-05",
-    status: "passed", completed_capability: through17
+    status: "passed", completed_capability: throughMaintenance
+      ? "bounded_live_n8n_diagnosis_repair_assurance"
+      : through17
       ? "three_run_diagnostic_semantic_consistency"
       : through16
       ? "isolated_worker_brokered_model_and_ingested_diagnosis"
@@ -2812,12 +2832,14 @@ try {
       extendedResult?.interpretation?.consistencyTest?.configuration_digest ?? null,
     diagnostic_consistency_external_business_effects:
       extendedResult?.interpretation?.consistencyTest?.external_business_effects ?? null,
-    worker_run_created: Boolean(extendedResult?.interpretation?.dispatchClaim)
+    worker_run_created: Boolean(extendedResult?.interpretation?.dispatchClaim),
+    maintenance_assurance: extendedResult?.interpretation?.maintenanceAssurance ?? null
   }, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`\n--- Ticket 05 service logs ---\n${compose("logs", "--no-color",
     "customer-ingress-api", "customer-ingress-forwarder", "customer-ingress-reporter", "canonical-n8n",
-    "n8n-runtime-observer", "crm-request-observer", "crm-ledger-observer", "mock-crm", "kernel", "data-plane")}\n`);
+    "n8n-runtime-observer", "n8n-maintenance-adapter", "crm-request-observer", "crm-ledger-observer",
+    "mock-crm", "kernel", "data-plane")}\n`);
   throw error;
 } finally {
   compose("down", "--volumes", "--remove-orphans");

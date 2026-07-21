@@ -14,8 +14,28 @@ import { KernelError } from "../../../src/errors.js";
 
 const ADAPTER = Object.freeze({
   adapter_id: "alphonse.n8n.repair-delivery",
-  adapter_version: "0.2.0"
+  adapter_version: "0.3.0"
 });
+
+export const LOGICAL_OPERATION_DEDUPLICATION_PATCH = Object.freeze({
+  format: "provider-neutral-repair-patch",
+  changes: Object.freeze([
+    Object.freeze({ operation: "insert", path: "before.destination_effect",
+      value: "deduplicate_logical_operation" }),
+    Object.freeze({ operation: "preserve", path: "delivery_identity",
+      value: "evidence_only" })
+  ])
+});
+
+const LOGICAL_OPERATION_DEDUPLICATION_CODE = [
+  "const logicalOperationId = $json.headers?.['x-alphonse-logical-operation-id'];",
+  "if (!logicalOperationId) return [];",
+  "const state = $getWorkflowStaticData('global');",
+  "state.seenLogicalOperations ??= {};",
+  "if (state.seenLogicalOperations[logicalOperationId]) return [];",
+  "state.seenLogicalOperations[logicalOperationId] = new Date().toISOString();",
+  "return items;"
+].join("\n");
 
 export const N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST = Object.freeze({
   ...ADAPTER,
@@ -76,6 +96,17 @@ function exactInventoryPatch(value) {
     "n8n adapter does not support this missing-SKU patch.");
 }
 
+/**
+ * @param {any} value Untrusted repair artifact; validated by exact comparison.
+ * @returns {boolean}
+ */
+function exactLogicalOperationPatch(value) {
+  return value?.format === LOGICAL_OPERATION_DEDUPLICATION_PATCH.format
+    && JSON.stringify(value.changes) === JSON.stringify(
+      LOGICAL_OPERATION_DEDUPLICATION_PATCH.changes
+    );
+}
+
 /** @param {N8nWorkflow} workflow */
 function behaviorMaterial(workflow) {
   return {
@@ -108,6 +139,55 @@ export function materializeInventoryRepair(baseWorkflow, repairArtifact, repairC
       "This operation requires the exact inventory_unknown repair patch.");
   }
   return materializeInventoryCandidate(baseWorkflow, repairArtifact, repairCandidateId);
+}
+
+/**
+ * Materialize the one closed, provider-neutral repair supported by the canonical
+ * lead-ingress proof. The adapter does not infer a patch from prose or model
+ * output: the artifact, node identities, and graph edge must all match exactly.
+ *
+ * @param {N8nWorkflow} baseWorkflow
+ * @param {any} repairArtifact
+ * @param {string} repairCandidateId
+ */
+export function materializeLogicalOperationRepair(baseWorkflow, repairArtifact, repairCandidateId) {
+  if (!exactLogicalOperationPatch(repairArtifact)) {
+    throw new KernelError(400, "N8N_REPAIR_PATCH_UNSUPPORTED",
+      "This operation requires the exact logical-operation deduplication patch.");
+  }
+  const candidate = clone(baseWorkflow);
+  candidate.id = `alphonse-${required(repairCandidateId, "repair_candidate_id")}`;
+  candidate.name = `${baseWorkflow.name} [Alphonse ${repairCandidateId}]`;
+  candidate.active = false;
+  delete candidate.createdAt;
+  delete candidate.updatedAt;
+  delete candidate.versionId;
+  const ingress = candidate.nodes?.find((/** @type {any} */ node) =>
+    node.name === "Receive Lead Delivery");
+  const destination = candidate.nodes?.find((/** @type {any} */ node) =>
+    node.name === "Create CRM Lead");
+  const edge = candidate.connections?.["Receive Lead Delivery"]?.main?.[0];
+  if (!ingress || !destination || !Array.isArray(edge)
+      || edge.length !== 1 || edge[0]?.node !== destination.name) {
+    throw new KernelError(409, "N8N_REPAIR_TARGET_UNSUPPORTED",
+      "Expected canonical lead-ingress nodes and direct destination edge are unavailable.");
+  }
+  const deduplication = {
+    id: "alphonse-deduplicate-logical-operation",
+    name: "Deduplicate Logical Operation",
+    type: "n8n-nodes-base.code",
+    typeVersion: 2,
+    position: [140, 0],
+    parameters: { jsCode: LOGICAL_OPERATION_DEDUPLICATION_CODE }
+  };
+  candidate.nodes.push(deduplication);
+  candidate.connections[ingress.name] = {
+    main: [[{ node: deduplication.name, type: "main", index: 0 }]]
+  };
+  candidate.connections[deduplication.name] = {
+    main: [[{ node: destination.name, type: "main", index: 0 }]]
+  };
+  return candidate;
 }
 
 /**
@@ -289,7 +369,9 @@ export function createN8nRepairDeliveryAdapter({
           current_target_revision_digest: base.target_revision_digest
         });
     }
-    const nativeCandidate = materializeInventoryCandidate(base.representation, repairArtifact, repairCandidateId);
+    const nativeCandidate = exactLogicalOperationPatch(repairArtifact)
+      ? materializeLogicalOperationRepair(base.representation, repairArtifact, repairCandidateId)
+      : materializeInventoryCandidate(base.representation, repairArtifact, repairCandidateId);
     const created = await request("/workflows", {
       method: "POST",
       body: JSON.stringify(createPayload(nativeCandidate))
