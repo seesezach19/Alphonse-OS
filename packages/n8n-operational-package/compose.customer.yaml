@@ -22,6 +22,7 @@ services:
       N8N_DETAIL_ADAPTER_TOKEN: ${N8N_DETAIL_ADAPTER_TOKEN:-local-n8n-detail-adapter-token-v1}
       N8N_REPAIR_API_KEY: ${N8N_REPAIR_DELIVERY_API_KEY:-local-customer-owned-n8n-api-key-v1}
       N8N_ADAPTER_TEST_CONTROLS_ENABLED: "true"
+      N8N_MAINTENANCE_LIVE: "false"
       N8N_ADAPTER_STATE_FILE: /var/lib/alphonse-n8n-adapter/state.json
       N8N_API_URL: http://n8n:5678
       N8N_API_KEY: ${N8N_API_KEY:-}

@@ -41,6 +41,45 @@ function text(value, path, maximum = 200) {
 }
 
 export function validateRestoreManifest(value) {
+  if (value?.schema_version === "alphonse.single_tenant_backup.v0.2") {
+    const manifest = exact(value, "backup_manifest", ["schema_version", "backup_id", "environment_id",
+      "restore_point_sequence", "execution_epoch", "database_dumps", "store_archives", "artifacts",
+      "created_at", "encryption"]);
+    if (!Number.isSafeInteger(manifest.restore_point_sequence) || manifest.restore_point_sequence < 0
+      || !Number.isSafeInteger(manifest.execution_epoch) || manifest.execution_epoch < 1) {
+      throw new KernelError(400, "INVALID_BACKUP_CURSOR", "Backup cursor or epoch is invalid.");
+    }
+    const records = (values, path) => values.map((entry) => {
+      const item = exact(entry, path, ["name", "digest", "size_bytes"]);
+      if (!Number.isSafeInteger(item.size_bytes) || item.size_bytes < 0) {
+        throw new KernelError(400, "INVALID_INPUT", `${path} size is invalid.`);
+      }
+      return { name: text(item.name, `${path}.name`, 64), digest: digest(item.digest, `${path}.digest`),
+        size_bytes: item.size_bytes };
+    });
+    const databaseDumps = records(manifest.database_dumps, "backup_manifest.database_dumps[]");
+    const storeArchives = records(manifest.store_archives, "backup_manifest.store_archives[]");
+    if (!databaseDumps.some((item) => item.name === "kernel")
+        || !databaseDumps.some((item) => item.name === "diagnostic")
+        || !storeArchives.some((item) => item.name === "diagnostic_artifacts")) {
+      throw new KernelError(400, "INCOMPLETE_BACKUP_SCOPE", "Node backup omits an authoritative database or store.");
+    }
+    const artifacts = manifest.artifacts.map((entry) => {
+      const item = exact(entry, "backup_manifest.artifacts[]", ["digest", "size_bytes"]);
+      if (!Number.isSafeInteger(item.size_bytes) || item.size_bytes < 0) {
+        throw new KernelError(400, "INVALID_INPUT", "Artifact size is invalid.");
+      }
+      return { digest: digest(item.digest, "artifact.digest"), size_bytes: item.size_bytes };
+    });
+    const encryption = exact(manifest.encryption, "backup_manifest.encryption", ["algorithm", "key_id"]);
+    if (encryption.algorithm !== "aes-256-gcm") {
+      throw new KernelError(400, "BACKUP_ENCRYPTION_UNSUPPORTED", "Backup must use AES-256-GCM.");
+    }
+    return { ...manifest, backup_id: text(manifest.backup_id, "backup_manifest.backup_id"),
+      environment_id: uuid(manifest.environment_id, "backup_manifest.environment_id"),
+      database_dumps: databaseDumps, store_archives: storeArchives, artifacts,
+      encryption: { algorithm: encryption.algorithm, key_id: text(encryption.key_id, "encryption.key_id") } };
+  }
   const manifest = exact(value, "backup_manifest", ["schema_version", "backup_id", "environment_id",
     "restore_point_sequence", "execution_epoch", "postgres_dump_digest", "artifacts", "created_at", "encryption"]);
   if (manifest.schema_version !== "alphonse.local_backup.v0.1") throw new KernelError(400, "BACKUP_SCHEMA_UNSUPPORTED", "Backup schema is unsupported.");

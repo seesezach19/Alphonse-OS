@@ -323,7 +323,7 @@ export function createN8nRepairDeliveryAdapter({
     const body = await response.json().catch(() => null);
     if (!response.ok) {
       throw new KernelError(502, "N8N_REPAIR_DELIVERY_FAILED", "n8n public API rejected repair delivery.", {
-        status: response.status, operation: init.method ?? "GET"
+        status: response.status, operation: init.method ?? "GET", path
       });
     }
     return body;

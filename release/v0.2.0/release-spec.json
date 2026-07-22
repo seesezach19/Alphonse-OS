@@ -5,6 +5,10 @@
   "diagnostic_protocol_version": "0.2.0",
   "components": {
     "kernel": { "version": "0.1.0", "entrypoint": "src/server.js" },
+    "operations_console": { "version": "0.1.0", "entrypoint": "apps/console/package.json" },
+    "tls_edge": { "version": "0.2.0", "entrypoint": "src/release-tls-edge-server.js" },
+    "backup_restore": { "version": "0.2.0", "entrypoint": "scripts/release-backup-restore.js" },
+    "host_operations": { "version": "0.2.0", "entrypoint": "scripts/release-operations.js" },
     "diagnostic_plane": { "version": "0.2.0", "entrypoint": "src/diagnostic-service.js" },
     "diagnostic_cli": { "version": "0.2.0", "entrypoint": "src/diagnostic-cli.js" },
     "diagnostic_model_broker": { "version": "0.1.0", "entrypoint": "src/diagnostic-model-broker-server.js" },
@@ -93,10 +97,30 @@
   ],
   "qualification": [
     "v0.2_release_policy",
+    "v0.2_application_vulnerability_gate",
     "v0.2_clean_extraction",
+    "v0.2_populated_backup_restore",
+    "v0.2_fault_and_recovery_matrix",
     "v0.2_repeatable_debug_loop",
     "v0.1_complete_release_qualification"
   ],
+  "security": {
+    "browser_boundary": "tls_only_loopback_reference",
+    "internal_services_published": false,
+    "runtime_secrets_generated_at_install": true,
+    "provider_credentials_in_release_artifacts": false,
+    "operator_roles": ["viewer", "operator", "owner"],
+    "application_dependency_vulnerability_threshold": "high"
+  },
+  "recovery": {
+    "backup_schema": "alphonse.single_tenant_backup.v0.2",
+    "encryption": "aes-256-gcm",
+    "default_rpo_target_hours": 24,
+    "design_partner_rto_target_minutes": 60,
+    "restored_authority_state": "restore_suspended",
+    "reconcile_before_retry": true
+  },
+  "release_outputs": ["archive", "manifest", "spdx_2.3_sbom", "slsa_v1_provenance", "qualification_evidence"],
   "required_provider": "none",
   "managed_cloud_required": false,
   "aws_deployment_included": false

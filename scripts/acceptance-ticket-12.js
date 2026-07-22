@@ -14,6 +14,10 @@ const authHeaders = {
   "content-type": "application/json",
   authorization: "Bearer local-development-bootstrap-token"
 };
+const productionAuthHeaders = {
+  "content-type": "application/json",
+  authorization: "Bearer local-development-owner-token"
+};
 const composeEnvironment = {
   ...process.env,
   COMPOSE_PROJECT_NAME: "alphonse-kernel-ticket-12-acceptance",
@@ -211,12 +215,12 @@ function policy(policyId, environmentClass, registries, publisher, allowedRiskCl
   };
 }
 
-async function createImportWorkIntent(baseUrl, prefix) {
+async function createImportWorkIntent(baseUrl, prefix, headers = authHeaders) {
   const human = await kernelPostTo(baseUrl, "/kernel/v0/principals", command(`${prefix}-human`,
-    "kernel.principal.create", { principal_type: "human", display_name: `${prefix} Import Sponsor` }));
+    "kernel.principal.create", { principal_type: "human", display_name: `${prefix} Import Sponsor` }), headers);
   assert.equal(human.response.status, 201, JSON.stringify(human.body));
   const agent = await kernelPostTo(baseUrl, "/kernel/v0/principals", command(`${prefix}-agent`,
-    "kernel.principal.create", { principal_type: "agent", display_name: `${prefix} Import Agent` }));
+    "kernel.principal.create", { principal_type: "agent", display_name: `${prefix} Import Agent` }), headers);
   assert.equal(agent.response.status, 201, JSON.stringify(agent.body));
   const token = `${prefix}-agent-token-00000000000000000001`;
   const passport = await kernelPostTo(baseUrl, "/kernel/v0/agent-passports", command(`${prefix}-passport`,
@@ -231,7 +235,7 @@ async function createImportWorkIntent(baseUrl, prefix) {
       provenance: { source: "ticket-12-acceptance" },
       valid_from: new Date(Date.now() - 60_000).toISOString(),
       expires_at: new Date(Date.now() + 60 * 60_000).toISOString()
-    }));
+    }), headers);
   assert.equal(passport.response.status, 201, JSON.stringify(passport.body));
   const proposal = await kernelPostTo(baseUrl, "/kernel/v0/work-intent-proposals", command(`${prefix}-proposal`,
     "kernel.work_intent.propose", {
@@ -245,7 +249,7 @@ async function createImportWorkIntent(baseUrl, prefix) {
   assert.equal(proposal.response.status, 201, JSON.stringify(proposal.body));
   const confirmed = await kernelPostTo(baseUrl,
     `/kernel/v0/work-intent-proposals/${proposal.body.proposal.proposal_id}/confirm`,
-    command(`${prefix}-confirm`, "kernel.work_intent.confirm", {}));
+    command(`${prefix}-confirm`, "kernel.work_intent.confirm", {}), headers);
   assert.equal(confirmed.response.status, 201, JSON.stringify(confirmed.body));
   return confirmed.body.work_intent.work_intent_id;
 }
@@ -273,7 +277,9 @@ try {
 
   const publisher = publisherFixture();
   const developmentWorkIntentId = await createImportWorkIntent(kernelUrl, "t12-dev");
-  const productionWorkIntentId = await createImportWorkIntent(productionKernelUrl, "t12-prod");
+  const productionWorkIntentId = await createImportWorkIntent(
+    productionKernelUrl, "t12-prod", productionAuthHeaders
+  );
   const dependency = portableRelease(publisher, "com.alphonse.inventory.shared", "1.0.0", "executable");
   const dependencyReference = {
     package_id: dependency.manifest.package_id,
@@ -345,7 +351,8 @@ try {
     command("t12-policy-mirror", "kernel.trust_policy.create", { policy: mirrorPolicy }));
   assert.equal(mirrorPolicyCreated.response.status, 201, JSON.stringify(mirrorPolicyCreated.body));
   const productionCreated = await kernelPostTo(productionKernelUrl, "/kernel/v0/trust-policies",
-    command("t12-policy-production", "kernel.trust_policy.create", { policy: productionPolicy }));
+    command("t12-policy-production", "kernel.trust_policy.create", { policy: productionPolicy }),
+    productionAuthHeaders);
   assert.equal(productionCreated.response.status, 201, JSON.stringify(productionCreated.body));
   const crossEnvironmentPolicy = await kernelPost("/kernel/v0/trust-policies",
     command("t12-policy-cross-environment", "kernel.trust_policy.create", { policy: productionPolicy }));
@@ -382,7 +389,7 @@ try {
       work_intent_id: productionWorkIntentId,
       transport: "registry",
       bundle: primaryBundle
-    }));
+    }), productionAuthHeaders);
   assert.equal(productionImport.response.status, 201, JSON.stringify(productionImport.body));
   assert.equal(productionImport.body.import_receipt.admissible, false);
   assert.equal(productionImport.body.quarantined_package, null);

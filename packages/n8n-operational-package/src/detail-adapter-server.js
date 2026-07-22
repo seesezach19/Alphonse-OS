@@ -431,10 +431,7 @@ const server = http.createServer(async (request, response) => {
     }
     if (testControlsEnabled && request.method === "POST" && request.url === "/test/v0/reset-workflow") {
       if (!authenticated(request)) return send(response, 403, { error: { code: "AUTHENTICATION_FAILED" } });
-      workflows.clear();
       workflows.set(baseWorkflow.id, structuredClone(baseWorkflow));
-      candidateSequence = 0;
-      promotionSequence = 0;
       nextPromotionMode = "normal";
       await persistState();
       return send(response, 200, { reset: true, workflow_id: baseWorkflow.id });

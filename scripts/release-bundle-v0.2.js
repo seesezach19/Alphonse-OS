@@ -7,7 +7,8 @@ import { createDeterministicTar } from "./release-bundle.js";
 const RELEASE_VERSION = "0.2.0";
 const TEXT_EXTENSIONS = new Set([".js", ".json", ".md", ".sql", ".yaml", ".yml", ".ps1", ".sh"]);
 const STATIC_FILES = ["package.json", "package-lock.json"];
-const TREES = ["src", "schemas", "verifier", "migrations", "diagnostic-migrations", "docs", "runtime"];
+const TREES = ["src", "schemas", "verifier", "migrations", "diagnostic-migrations", "docs", "runtime",
+  "apps/console"];
 const PACKAGE_TREE = "packages/n8n-operational-package";
 const PACKAGE_EXCLUSIONS = new Set(["packages/n8n-operational-package/compose.customer.yaml"]);
 const RELEASE_FILES = {
@@ -17,7 +18,9 @@ const RELEASE_FILES = {
   "release/v0.2.0/install-local.ps1": "install-local.ps1",
   "release/v0.2.0/install-local.sh": "install-local.sh",
   "release/v0.2.0/release-spec.json": "release-spec.json",
-  "release/v0.2.0/OPERATOR.md": "OPERATOR.md"
+  "release/v0.2.0/OPERATOR.md": "OPERATOR.md",
+  "scripts/release-backup-restore.js": "scripts/release-backup-restore.js",
+  "scripts/release-operations.js": "scripts/release-operations.js"
 };
 
 export function releaseDigest(bytes) {
@@ -34,6 +37,8 @@ async function treeFiles(root, relative) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (["node_modules", ".next"].includes(entry.name)
+        || (relative === "apps/console" && entry.name === "scripts")) continue;
     const child = path.posix.join(relative.replaceAll("\\", "/"), entry.name);
     if (entry.isDirectory()) files.push(...await treeFiles(root, child));
     else if (entry.isFile()) files.push(child);
@@ -100,6 +105,7 @@ export function validateV02ReleaseEntries(entries) {
     issues.push({ code: "CUSTOMER_SECRET_NOT_GENERATED", path: "compose.yaml" });
   }
   for (const required of ["release-spec.json", "OPERATOR.md", "install-local.ps1", "install-local.sh",
+    "scripts/release-backup-restore.js", "scripts/release-operations.js", "apps/console/package.json",
     "packages/n8n-operational-package/operational-package.json"]) {
     if (!paths.has(required)) issues.push({ code: "RELEASE_CONTROL_FILE_MISSING", path: required });
   }
@@ -125,6 +131,60 @@ function jsonBytes(value) {
 function names(entries, directory) {
   return entries.filter((entry) => entry.path.startsWith(`${directory}/`) && entry.path.endsWith(".sql"))
     .map((entry) => path.posix.basename(entry.path));
+}
+
+function buildSpdx(payload, spec) {
+  const packages = [];
+  for (const lockPath of ["package-lock.json", "apps/console/package-lock.json"]) {
+    const lock = JSON.parse(payload.find((entry) => entry.path === lockPath).bytes.toString("utf8"));
+    const scope = lockPath.startsWith("apps/") ? "console" : "kernel";
+    for (const [packagePath, value] of Object.entries(lock.packages ?? {})) {
+      if (!packagePath.includes("node_modules/") || !value.version) continue;
+      const name = packagePath.split("node_modules/").at(-1);
+      packages.push({ SPDXID: `SPDXRef-${scope}-${packages.length + 1}`, name,
+        versionInfo: value.version, downloadLocation: "NOASSERTION",
+        filesAnalyzed: false, licenseConcluded: value.license ?? "NOASSERTION",
+        externalRefs: value.integrity ? [{ referenceCategory: "PACKAGE-MANAGER",
+          referenceType: "purl", referenceLocator: `pkg:npm/${encodeURIComponent(name)}@${value.version}` }] : [] });
+    }
+  }
+  for (const [name, image] of Object.entries(spec.base_images)) {
+    packages.push({ SPDXID: `SPDXRef-image-${name}`, name: `container:${name}`,
+      versionInfo: image.split("@sha256:")[1].slice(0, 16), downloadLocation: "NOASSERTION",
+      filesAnalyzed: false, licenseConcluded: "NOASSERTION",
+      externalRefs: [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl",
+        referenceLocator: `pkg:docker/${encodeURIComponent(image)}` }] });
+  }
+  return {
+    spdxVersion: "SPDX-2.3", dataLicense: "CC0-1.0", SPDXID: "SPDXRef-DOCUMENT",
+    name: `Alphonse single-tenant release ${RELEASE_VERSION}`,
+    documentNamespace: `https://alphonse.local/sbom/${RELEASE_VERSION}`,
+    creationInfo: { created: "1970-01-01T00:00:00Z", creators: ["Tool: alphonse-release-bundle-v0.2"] },
+    packages: packages.sort((left, right) => left.SPDXID.localeCompare(right.SPDXID))
+  };
+}
+
+function buildProvenance(archiveDigest, manifestDigest, payloadFiles, sbomDigest) {
+  return {
+    _type: "https://in-toto.io/Statement/v1",
+    subject: [{ name: `alphonse-v${RELEASE_VERSION}.tar`, digest: { sha256: archiveDigest.slice(7) } }],
+    predicateType: "https://slsa.dev/provenance/v1",
+    predicate: {
+      buildDefinition: {
+        buildType: "https://alphonse.local/build-types/deterministic-ustar/v0.2",
+        externalParameters: { release_version: RELEASE_VERSION, normalized_mtime: 0, text_line_endings: "lf" },
+        internalParameters: {},
+        resolvedDependencies: payloadFiles.map((item) => ({ uri: `file:${item.path}`,
+          digest: { sha256: item.digest.slice(7) } }))
+      },
+      runDetails: {
+        builder: { id: "https://alphonse.local/builders/release-bundle-v0.2" },
+        metadata: { invocationId: manifestDigest, startedOn: "1970-01-01T00:00:00Z",
+          finishedOn: "1970-01-01T00:00:00Z" },
+        byproducts: [{ name: "sbom.spdx.json", digest: { sha256: sbomDigest.slice(7) } }]
+      }
+    }
+  };
 }
 
 export async function buildV02Release(root, { outputDirectory = path.join(root, "dist"), write = false } = {}) {
@@ -183,12 +243,25 @@ export async function buildV02Release(root, { outputDirectory = path.join(root, 
       format: "ustar", normalized_text_line_endings: "lf", normalized_mtime: 0 } };
   const manifestBytes = jsonBytes(manifest);
   const manifestDigest = releaseDigest(manifestBytes);
+  const sbom = buildSpdx(payload, spec);
+  const sbomBytes = jsonBytes(sbom);
+  const sbomDigest = releaseDigest(sbomBytes);
+  const provenance = buildProvenance(archiveDigest, manifestDigest, payloadFiles, sbomDigest);
+  const provenanceBytes = jsonBytes(provenance);
+  const provenanceDigest = releaseDigest(provenanceBytes);
   if (write) {
     await mkdir(outputDirectory, { recursive: true });
     await writeFile(path.join(outputDirectory, archiveName), archive);
     await writeFile(path.join(outputDirectory, `alphonse-v${RELEASE_VERSION}-manifest.json`), manifestBytes);
     await writeFile(path.join(outputDirectory, `alphonse-v${RELEASE_VERSION}-manifest.sha256`),
       Buffer.from(`${manifestDigest.slice(7)}  alphonse-v${RELEASE_VERSION}-manifest.json\n`, "ascii"));
+    await writeFile(path.join(outputDirectory, `alphonse-v${RELEASE_VERSION}-sbom.spdx.json`), sbomBytes);
+    await writeFile(path.join(outputDirectory, `alphonse-v${RELEASE_VERSION}-sbom.spdx.sha256`),
+      Buffer.from(`${sbomDigest.slice(7)}  alphonse-v${RELEASE_VERSION}-sbom.spdx.json\n`, "ascii"));
+    await writeFile(path.join(outputDirectory, `alphonse-v${RELEASE_VERSION}-provenance.intoto.json`), provenanceBytes);
+    await writeFile(path.join(outputDirectory, `alphonse-v${RELEASE_VERSION}-provenance.intoto.sha256`),
+      Buffer.from(`${provenanceDigest.slice(7)}  alphonse-v${RELEASE_VERSION}-provenance.intoto.json\n`, "ascii"));
   }
-  return { archive, archiveName, archiveDigest, manifest, manifestBytes, manifestDigest, policy };
+  return { archive, archiveName, archiveDigest, manifest, manifestBytes, manifestDigest, policy,
+    sbom, sbomBytes, sbomDigest, provenance, provenanceBytes, provenanceDigest };
 }
