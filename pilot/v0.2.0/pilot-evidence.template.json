@@ -1,0 +1,102 @@
+{
+  "schema_version": "alphonse.design_partner_pilot_evidence.v0.2",
+  "plan_digest": "REPLACE_WITH_PRECOMMITTED_PLAN_SHA256",
+  "pilot_id": "REPLACE_WITH_UUID",
+  "started_at": "REPLACE_WITH_ISO_TIMESTAMP",
+  "finished_at": "REPLACE_WITH_ISO_TIMESTAMP",
+  "operator": {
+    "operator_id": "REPLACE_WITH_OPAQUE_OPERATOR_ID",
+    "unfamiliar_with_alphonse": false,
+    "repository_accessed": true,
+    "allowed_materials": [
+      "pilot_packet",
+      "release_archive",
+      "public_protocol",
+      "operations_console",
+      "authorized_n8n_access"
+    ],
+    "human_attention_ms": 0,
+    "undocumented_steps": ["REPLACE_OR_REMOVE_AFTER_COLD_RUN"]
+  },
+  "agency": {
+    "agency_id": "REPLACE_WITH_OPAQUE_AGENCY_ID",
+    "agreement_digest": "REPLACE_WITH_SHA256",
+    "agreement_signed_at": "REPLACE_WITH_ISO_TIMESTAMP_BEFORE_START",
+    "decision_terms_precommitted": false
+  },
+  "client": {
+    "client_id": "REPLACE_WITH_OPAQUE_CLIENT_ID",
+    "real_client": false,
+    "consent_digest": "REPLACE_WITH_SHA256"
+  },
+  "workflow": {
+    "workflow_id": "REPLACE_WITH_OPAQUE_N8N_WORKFLOW_ID",
+    "existing_workflow": false,
+    "customer_owned": false,
+    "low_risk": false,
+    "reversible": false,
+    "pre_pilot_backup_digest": "REPLACE_WITH_SHA256",
+    "managed_tls": false,
+    "provider_credentials_at_adapter_edge": false,
+    "rollback_reference_digest": "REPLACE_WITH_SHA256",
+    "selection_record_digest": "REPLACE_WITH_SHA256",
+    "hard_gates_passed": false,
+    "preference_score": 0
+  },
+  "journey": [
+    { "step": "install", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" },
+    { "step": "onboard", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" },
+    { "step": "observe", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" },
+    { "step": "diagnose", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" },
+    { "step": "repair", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" },
+    { "step": "verify", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" },
+    { "step": "authorize", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" },
+    { "step": "target_confirm", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" },
+    { "step": "assurance_export", "completed_at": "REPLACE_WITH_ISO_TIMESTAMP", "public_evidence_ref": "REPLACE" }
+  ],
+  "friction": [
+    {
+      "step": "install",
+      "started_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "ended_at": "REPLACE_WITH_LATER_ISO_TIMESTAMP",
+      "human_attention_ms": 0,
+      "material": "pilot_packet",
+      "observed_code": "REPLACE_WITH_ERROR_OR_FRICTION_CODE",
+      "resolution": "REPLACE_WITH_RESOLUTION"
+    }
+  ],
+  "incident": {
+    "case_id": "REPLACE_WITH_UUID",
+    "real_incident": false,
+    "observed_behavior_digest": "REPLACE_WITH_SHA256",
+    "expected_behavior_digest": "REPLACE_WITH_SHA256"
+  },
+  "repair": {
+    "candidate_id": "REPLACE_WITH_UUID",
+    "verification_id": "REPLACE_WITH_UUID",
+    "promotion_id": "REPLACE_WITH_UUID",
+    "owner_authorization_id": "REPLACE_WITH_UUID",
+    "repair_worker_id": "REPLACE_WITH_OPAQUE_REPAIR_WORKER_ID",
+    "verifier_id": "REPLACE_WITH_DISTINCT_OPAQUE_VERIFIER_ID",
+    "owner_id": "REPLACE_WITH_DISTINCT_NAMED_OWNER_ID",
+    "independently_verified": false,
+    "owner_authorized": false,
+    "target_confirmation_digest": "REPLACE_WITH_SHA256",
+    "rollback_reference_digest": "REPLACE_WITH_SHA256",
+    "duplicate_consequential_effects": 0
+  },
+  "assurance": {
+    "bundle_digest": "REPLACE_WITH_SHA256",
+    "client_reviewed": false,
+    "useful_to_client": false,
+    "limitations_acknowledged": false
+  },
+  "commercial": {
+    "decision": "pending",
+    "decided_at": "REPLACE_WITH_ISO_TIMESTAMP",
+    "agreement_digest": "REPLACE_WITH_SHA256",
+    "monthly_amount": 0,
+    "currency": "USD"
+  },
+  "limitations": ["REPLACE_WITH_ACTUAL_PRODUCTION_LIMITATIONS"]
+}
