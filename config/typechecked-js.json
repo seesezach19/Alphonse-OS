@@ -11,6 +11,8 @@
     "src/maintenance-assurance-service.js",
     "src/operations.js",
     "src/portable-trust.js",
+    "src/release-console-bootstrap.js",
+    "src/release-tls-edge-server.js",
     "src/repair-worker-client.js",
     "src/route-context.js",
     "src/support-router.js"

@@ -19,16 +19,20 @@ test("V0.2 release is byte-reproducible and content-addressed", async () => {
   assert.match(first.archiveName, /^alphonse-v0\.2\.0-[0-9a-f]{16}\.tar$/);
   assert.equal(first.manifest.archive.normalized_mtime, 0);
   assert.equal(first.policy.valid, true);
+  assert.deepEqual(first.sbom, second.sbom);
+  assert.deepEqual(first.provenance, second.provenance);
+  assert.match(first.sbomDigest, /^sha256:[0-9a-f]{64}$/);
+  assert.match(first.provenanceDigest, /^sha256:[0-9a-f]{64}$/);
 });
 
 test("V0.2 manifest pins the complete headless Debug Loop", async () => {
   const release = await buildV02Release(root);
   assert.deepEqual(Object.keys(release.manifest.components).sort(), [
-    "diagnostic_cli", "diagnostic_consistency_evaluator", "diagnostic_model_broker",
+    "backup_restore", "diagnostic_cli", "diagnostic_consistency_evaluator", "diagnostic_model_broker",
     "diagnostic_plane", "diagnostic_runner", "diagnostic_worker", "event_reporter",
-    "independent_diagnostic_verifier", "kernel",
-    "n8n_operational_package", "n8n_repair_delivery_adapter", "n8n_runtime_adapter",
-    "reference_workflow", "verification_runner"
+    "host_operations", "independent_diagnostic_verifier", "kernel", "n8n_operational_package",
+    "n8n_repair_delivery_adapter", "n8n_runtime_adapter", "operations_console",
+    "reference_workflow", "tls_edge", "verification_runner"
   ]);
   assert.ok(Object.values(release.manifest.components)
     .every((component) => /^sha256:[0-9a-f]{64}$/.test(component.source_digest)));
@@ -39,6 +43,9 @@ test("V0.2 manifest pins the complete headless Debug Loop", async () => {
   assert.equal(release.manifest.payload_files.filter((item) => item.path.startsWith("migrations/")).length, 24);
   assert.equal(release.manifest.payload_files
     .filter((item) => item.path.startsWith("diagnostic-migrations/")).length, 31);
+  assert.ok(release.manifest.payload_files.some((item) => item.path === "apps/console/app/page.tsx"));
+  assert.equal(release.sbom.spdxVersion, "SPDX-2.3");
+  assert.equal(release.provenance.predicateType, "https://slsa.dev/provenance/v1");
 });
 
 test("V0.2 release excludes credentials, development state, test authority, and n8n binaries", async () => {
@@ -54,7 +61,8 @@ test("V0.2 release excludes credentials, development state, test authority, and 
 
   const unsafe = entries.map((entry) => entry.path === "compose.yaml" ? { ...entry,
     bytes: Buffer.from(entry.bytes.toString("utf8")
-      .replace('"127.0.0.1:${KERNEL_PORT:-3000}:3000"', '"0.0.0.0:${KERNEL_PORT:-3000}:3000"')) } : entry);
+      .replace('"127.0.0.1:${ALPHONSE_HTTPS_PORT:-3443}:3443"',
+        '"0.0.0.0:${ALPHONSE_HTTPS_PORT:-3443}:3443"')) } : entry);
   assert.ok(validateV02ReleaseEntries(unsafe).issues.some((issue) => issue.code === "NON_LOOPBACK_PORT"));
 
   const testAuthority = entries.map((entry) => entry.path === "compose.yaml" ? { ...entry,

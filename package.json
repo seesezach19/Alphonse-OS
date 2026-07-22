@@ -92,6 +92,8 @@
     "test:coverage-capability": "node scripts/acceptance-coverage-capability.js",
     "release:v0.2:build": "node scripts/build-release-v0.2.js",
     "release:v0.2:qualify": "node scripts/qualify-release-v0.2.js",
+    "release:v0.2:recover": "node scripts/qualify-single-tenant-recovery.js",
+    "release:v0.2:audit": "npm audit --omit=dev --audit-level=high && npm audit --prefix apps/console --omit=dev --audit-level=high",
     "release:build": "node scripts/build-release-v0.1.js",
     "release:qualify": "node scripts/qualify-release-v0.1.js",
     "backup:local": "node scripts/local-backup.js create",

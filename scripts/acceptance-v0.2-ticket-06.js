@@ -81,7 +81,7 @@ try {
   const bindingId = "00000000-0000-4000-8000-000000000601";
   const bindingInput = {
     binding_id: bindingId,
-    adapter: { adapter_id: "alphonse.n8n.repair-delivery", adapter_version: "0.2.0" },
+    adapter: { adapter_id: "alphonse.n8n.repair-delivery", adapter_version: "0.3.0" },
     target: {
       system: "n8n", target_type: "workflow", target_id: "InventoryDefect1",
       environment: "customer-local"

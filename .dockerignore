@@ -1,5 +1,7 @@
 .git
 .scratch
 node_modules
+**/node_modules
+**/.next
 coverage
 *.log

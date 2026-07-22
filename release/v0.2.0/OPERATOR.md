@@ -1,30 +1,35 @@
-# Alphonse V0.2 Headless Operator Guide
+# Alphonse V0.2 Single-Tenant Operator Guide
 
-## Scope
+## Release boundary
 
-V0.2 is a customer-controlled Docker release of the governed Debug Loop. It runs the Alphonse Node, Diagnostic Plane,
-CLI source, local verification runner, n8n Operational Package, PostgreSQL, and an optional reference n8n service. It
-requires no AWS account, managed cloud service, or model-provider account.
+This archive installs one customer-controlled Alphonse Node, authenticated live Operations Console, PostgreSQL,
+Diagnostic Plane, n8n adapter, and optional reference n8n runtime. It is a single-host design-partner release, not a
+hosted service, high-availability system, Kubernetes distribution, enterprise SSO product, or compliance certification.
 
-Alphonse does not include or redistribute n8n software. The reference composition pulls the pinned upstream n8n image
-for the customer. n8n remains a separately operated customer service and system of authority for its workflows,
-integrations, credentials, and native revision state. Review n8n's current license before business use:
-https://docs.n8n.io/sustainable-use-license/
+Alphonse does not redistribute n8n. Compose pulls the pinned upstream image for the customer. n8n remains a separately
+operated customer service and the customer-owned system of authority for its workflows, integrations, credentials, and native revision state. Review its
+current license before business use: https://docs.n8n.io/sustainable-use-license/
 
-## Prerequisites
+## Prerequisites and verified inputs
 
-- 64-bit machine with at least 4 CPU cores, 8 GB RAM, and 12 GB free disk.
-- Docker Desktop 4.x with Linux containers, or Docker Engine 26+ with Compose v2.
-- Windows PowerShell 5.1+ for `install-local.ps1`, or a POSIX shell for `install-local.sh`.
-- Loopback ports 3000 and 5678 available.
+- 64-bit Linux host or Docker Desktop Linux containers with at least 4 CPU cores, 8 GB RAM, and 12 GB free disk.
+- Docker Engine 26+ and Compose v2; OpenSSL 3+; a POSIX shell or Windows PowerShell.
+- Loopback port 3443 free, or set `ALPHONSE_HTTPS_PORT`.
+- The release archive, manifest, SHA-256 files, SPDX 2.3 SBOM, in-toto/SLSA provenance, and qualification evidence.
 
-## Install
+Before extraction, compare the archive digest to the signed delivery channel. After extraction, verify sidecars:
 
-Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install-local.ps1
+```sh
+sha256sum -c alphonse-v0.2.0-manifest.sha256
+sha256sum -c alphonse-v0.2.0-sbom.spdx.sha256
+sha256sum -c alphonse-v0.2.0-provenance.intoto.sha256
 ```
+
+The manifest pins every payload byte and base image digest. The provenance binds the archive digest to those source
+materials. The SBOM inventories application dependencies and images; it is evidence, not a claim that no future CVE
+exists. Re-run the documented vulnerability gates immediately before each deployment.
+
+## One-command install
 
 Linux/macOS:
 
@@ -32,94 +37,144 @@ Linux/macOS:
 ./install-local.sh
 ```
 
-The installer creates `.env.release` once with random local credentials, then builds and starts the pinned composition.
-It never overwrites existing credentials. PostgreSQL, the runtime adapter, and internal service surfaces have no host
-ports. Kernel and n8n bind only to `127.0.0.1`.
-
-## Reference Workflows
-
-The archive contains importable workflow JSON but does not mutate n8n automatically. Import through n8n's supported CLI:
+Windows:
 
 ```powershell
-docker compose --project-name alphonse-v0-2 --env-file .env.release -f compose.yaml exec -T n8n n8n import:workflow --input=/package/workflows/alphonse-event-reporter.json
-docker compose --project-name alphonse-v0-2 --env-file .env.release -f compose.yaml exec -T n8n n8n import:workflow --input=/package/workflows/inventory-follow-up-defective.json
+powershell -ExecutionPolicy Bypass -File .\install-local.ps1
 ```
 
-The workflow is a deterministic local demonstration. It routes output to local review and performs no email or inventory
-effect. Register a real workflow revision and configure its exact reporting identity before using Runtime Events.
+The installer generates `.env.release` with restrictive permissions, creates a local TLS identity, admits the bounded
+Console Operator Passport, builds pinned targets, and waits for health. Re-running it preserves existing credentials,
+TLS identity, database volumes, and command receipts. It never uses `local-*` development credentials.
 
-## Inspection
+Open `https://localhost:3443` (or the configured port). Verify the certificate fingerprint before trusting it. The
+generated certificate is only for loopback qualification; replace `.tls/tls.crt` and `.tls/tls.key` with a
+customer-issued identity before any approved network exposure.
 
-Read `KERNEL_OWNER_TOKEN` from `.env.release`, then set:
+Viewer, Operator, and Owner login secrets are in `.env.release`. Viewer reads authoritative projections. Operator can
+suspend workers and quarantine workflows under an exact Passport. Only Owner can restore either. The browser receives
+none of the Kernel credentials: signed HttpOnly strict-site sessions and the Console server mediate every request.
 
-```powershell
-$env:ALPHONSE_URL="http://127.0.0.1:3000"
-$env:ALPHONSE_TOKEN="<owner-token>"
-npm run diagnostic:cli -- get-case <case-id>
-npm run diagnostic:cli -- get-promotion <promotion-id>
+## Network and secret custody
+
+Only the TLS edge binds a host port, and only to `127.0.0.1`. Kernel, Console, PostgreSQL, n8n, and the adapter expose no
+host ports. Internal control and data networks have no external route; only the provider-edge network permits the n8n
+boundary to reach customer-approved services. Containers use read-only roots, dropped capabilities, and
+`no-new-privileges` where their upstream initialization permits it.
+
+`.env.release` is the runtime secret store for this reference release. Keep it outside release artifacts and backup it
+under separate access control. Provider credentials remain at the adapter/n8n edge and never enter the release archive,
+Kernel records, Console browser, model prompt, SBOM, provenance, or qualification evidence. The Kernel records a
+secret-free binding reference only. Model-provider credentials remain in the selected worker/broker edge.
+
+Host administrators and Docker administrators remain trusted and can bypass application controls. Host firewall,
+disk encryption, OS patching, physical security, certificate issuance, and off-host backup custody remain customer
+responsibilities.
+
+## Health, capacity, and break glass
+
+Run:
+
+```sh
+node scripts/release-operations.js status
 ```
 
-These are public protocol calls. Do not inspect or modify PostgreSQL directly.
+This reports exact Compose health and filesystem free space. The default disk warning is 10 GiB; override
+`ALPHONSE_DISK_WARN_BYTES` only through an approved capacity policy. Route nonzero status, unhealthy containers, backup
+failure, certificate expiry, and disk warnings to the design-partner support channel.
 
-## Custody And Trust
+To fence new work during an incident:
 
-- PostgreSQL and content-addressed artifact volumes remain under customer host and Docker custody.
-- `.env.release` contains local Owner, HMAC, signing, encryption, adapter, and database credentials. Restrict it to the
-  operator account and back it up separately from database and artifact snapshots.
-- n8n provider credentials remain only in customer-owned n8n. Alphonse persists a secret-free credential binding
-  reference, not the provider credential.
-- Repair Worker model credentials remain in the customer-selected worker. They are not stored by Alphonse.
-- Routine Runtime Events contain identity and digests, not full business payloads. Detailed data is retrieved only for an
-  active case, redacted by package policy, then stored in customer-controlled artifacts.
-- The customer trusts pinned image digests, Docker Engine, the host kernel, filesystem, and local administrator.
-- Host administrators can bypass application controls. Network exposure, host hardening, backups, and incident response
-  remain customer responsibilities.
+```sh
+ALPHONSE_BREAK_GLASS_CONFIRM=FENCE_NEW_WORK \
+ALPHONSE_BREAK_GLASS_REASON="incident reference" \
+node scripts/release-operations.js break-glass
+```
 
-## Retention, Backup, And Recovery
+This stops browser access, n8n, and the adapter while leaving the unexposed Kernel/PostgreSQL evidence boundary available
+for an explicit local inspection. It does not reconcile uncertainty or authorize a retry. After an Owner confirms target
+state and all legal next operations:
 
-Diagnostic metadata is append-only. A governed erasure decision revokes application access and package execution
-eligibility before local artifact deletion. Physical deletion is an idempotent follow-up that preserves the decision,
-digest identity, impact, deletion attempts, and a location-specific digest tombstone. Active legal holds cannot be overridden.
-Missing bytes without a governed decision are reported as an integrity violation rather than silently normalized.
+```sh
+ALPHONSE_BREAK_GLASS_CONFIRM=RECOVER_AFTER_REVIEW \
+ALPHONSE_BREAK_GLASS_REASON="review reference" \
+node scripts/release-operations.js recover
+```
 
-A verified tombstone establishes absence only from the local primary content-addressed store. It does not prove erasure
-from backups, unregistered replicas, or material already disclosed to a model or other provider. Those limits remain
-explicit, and the protocol does not claim universal deletion.
+Both host actions append a restrictive local `operations.log`. Kernel operations remain the source of authority;
+the host log is incident evidence, not a parallel authorization ledger.
 
-Back up both PostgreSQL and the `diagnostic-artifacts` volume before upgrades. Keep `.env.release` separately. A database
-backup without matching artifacts is incomplete. Promotion preserves a rollback snapshot; uncertain promotion must be
-reconciled read-only before any new apply attempt. Rollback requires a separate authenticated Owner command.
+## Encrypted backup and populated restore
 
-## Protocol Meaning
+The design-partner target is RPO at most 24 hours and RTO at most 60 minutes. Schedule one encrypted backup at least
+daily and before every upgrade or configuration change. Monitor its completion and copy the bundle off-host under an
+independent retention policy. The qualification drill measures its actual restore time; the target is not a guarantee
+under arbitrary hardware, database size, or incident conditions.
 
-- External Activity is an authenticated observation from an external runtime. It is not a governed Kernel Run and does
-  not prove the external effect occurred.
-- Verification proves only the demonstrated failure and retained targeted regressions for exact artifacts. It is not a
-  broad certification of an agent or workflow.
-- Repair Worker submission and passing verification grant no promotion authority. Promotion remains an explicit Owner
-  transition against an exact target revision.
-- A Diagnostic Consistency Test commits one hidden rubric before dispatch, requires three separately authorized Worker
-  Runs over one exact package and configuration digest, preserves their diagnoses independently, and reports platform
-  reproducibility separately from model consistency. It grants no repair or external-effect authority.
+```sh
+node scripts/release-backup-restore.js create backups/node.json
+node scripts/release-backup-restore.js verify backups/node.json
+```
 
-## Limitations
+The AES-256-GCM bundle authenticates both Kernel and Diagnostic PostgreSQL dumps plus diagnostic artifacts, n8n adapter
+state, and customer-owned reference n8n state. Its manifest binds the exact environment sequence, execution epoch,
+record digests, availability metadata, and store bytes. Keep `KERNEL_BACKUP_KEY` separately from copied bundles.
 
-- V0.2 is local-first, single-customer, headless, and not highly available.
-- The included detail and repair-delivery adapter is a reference implementation for the deterministic proof. Its
-  fault-injection controls are disabled in this release. Production n8n integration must use supported n8n APIs and a
-  customer-issued API credential under customer custody.
-- The reference n8n Code node reads reporting configuration from its process environment. Treat all installed workflows
-  as trusted code or replace this setup with a customer-approved credential mechanism.
-- Automatic anomaly detection, model-assisted diagnosis, automatic promotion, OTLP, SDKs, and a Console are not included.
-- The canonical three-run consistency proof uses a deterministic synthetic reference provider. It validates package,
-  runtime, configuration, rubric, ingestion, and scoring boundaries; it is not frontier-model quality or statistical
-  reliability evidence. Provider-unverified snapshot and seed controls remain explicit report limitations.
-- No real customer email, production inventory write, AWS operation, or other external business effect is configured.
+Restore is deliberately fenced:
 
-## Stop
+```sh
+node scripts/release-backup-restore.js restore backups/node.json
+```
 
-```powershell
+The tool verifies the encrypted manifest before replacing bytes, restores original database ownership, advances the
+execution epoch, and starts in `restore_suspended`. An Owner must then invoke, in order:
+
+1. `kernel.environment.restore.begin` with the exact manifest and digest.
+2. `kernel.environment.restore.projection_rebuild`.
+3. Read-only reconciliation for every ambiguous external effect.
+4. `kernel.environment.restore.verify` with every retained artifact digest.
+5. `kernel.environment.restore.resume` only after all checks and recovery obligations pass.
+
+Never retry an ambiguous effect during restore. Backup/restore preserves admitted authority records, receipts, artifact
+availability, workflow quarantine, and legal next operations; it does not infer current external target state.
+
+## Upgrade and rollback
+
+Compatibility is exact to the release manifest and migration lists. Before upgrade: verify the new archive and sidecars,
+record current health, create an encrypted backup, export its manifest digest, and stop at any unresolved Promotion,
+Recovery Case, quarantine, revocation, or disk alert. Use the same Compose project name so volumes remain customer-bound.
+
+Migrations are forward-only and idempotent. A failed upgrade remains fenced. Rollback means reinstalling the previously
+verified release bytes and restoring the matching pre-upgrade encrypted bundle; it is not a down-migration. Reconcile
+the target before retrying anything that might have applied. An uncertain promotion must be reconciled read-only before
+rollback or a new apply command.
+
+## Retention and erasure
+
+Retain daily bundles for 30 days by default, weekly bundles for 90 days only if the customer policy permits, and delete
+expired bundles plus separately held keys through the customer backup system. Diagnostic metadata is append-only.
+Governed erasure first revokes application access and package eligibility, then deletes local bytes idempotently while
+preserving the decision and digest tombstone. A digest tombstone proves absence only from the local primary store; it
+does not prove deletion from backups, replicas, or material already disclosed to a provider. Active legal holds win.
+
+## Protocol meaning and limitations
+
+- External Activity is an authenticated observation, not proof that an external effect occurred.
+- Passing targeted verification is not a broad certification of an agent or workflow.
+- Repair and verification grant no Promotion authority. Named-human authorization remains exact to candidate, receipt,
+  target, base revision, and recovery reference.
+- The Console projects Kernel truth; it owns no database, workflow, case, or decision truth.
+- Fault-injection controls are disabled in release composition.
+- The reference n8n runtime is a local proof substrate. A production n8n deployment needs a customer-issued API
+  credential, retention policy, supported provider backup, and approved connector/network boundary.
+- The release is not highly available. Hardware loss between backups can exceed the RPO, and large restores can exceed
+  the RTO. Qualification on an isolated fresh extraction is not universal hardware or compliance certification.
+
+Stop without deleting state:
+
+```sh
 docker compose --project-name alphonse-v0-2 --env-file .env.release -f compose.yaml down
 ```
 
-Do not add `--volumes` unless permanent deletion of customer-controlled state is intended.
+Do not add `--volumes` unless permanent deletion of customer-controlled state is explicitly approved and separately
+recoverable.

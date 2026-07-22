@@ -15,9 +15,12 @@ console.log(JSON.stringify({
   archive: first.archiveName,
   archive_digest: first.archiveDigest,
   manifest_digest: first.manifestDigest,
+  sbom_digest: first.sbomDigest,
+  provenance_digest: first.provenanceDigest,
   payload_files: first.manifest.payload_files.length,
   reproducible_rebuild: true,
   policy: "passed",
+  sidecars: ["manifest", "spdx_2.3_sbom", "slsa_v1_provenance"],
   n8n_redistributed: false,
   aws_activity: false
 }, null, 2));

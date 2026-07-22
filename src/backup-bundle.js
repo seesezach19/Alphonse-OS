@@ -71,3 +71,78 @@ export function openEncryptedBackup(bundle, key) {
     throw new KernelError(409, "BACKUP_DECRYPTION_FAILED", "Backup authentication or decryption failed.");
   }
 }
+
+function archiveManifest(items, kind) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new KernelError(400, "EMPTY_BACKUP_SCOPE", `Backup requires at least one ${kind}.`);
+  }
+  const names = new Set();
+  return items.map((item) => {
+    if (typeof item.name !== "string" || !/^[a-z][a-z0-9_-]{1,63}$/.test(item.name) || names.has(item.name)) {
+      throw new KernelError(400, "INVALID_BACKUP_SCOPE", `Backup ${kind} names must be unique stable identifiers.`);
+    }
+    names.add(item.name);
+    const bytes = Buffer.from(item.bytes);
+    return { name: item.name, digest: bytesDigest(bytes), size_bytes: bytes.length };
+  }).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function createEncryptedNodeBackup({ backupId, environmentId, restorePointSequence, executionEpoch,
+  databaseDumps, storeArchives, artifacts = [], key, keyId, createdAt = new Date().toISOString() }) {
+  const databases = archiveManifest(databaseDumps, "database dump");
+  const stores = archiveManifest(storeArchives, "store archive");
+  const manifest = {
+    schema_version: "alphonse.single_tenant_backup.v0.2",
+    backup_id: backupId,
+    environment_id: environmentId,
+    restore_point_sequence: Number(restorePointSequence),
+    execution_epoch: Number(executionEpoch),
+    database_dumps: databases,
+    store_archives: stores,
+    artifacts: [...artifacts].map((item) => ({ digest: item.digest, size_bytes: Number(item.size_bytes) }))
+      .sort((left, right) => left.digest.localeCompare(right.digest)),
+    created_at: createdAt,
+    encryption: { algorithm: "aes-256-gcm", key_id: keyId }
+  };
+  const byName = (items) => [...items].sort((left, right) => left.name.localeCompare(right.name))
+    .map((item) => ({ name: item.name, bytes: Buffer.from(item.bytes).toString("base64") }));
+  const payload = canonicalize({ database_dumps: byName(databaseDumps), store_archives: byName(storeArchives) });
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", keyBytes(key), iv);
+  cipher.setAAD(Buffer.from(canonicalize(manifest)));
+  const ciphertext = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
+  return {
+    manifest,
+    manifest_digest: sha256Digest(manifest),
+    iv: iv.toString("base64"),
+    auth_tag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64")
+  };
+}
+
+export function openEncryptedNodeBackup(bundle, key) {
+  if (bundle?.manifest?.schema_version !== "alphonse.single_tenant_backup.v0.2"
+      || sha256Digest(bundle.manifest) !== bundle.manifest_digest) {
+    throw new KernelError(409, "BACKUP_MANIFEST_DIGEST_MISMATCH", "Node backup manifest is invalid.");
+  }
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", keyBytes(key), Buffer.from(bundle.iv, "base64"));
+    decipher.setAAD(Buffer.from(canonicalize(bundle.manifest)));
+    decipher.setAuthTag(Buffer.from(bundle.auth_tag, "base64"));
+    const payload = JSON.parse(Buffer.concat([
+      decipher.update(Buffer.from(bundle.ciphertext, "base64")), decipher.final()
+    ]).toString("utf8"));
+    const open = (items) => items.map((item) => ({ name: item.name, bytes: Buffer.from(item.bytes, "base64") }));
+    const databaseDumps = open(payload.database_dumps);
+    const storeArchives = open(payload.store_archives);
+    if (canonicalize(archiveManifest(databaseDumps, "database dump")) !== canonicalize(bundle.manifest.database_dumps)
+        || canonicalize(archiveManifest(storeArchives, "store archive")) !== canonicalize(bundle.manifest.store_archives)) {
+      throw new KernelError(409, "BACKUP_PAYLOAD_MANIFEST_MISMATCH",
+        "Node backup payload does not match its authenticated manifest.");
+    }
+    return { manifest: bundle.manifest, databaseDumps, storeArchives };
+  } catch (error) {
+    if (error instanceof KernelError) throw error;
+    throw new KernelError(409, "BACKUP_DECRYPTION_FAILED", "Node backup authentication or decryption failed.");
+  }
+}

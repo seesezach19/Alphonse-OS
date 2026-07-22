@@ -8,7 +8,10 @@ import { buildV02Release, releaseDigest } from "./release-bundle-v0.2.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const suites = [
   ["v0.2_release_policy", ["run", "release:v0.2:build"]],
+  ["v0.2_application_vulnerability_gate", ["run", "release:v0.2:audit"]],
   ["v0.2_clean_extraction", ["run", "test:v0.2-ticket-11"]],
+  ["v0.2_populated_backup_restore", ["run", "release:v0.2:recover"]],
+  ["v0.2_fault_and_recovery_matrix", ["run", "proof:maintenance"]],
   ["v0.2_repeatable_debug_loop", ["run", "rehearse:v0.2"]],
   ["v0.1_complete_release_qualification", ["run", "release:qualify", "--", "--resume"]]
 ];
@@ -80,6 +83,8 @@ const evidence = {
   release_version: "0.2.0",
   release_archive_digest: release.archiveDigest,
   release_manifest_digest: release.manifestDigest,
+  release_sbom_digest: release.sbomDigest,
+  release_provenance_digest: release.provenanceDigest,
   release_spec_digest: release.manifest.payload_files.find((item) => item.path === "release-spec.json").digest,
   qualification_plan_digest: planDigest,
   "v0.1_qualification_evidence_digest": v01EvidenceDigest,
@@ -87,9 +92,19 @@ const evidence = {
   suites: results,
   assertions: {
     clean_extraction_and_generated_credentials: true,
-    pinned_headless_debug_loop_components: true,
+    tls_only_live_console_and_least_privilege_networks: true,
+    viewer_operator_owner_sessions: true,
+    pinned_single_tenant_components: true,
+    encrypted_populated_backup_restore: true,
+    restore_authority_fenced_until_verified: true,
+    rpo_target_hours: 24,
+    rto_target_minutes: 60,
+    application_high_and_critical_vulnerability_gate: true,
+    sbom_and_provenance_emitted: true,
     happy_duplicate_conflict_expiry_verification_and_stale_target: true,
     uncertain_promotion_reconciliation_and_rollback: true,
+    break_glass_stops_browser_and_external_runtime: true,
+    health_and_disk_alerts: true,
     "complete_v0.1_regression": true,
     n8n_customer_owned_and_not_redistributed: true,
     provider_credentials_included: false,
@@ -109,6 +124,9 @@ console.log(JSON.stringify({
   qualification: "passed",
   evidence: evidenceName,
   evidence_digest: evidenceDigest,
+  archive_digest: release.archiveDigest,
+  sbom_digest: release.sbomDigest,
+  provenance_digest: release.provenanceDigest,
   suites: results.length,
   aws_activity: false
 }, null, 2));
