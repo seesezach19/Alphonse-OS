@@ -1,0 +1,78 @@
+{
+  "schema_version": "alphonse.design_partner_pilot_plan.v0.2",
+  "plan_id": "alphonse-v0.2-design-partner-01",
+  "status": "internal_draft_not_offered",
+  "release": {
+    "version": "0.2.0",
+    "archive_digest": "sha256:371c93ab240013191e267a01e3190228b71790ab5f56151e522e11db1b204247",
+    "qualification_digest": "sha256:eda8437d351d496ace50d06a6ffbe1b74a505aabd712fe65339e744aa8ad6fbb",
+    "sbom_digest": "sha256:5673dbe0d998237a225acca38c611cff57dabbc6025c99ed44c911811d7d03ce",
+    "provenance_digest": "sha256:04501c9b1d8b5d102477d1be5e39e73d19b0c2f3da1edb3e3a9e02d77eea0ca5",
+    "public_materials": [
+      "START-HERE.md",
+      "RELEASE-OPERATOR.md",
+      "WORKFLOW-SELECTION.md",
+      "PILOT-AGREEMENT.md",
+      "pilot-plan.json",
+      "pilot-evidence.template.json",
+      "assurance-receipt.sample.json"
+    ]
+  },
+  "target_selection": {
+    "platform": "n8n",
+    "existing_customer_workflow_required": true,
+    "real_client_required": true,
+    "customer_owned_required": true,
+    "low_risk_required": true,
+    "reversible_required": true,
+    "pre_pilot_backup_required": true,
+    "managed_tls_required": true,
+    "preference_score_minimum": 12,
+    "excluded": [
+      "credential_migration",
+      "financial_disbursement",
+      "legal_or_safety_decision",
+      "irreversible_delete",
+      "high_availability_dependency",
+      "unbounded_personal_data"
+    ]
+  },
+  "success_criteria": {
+    "real_incidents_minimum": 1,
+    "independently_verified_owner_authorized_repairs_minimum": 1,
+    "client_usable_assurance_required": true,
+    "duplicate_consequential_effects_maximum": 0,
+    "unfamiliar_operator_required": true,
+    "public_materials_only": true,
+    "repository_access_allowed": false,
+    "undocumented_steps_maximum": 0,
+    "payment_decision_required": true
+  },
+  "authority_boundary": [
+    "kernel_owns_authority",
+    "adapter_edge_holds_provider_credentials",
+    "repair_worker_cannot_verify_or_promote",
+    "verifier_cannot_promote",
+    "named_owner_authorizes_promotion",
+    "reconcile_before_retry",
+    "rollback_separately_authorized"
+  ],
+  "commercial": {
+    "currency": "USD",
+    "onboarding_fee": 2500,
+    "monthly_per_workflow": 1500,
+    "included_scope": "One dedicated single-tenant installation, one existing n8n workflow, verified maintenance receipts, and bounded operator support; no uptime or response-time SLA is promised by this hypothesis.",
+    "pricing_status": "hypothesis_not_offered",
+    "decision_due_within_days_after_pilot": 10,
+    "decision_options": ["retain_paid", "decline"],
+    "pre_agreed_payment_decision_required": true
+  },
+  "external_gate": [
+    "unfamiliar_human_operator",
+    "real_agency",
+    "real_client_workflow",
+    "owner_authorized_live_repair",
+    "client_assurance_review",
+    "agency_payment_decision"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "sample_only": true,
+  "schema_version": "alphonse.design_partner_assurance_sample.v0.2",
+  "claims": {
+    "workflow_identity": "example:redacted-existing-n8n-workflow",
+    "incident": "example:business outcome contradicted runtime success",
+    "evidence_class": "example:independent destination observation",
+    "diagnosis": "example:bounded proposal with explicit uncertainty",
+    "repair_candidate": "example:inactive target-native candidate",
+    "verification": "example:passed original defect and retained regressions",
+    "promotion_authority": "example:named Owner authorization",
+    "target_outcome": "example:confirmed after exact apply",
+    "duplicate_consequential_effects": 0
+  },
+  "machine_references": {
+    "case_id": "00000000-0000-4000-8000-000000000001",
+    "candidate_id": "00000000-0000-4000-8000-000000000002",
+    "verification_id": "00000000-0000-4000-8000-000000000003",
+    "promotion_id": "00000000-0000-4000-8000-000000000004",
+    "target_confirmation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "assurance_bundle_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "limitations": [
+    "Example only; no customer, client, production repair, or payment claim is made.",
+    "Single-host release without high availability.",
+    "Provider credentials remain at the customer adapter edge.",
+    "Evidence supports the exact recorded workflow and incident, not general correctness."
+  ]
+}
