@@ -2298,6 +2298,7 @@ try {
                 baseUrl, environment, compose, post, kernel, command,
                 caseId: diagnosticCase.case_id,
                 revisionId: extended.revisionId,
+                workflowId: "workflow:agency-lab:lead-ingestion",
                 assignmentId: diagnosticAssignment.assignment_id,
                 workerRunId,
                 diagnosisId: completion.diagnosis.diagnosis_id,

@@ -120,7 +120,8 @@ function promotionView(row, events) {
 }
 
 export function createDiagnosticPromotionService({
-  database, artifactStore, installationId, adapter, adapterManifest, credentialBindingRef
+  database, artifactStore, installationId, adapter, adapterManifest, credentialBindingRef,
+  maintenanceControl = null
 }) {
   const { pool, executeCommand } = database;
 
@@ -273,6 +274,7 @@ export function createDiagnosticPromotionService({
           };
         }
         const source = await sourceForAuthorization(client, input.candidate_id, input.verification_id);
+        await maintenanceControl?.assertCaseWorkflowAvailable(source.case_id, client);
         if (source.candidate_status !== "verified" || source.overall_result !== "passed") {
           throw new KernelError(409, "PROMOTION_CANDIDATE_NOT_VERIFIED",
             "Only the current verified candidate with a passing receipt can be authorized.");
@@ -403,6 +405,7 @@ export function createDiagnosticPromotionService({
           };
         }
         const promotion = await getPromotion(input.promotion_id, client);
+        await maintenanceControl?.assertCaseWorkflowAvailable(promotion.case_id, client);
         if (promotion.projection.state !== "authorized") {
           throw new KernelError(409, "PROMOTION_NOT_AUTHORIZED",
             "Only an authorized Promotion can request target application.", {

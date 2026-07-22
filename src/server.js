@@ -27,6 +27,7 @@ import { createDiagnosticDiagnosisService } from "./diagnostic-diagnosis-service
 import { createDiagnosticRepairDeliveryService } from "./diagnostic-repair-delivery-service.js";
 import { createDiagnosticVerificationService } from "./diagnostic-verification-service.js";
 import { createDiagnosticPromotionService } from "./diagnostic-promotion-service.js";
+import { createDiagnosticConsoleService } from "./diagnostic-console-service.js";
 import {
   DIAGNOSTIC_PROTOCOL_VERSION,
   getDiagnosticOperationDescriptor,
@@ -111,6 +112,9 @@ const environmentName = process.env.KERNEL_ENVIRONMENT_NAME ?? "Local Developmen
 const environmentClass = process.env.KERNEL_ENVIRONMENT_CLASS ?? "development";
 const bootstrapToken = process.env.KERNEL_BOOTSTRAP_TOKEN;
 const ownerToken = process.env.KERNEL_OWNER_TOKEN ?? bootstrapToken;
+const diagnosticConsoleViewerToken = process.env.DIAGNOSTIC_CONSOLE_VIEWER_TOKEN;
+const diagnosticConsoleViewerPrincipalId = process.env.DIAGNOSTIC_CONSOLE_VIEWER_PRINCIPAL_ID
+  ?? "console-viewer";
 const bootstrapPrincipalId = process.env.KERNEL_BOOTSTRAP_PRINCIPAL_ID ?? "local-bootstrap-operator";
 const dataPlaneServiceToken = process.env.DATA_PLANE_SERVICE_TOKEN;
 const dataPlaneReceiptSecret = process.env.DATA_PLANE_RECEIPT_SECRET;
@@ -209,6 +213,7 @@ let coverageCompilationService = null;
 let coverageCapabilityService = null;
 let coverageReconciliationService = null;
 let maintenanceAssuranceService = null;
+let diagnosticConsoleService = null;
 if (diagnosticDatabaseUrl) {
   if (!diagnosticRuntimeAdapterId || !diagnosticRuntimeAdapterVersion || !diagnosticRuntimeAdapterKeyId
       || !diagnosticRuntimeAdapterSecret) {
@@ -301,6 +306,10 @@ if (diagnosticDatabase) {
   maintenanceAssuranceService = createMaintenanceAssuranceService({
     database: diagnosticDatabase, installationId
   });
+  diagnosticConsoleService = createDiagnosticConsoleService({
+    database: diagnosticDatabase, installationId,
+    reproductionReader: diagnosticReproductionService
+  });
   coverageOnboardingService = createCoverageOnboardingService({
     database: diagnosticDatabase,
     artifactStore: diagnosticArtifactStore,
@@ -382,7 +391,8 @@ if (diagnosticDatabase) {
     );
   }
   diagnosticRepairWorkerService = createDiagnosticRepairWorkerService(
-    diagnosticDatabase, diagnosticArtifactStore, installationId, identityIntent
+    diagnosticDatabase, diagnosticArtifactStore, installationId, identityIntent,
+    diagnosticConsoleService
   );
   diagnosticDiagnosisService = createDiagnosticDiagnosisService(
     diagnosticDatabase, diagnosticArtifactStore, installationId, identityIntent
@@ -405,7 +415,8 @@ if (diagnosticDatabase) {
       installationId,
       adapter: repairDeliveryAdapter,
       adapterManifest: N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST,
-      credentialBindingRef: n8nRepairDeliveryCredentialBindingRef
+      credentialBindingRef: n8nRepairDeliveryCredentialBindingRef,
+      maintenanceControl: diagnosticConsoleService
     });
     diagnosticPromotionService = createDiagnosticPromotionService({
       database: diagnosticDatabase,
@@ -413,7 +424,8 @@ if (diagnosticDatabase) {
       installationId,
       adapter: repairDeliveryAdapter,
       adapterManifest: N8N_REPAIR_DELIVERY_ADAPTER_MANIFEST,
-      credentialBindingRef: n8nRepairDeliveryCredentialBindingRef
+      credentialBindingRef: n8nRepairDeliveryCredentialBindingRef,
+      maintenanceControl: diagnosticConsoleService
     });
   }
   diagnosticVerificationService = createDiagnosticVerificationService({
@@ -636,6 +648,7 @@ import { createRouteContext } from "./route-context.js";
 
 const routeHelpers = createRouteHelpers({
   ownerToken, bootstrapPrincipalId, identityIntent,
+  diagnosticConsoleViewerToken, diagnosticConsoleViewerPrincipalId,
   dataPlaneServiceToken, substrateServiceToken, brokerServiceToken,
   diagnosticService, diagnosticDatabase, diagnosticRuntimeService,
   diagnosticReproductionService, grantAuthorityService,
@@ -650,7 +663,7 @@ const routeHelpers = createRouteHelpers({
   diagnosticVerificationService, diagnosticPromotionService,
   coverageOnboardingService, workflowInterpretationService, coverageReviewService,
   coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService,
-  coverageReconciliationService, maintenanceAssuranceService
+  coverageReconciliationService, maintenanceAssuranceService, diagnosticConsoleService
 });
 
 const routeContext = createRouteContext({
@@ -669,7 +682,7 @@ const routeContext = createRouteContext({
   coverageOnboardingService, workflowInterpretationService, coverageReviewService,
   coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService,
   coverageReconciliationService,
-  maintenanceAssuranceService,
+  maintenanceAssuranceService, diagnosticConsoleService,
   installationId, environmentId, environmentName,
   grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
   dataPlaneReceiptSecret, dataPlaneId,

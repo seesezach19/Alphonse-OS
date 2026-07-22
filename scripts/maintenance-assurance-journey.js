@@ -1,9 +1,63 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+import { sha256Digest } from "../src/canonical-json.js";
 import { LOGICAL_OPERATION_DEDUPLICATION_PATCH } from
   "../packages/n8n-operational-package/src/repair-delivery-adapter.js";
 import { RepairWorkerClient } from "../src/repair-worker-client.js";
+
+const consoleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../apps/console");
+
+async function runLiveConsoleBrowserProof({ environment, baseUrl, viewerToken, operatorToken,
+  ownerToken, workflowId, workerId }) {
+  const proofEnvironment = {
+    ...environment,
+    ALPHONSE_CONSOLE_MODE: "live",
+    ALPHONSE_CONSOLE_KERNEL_URL: baseUrl,
+    ALPHONSE_CONSOLE_SESSION_SECRET: "canonical-console-session-secret-with-at-least-32-bytes-v1",
+    ALPHONSE_CONSOLE_VIEWER_LOGIN_SECRET: "canonical-viewer-login-v1",
+    ALPHONSE_CONSOLE_OPERATOR_LOGIN_SECRET: "canonical-operator-login-v1",
+    ALPHONSE_CONSOLE_OWNER_LOGIN_SECRET: "canonical-owner-login-v1",
+    ALPHONSE_CONSOLE_VIEWER_KERNEL_TOKEN: viewerToken,
+    ALPHONSE_CONSOLE_OPERATOR_KERNEL_TOKEN: operatorToken,
+    ALPHONSE_CONSOLE_OWNER_KERNEL_TOKEN: ownerToken,
+    CONSOLE_PROOF_URL: "http://127.0.0.1:43220",
+    CONSOLE_PROOF_WORKFLOW_ID: workflowId,
+    CONSOLE_PROOF_WORKER_ID: workerId
+  };
+  const server = spawn(process.execPath,
+    [path.join(consoleRoot, "node_modules/next/dist/bin/next"), "start", "-H", "127.0.0.1", "-p", "43220"],
+    { cwd: consoleRoot, env: proofEnvironment, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  server.stdout.on("data", (chunk) => { output += chunk; });
+  server.stderr.on("data", (chunk) => { output += chunk; });
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      try {
+        const response = await fetch("http://127.0.0.1:43220");
+        if (response.ok) { ready = true; break; }
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.equal(ready, true, `Live Console did not start.\n${output}`);
+    const result = spawnSync(process.execPath, ["scripts/live-browser-proof.mjs"], {
+      cwd: consoleRoot, env: proofEnvironment, encoding: "utf8", timeout: 2 * 60_000,
+      maxBuffer: 8 * 1024 * 1024
+    });
+    if (result.error) throw result.error;
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}\n${output}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.status, "passed");
+    assert.equal(report.fixture_records_visible, false);
+    return report;
+  } finally {
+    server.kill("SIGTERM");
+  }
+}
 
 /**
  * Run the repair half of the production-shaped Maintenance Agent proof against
@@ -18,6 +72,7 @@ import { RepairWorkerClient } from "../src/repair-worker-client.js";
  *   command: (operationId: string, input: any) => any,
  *   caseId: string,
  *   revisionId: string,
+ *   workflowId: string,
  *   assignmentId: string,
  *   workerRunId: string,
  *   diagnosisId: string,
@@ -25,7 +80,7 @@ import { RepairWorkerClient } from "../src/repair-worker-client.js";
  * }} input
  */
 export async function runMaintenanceAssuranceJourney({
-  baseUrl, environment, compose, post, kernel, command, caseId, revisionId,
+  baseUrl, environment, compose, post, kernel, command, caseId, revisionId, workflowId,
   assignmentId, workerRunId, diagnosisId, sponsorPrincipalId
 }) {
   Object.assign(environment, {
@@ -42,6 +97,8 @@ export async function runMaintenanceAssuranceJourney({
     N8N_REPAIR_DELIVERY_API_KEY: "local-maintenance-edge-key-v1",
     N8N_REPAIR_DELIVERY_CREDENTIAL_BINDING_REF: "customer-secret-store:n8n-maintenance-v1",
     N8N_REPAIR_DELIVERY_TIMEOUT_MS: "2000",
+    DIAGNOSTIC_CONSOLE_VIEWER_TOKEN: "local-console-viewer-token-v1",
+    DIAGNOSTIC_CONSOLE_VIEWER_PRINCIPAL_ID: "canonical-proof-viewer",
     VERIFICATION_FIXTURE_VERSION: "logical-operation-v1"
   });
   compose("up", "--wait", "n8n-maintenance-adapter");
@@ -143,17 +200,104 @@ export async function runMaintenanceAssuranceJourney({
       attachment_version: "0.2.0"
     }
   });
+  const operatorAgent = await post("/kernel/v0/principals", command("kernel.principal.create", {
+    principal_type: "agent", display_name: "Canonical Console Operator"
+  }));
+  assert.equal(operatorAgent.response.status, 201, JSON.stringify(operatorAgent.body));
+  const operatorToken = `canonical-console-operator-${randomUUID()}`;
+  const operatorPassport = await post("/kernel/v0/agent-passports", command("kernel.agent_passport.issue", {
+    agent_principal_id: operatorAgent.body.principal.principal_id,
+    sponsor_principal_id: sponsorPrincipalId,
+    runtime: { kind: "operations-console", version: "0.1.0" },
+    model_configuration: { provider: "none", model: "typed-controls-only" },
+    package_skill_configuration: {
+      protocol: "alphonse-trusted-operator-0.2.0",
+      operator_operations: ["diagnostic.console_snapshot.get", "diagnostic.console_worker.suspend",
+        "diagnostic.console_workflow.quarantine", "diagnostic.console_worker.resume",
+        "diagnostic.console_workflow.release"]
+    },
+    agent_authentication_token: operatorToken,
+    permitted_intent_classes: ["trusted_operator"],
+    provenance: { source: "maintenance-console-live-proof" },
+    valid_from: new Date(now - 60_000).toISOString(),
+    expires_at: new Date(now + 3_600_000).toISOString()
+  }));
+  assert.equal(operatorPassport.response.status, 201, JSON.stringify(operatorPassport.body));
+  const operatorHeaders = (instruction) => ({
+    authorization: `Operator ${operatorToken}`, "content-type": "application/json",
+    "x-alphonse-authorization-channel": "console",
+    "x-alphonse-instruction-digest": sha256Digest(instruction),
+    "x-alphonse-authorized-at": new Date().toISOString()
+  });
+  const operatorPost = (route, body) => post(route, body, operatorHeaders(body));
+
+  const viewerSnapshot = await kernel("/diagnostic/v0/console-snapshot", {
+    headers: { authorization: "Viewer local-console-viewer-token-v1" }
+  });
+  assert.equal(viewerSnapshot.response.status, 200, JSON.stringify(viewerSnapshot.body));
+  assert.equal(viewerSnapshot.body.console_snapshot.data_mode, "live");
+  assert.equal(viewerSnapshot.body.console_snapshot.session.role, "viewer");
+  assert.equal(viewerSnapshot.body.console_snapshot.source.authoritative, true);
+  assert.equal(JSON.stringify(viewerSnapshot.body).includes(operatorToken), false);
+  const operatorSnapshot = await kernel("/diagnostic/v0/console-snapshot", {
+    headers: operatorHeaders({ operation_id: "diagnostic.console_snapshot.get" })
+  });
+  assert.equal(operatorSnapshot.response.status, 200, JSON.stringify(operatorSnapshot.body));
+  assert.equal(operatorSnapshot.body.console_snapshot.session.role, "operator");
+
+  const suspend = command("diagnostic.console_worker.suspend", {
+    agent_principal_id: repairAgent.body.principal.principal_id,
+    reason_code: "emergency_operator_action", rationale: "Prove immediate worker fencing."
+  });
+  const suspended = await operatorPost(`/diagnostic/v0/console-controls/workers/${
+    repairAgent.body.principal.principal_id}/suspend`, suspend);
+  assert.equal(suspended.response.status, 201, JSON.stringify(suspended.body));
+  assert.equal(suspended.body.worker_control.state, "suspended");
+  await assert.rejects(repairWorker.discover(), (error) => error.code === "MAINTENANCE_WORKER_SUSPENDED");
+  const operatorResume = command("diagnostic.console_worker.resume", {
+    agent_principal_id: repairAgent.body.principal.principal_id,
+    reason_code: "manual_recovery", rationale: "Operator recovery must fail closed."
+  });
+  const deniedResume = await operatorPost(`/diagnostic/v0/console-controls/workers/${
+    repairAgent.body.principal.principal_id}/resume`, operatorResume);
+  assert.equal(deniedResume.response.status, 403, JSON.stringify(deniedResume.body));
+  const resumed = await post(`/diagnostic/v0/console-controls/workers/${
+    repairAgent.body.principal.principal_id}/resume`, operatorResume);
+  assert.equal(resumed.response.status, 201, JSON.stringify(resumed.body));
+  assert.equal(resumed.body.worker_control.state, "active");
+
+  const quarantine = command("diagnostic.console_workflow.quarantine", {
+    workflow_id: workflowId, reason_code: "unexpected_behavior",
+    rationale: "Prove maintenance quarantine before repair work."
+  });
+  const quarantined = await operatorPost(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/quarantine`, quarantine);
+  assert.equal(quarantined.response.status, 201, JSON.stringify(quarantined.body));
+  assert.equal(quarantined.body.workflow_control.state, "quarantined");
+  const taskInput = {
+    case_id: caseId,
+    worker_registration_id: registration.repair_worker.registration_id,
+    reproduction_bundle_id: reproductionBundleId,
+    allowed_operations: ["artifact.read", "candidate.submit", "task.heartbeat", "task.fail", "task.release"],
+    artifact_limits: { max_artifact_bytes: 131072, max_total_bytes: 262144,
+      allowed_media_types: ["application/json"] },
+    lease_duration_seconds: 30,
+    expected_outputs: ["repair_candidate", "targeted_regression", "worker_logs"]
+  };
+  const blockedTask = await post("/diagnostic/v0/repair-tasks", command(
+    "diagnostic.repair_task.create", taskInput));
+  assert.equal(blockedTask.response.status, 409, JSON.stringify(blockedTask.body));
+  assert.equal(blockedTask.body.error.code, "WORKFLOW_MAINTENANCE_QUARANTINED");
+  const release = command("diagnostic.console_workflow.release", {
+    workflow_id: workflowId, reason_code: "manual_recovery", rationale: "Owner-reviewed proof release."
+  });
+  const released = await post(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/release`, release);
+  assert.equal(released.response.status, 201, JSON.stringify(released.body));
+  assert.equal(released.body.workflow_control.state, "available");
   const createRepairTask = async () => {
-    const result = await post("/diagnostic/v0/repair-tasks", command("diagnostic.repair_task.create", {
-      case_id: caseId,
-      worker_registration_id: registration.repair_worker.registration_id,
-      reproduction_bundle_id: reproductionBundleId,
-      allowed_operations: ["artifact.read", "candidate.submit", "task.heartbeat", "task.fail", "task.release"],
-      artifact_limits: { max_artifact_bytes: 131072, max_total_bytes: 262144,
-        allowed_media_types: ["application/json"] },
-      lease_duration_seconds: 30,
-      expected_outputs: ["repair_candidate", "targeted_regression", "worker_logs"]
-    }));
+    const result = await post("/diagnostic/v0/repair-tasks", command(
+      "diagnostic.repair_task.create", taskInput));
     assert.equal(result.response.status, 201, JSON.stringify(result.body));
     return result.body.repair_task.task_id;
   };
@@ -209,6 +353,29 @@ export async function runMaintenanceAssuranceJourney({
   assert.equal(target.body.target.active, true);
   const expectedBase = target.body.target.target_revision_digest;
 
+  const deliveryQuarantine = command("diagnostic.console_workflow.quarantine", {
+    workflow_id: workflowId, reason_code: "unexpected_behavior",
+    rationale: "Prove quarantine blocks inactive repair delivery."
+  });
+  const deliveryQuarantined = await operatorPost(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/quarantine`, deliveryQuarantine);
+  assert.equal(deliveryQuarantined.response.status, 201, JSON.stringify(deliveryQuarantined.body));
+  const blockedDelivery = await post("/diagnostic/v0/repair-deliveries", command(
+    "diagnostic.repair_delivery.materialize", {
+      candidate_id: candidateId, binding_id: bindingId,
+      expected_base_revision_digest: expectedBase,
+      idempotency_key: `maintenance-blocked-delivery-${candidateId}`
+    }
+  ));
+  assert.equal(blockedDelivery.response.status, 409, JSON.stringify(blockedDelivery.body));
+  assert.equal(blockedDelivery.body.error.code, "WORKFLOW_MAINTENANCE_QUARANTINED");
+  const deliveryRelease = await post(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/release`, command("diagnostic.console_workflow.release", {
+      workflow_id: workflowId, reason_code: "manual_recovery",
+      rationale: "Owner reviewed the delivery boundary proof."
+    }));
+  assert.equal(deliveryRelease.response.status, 201, JSON.stringify(deliveryRelease.body));
+
   const delivery = await post("/diagnostic/v0/repair-deliveries", command(
     "diagnostic.repair_delivery.materialize", {
       candidate_id: candidateId, binding_id: bindingId,
@@ -238,6 +405,28 @@ export async function runMaintenanceAssuranceJourney({
   assert.equal(verification.body.repair_verification.overall_result, "passed");
   const verificationId = verification.body.repair_verification.verification_id;
 
+  const authorizationQuarantine = await operatorPost(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/quarantine`, command("diagnostic.console_workflow.quarantine", {
+      workflow_id: workflowId, reason_code: "security_concern",
+      rationale: "Prove quarantine blocks Promotion authorization."
+    }));
+  assert.equal(authorizationQuarantine.response.status, 201, JSON.stringify(authorizationQuarantine.body));
+  const blockedAuthorization = await post("/diagnostic/v0/promotions", command(
+    "diagnostic.promotion.authorize", {
+      candidate_id: candidateId, verification_id: verificationId,
+      expected_target_revision_digest: expectedBase,
+      idempotency_key: `maintenance-blocked-promotion-${candidateId}`
+    }
+  ));
+  assert.equal(blockedAuthorization.response.status, 409, JSON.stringify(blockedAuthorization.body));
+  assert.equal(blockedAuthorization.body.error.code, "WORKFLOW_MAINTENANCE_QUARANTINED");
+  const authorizationRelease = await post(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/release`, command("diagnostic.console_workflow.release", {
+      workflow_id: workflowId, reason_code: "manual_recovery",
+      rationale: "Owner reviewed the authorization boundary proof."
+    }));
+  assert.equal(authorizationRelease.response.status, 201, JSON.stringify(authorizationRelease.body));
+
   const authorization = await post("/diagnostic/v0/promotions", command(
     "diagnostic.promotion.authorize", {
       candidate_id: candidateId, verification_id: verificationId,
@@ -247,6 +436,26 @@ export async function runMaintenanceAssuranceJourney({
   ));
   assert.equal(authorization.response.status, 201, JSON.stringify(authorization.body));
   const promotionId = authorization.body.promotion.promotion_id;
+
+  const applicationQuarantine = await operatorPost(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/quarantine`, command("diagnostic.console_workflow.quarantine", {
+      workflow_id: workflowId, reason_code: "unexpected_behavior",
+      rationale: "Prove quarantine blocks target application."
+    }));
+  assert.equal(applicationQuarantine.response.status, 201, JSON.stringify(applicationQuarantine.body));
+  const blockedApplication = await post(`/diagnostic/v0/promotions/${promotionId}/apply`, command(
+    "diagnostic.promotion.apply", {
+      promotion_id: promotionId, idempotency_key: `maintenance-blocked-apply-${candidateId}`
+    }
+  ));
+  assert.equal(blockedApplication.response.status, 409, JSON.stringify(blockedApplication.body));
+  assert.equal(blockedApplication.body.error.code, "WORKFLOW_MAINTENANCE_QUARANTINED");
+  const applicationRelease = await post(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/release`, command("diagnostic.console_workflow.release", {
+      workflow_id: workflowId, reason_code: "manual_recovery",
+      rationale: "Owner reviewed the application boundary proof."
+    }));
+  assert.equal(applicationRelease.response.status, 201, JSON.stringify(applicationRelease.body));
 
   const control = "fetch('http://127.0.0.1:5680/test/v0/promotion-mode',{method:'POST'," +
     "headers:{authorization:'Bearer local-maintenance-detail-adapter-token-v1','content-type':'application/json'}," +
@@ -259,6 +468,12 @@ export async function runMaintenanceAssuranceJourney({
   ));
   assert.equal(applied.response.status, 201, JSON.stringify(applied.body));
   assert.equal(applied.body.promotion.projection.state, "uncertain");
+  const recoveryQuarantine = await operatorPost(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/quarantine`, command("diagnostic.console_workflow.quarantine", {
+      workflow_id: workflowId, reason_code: "unexpected_behavior",
+      rationale: "Freeze new work while preserving uncertain-state recovery."
+    }));
+  assert.equal(recoveryQuarantine.response.status, 201, JSON.stringify(recoveryQuarantine.body));
   const reconciled = await post(`/diagnostic/v0/promotions/${promotionId}/reconcile`, command(
     "diagnostic.promotion.reconcile", {
       promotion_id: promotionId, idempotency_key: `maintenance-reconcile-${candidateId}`
@@ -279,6 +494,12 @@ export async function runMaintenanceAssuranceJourney({
   assert.equal(rollback.response.status, 201, JSON.stringify(rollback.body));
   assert.equal(rollback.body.promotion.projection.state, "rolled_back");
   assert.equal(rollback.body.promotion.rollback.confirmation_receipt.rollback_behavior_confirmed, true);
+  const recoveryRelease = await post(`/diagnostic/v0/console-controls/workflows/${
+    encodeURIComponent(workflowId)}/release`, command("diagnostic.console_workflow.release", {
+      workflow_id: workflowId, reason_code: "manual_recovery",
+      rationale: "Owner confirmed rollback and released maintenance quarantine."
+    }));
+  assert.equal(recoveryRelease.response.status, 201, JSON.stringify(recoveryRelease.body));
 
   const assurance = await post("/diagnostic/v0/maintenance-assurances", command(
     "diagnostic.maintenance_assurance.export", {
@@ -298,6 +519,24 @@ export async function runMaintenanceAssuranceJourney({
   const reread = await kernel(`/diagnostic/v0/maintenance-assurances/${exported.export_id}`);
   assert.equal(reread.response.status, 200, JSON.stringify(reread.body));
   assert.equal(reread.body.maintenance_assurance.assurance_digest, exported.assurance_digest);
+  const browserProof = await runLiveConsoleBrowserProof({
+    environment, baseUrl, viewerToken: "local-console-viewer-token-v1", operatorToken,
+    ownerToken: "local-development-bootstrap-token", workflowId,
+    workerId: repairAgent.body.principal.principal_id
+  });
+  const finalConsole = await kernel("/diagnostic/v0/console-snapshot", {
+    headers: { authorization: "Viewer local-console-viewer-token-v1" }
+  });
+  assert.equal(finalConsole.response.status, 200, JSON.stringify(finalConsole.body));
+  const finalSnapshot = finalConsole.body.console_snapshot;
+  assert.equal(finalSnapshot.data_mode, "live");
+  assert.ok(finalSnapshot.cases.some((entry) => entry.case_id === caseId &&
+    entry.promotion?.state === "rolled_back"));
+  assert.ok(finalSnapshot.assurances.some((entry) => entry.export_id === exported.export_id));
+  assert.equal(finalSnapshot.workflows.find((entry) => entry.workflow_id === workflowId)
+    .quarantine.state, "available");
+  assert.equal(finalSnapshot.workers.find((entry) =>
+    entry.worker_id === repairAgent.body.principal.principal_id).control.state, "active");
 
   return {
     profile_digest: profile.body.maintenance_agent_profile.profile_digest,
@@ -312,6 +551,14 @@ export async function runMaintenanceAssuranceJourney({
     restart_recovered: true,
     timeout_reconciled: true,
     rollback_confirmed: true,
+    console_live_authoritative: true,
+    viewer_read_only: true,
+    operator_worker_fence: true,
+    operator_workflow_fence: true,
+    owner_recovery_only: true,
+    quarantine_blocks_new_work_and_preserves_recovery: true,
+    browser_roles_verified: browserProof.roles,
+    browser_accessibility_scans: browserProof.accessibility_scans,
     real_n8n_target: "CanonicalLeadIngress01",
     provider_credential_location: "adapter_edge_only",
     external_business_effects_by_agents: 0

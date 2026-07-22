@@ -6,18 +6,25 @@
     "dev": "next dev -H 127.0.0.1 -p 3200 --webpack",
     "build": "next build --webpack",
     "start": "next start -H 127.0.0.1 -p 3200",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "proof:browser": "node scripts/live-browser-proof.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.577.0",
-    "next": "^16.2.4",
+    "next": "^16.2.11",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "typescript": "^5"
+  },
+  "overrides": {
+    "postcss": "8.5.21",
+    "sharp": "0.35.3"
   }
 }

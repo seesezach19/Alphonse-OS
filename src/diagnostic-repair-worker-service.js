@@ -158,7 +158,7 @@ function taskRowView(row, events, candidate, now) {
 }
 
 export function createDiagnosticRepairWorkerService(
-  database, artifactStore, installationId, identityIntent
+  database, artifactStore, installationId, identityIntent, maintenanceControl = null
 ) {
   const { pool, executeCommand } = database;
 
@@ -226,6 +226,7 @@ export function createDiagnosticRepairWorkerService(
         task.agent_principal_id !== passport.agent_principal_id) {
       throw new KernelError(403, "REPAIR_TASK_WORKER_MISMATCH", "Repair Task belongs to another worker identity.");
     }
+    await maintenanceControl?.assertWorkerAvailable(passport.agent_principal_id);
   }
 
   function requireLiveLease(task, leaseEpoch, operation) {
@@ -249,6 +250,7 @@ export function createDiagnosticRepairWorkerService(
     if (input.passport_id !== authenticatedPassport.passport_id) {
       throw new KernelError(403, "PASSPORT_AUTHENTICATION_MISMATCH", "Authenticated Passport does not match registration.");
     }
+    await maintenanceControl?.assertWorkerAvailable(authenticatedPassport.agent_principal_id);
     const workIntent = await identityIntent.getWorkIntent(input.work_intent_id);
     if (workIntent.passport_id !== input.passport_id ||
         workIntent.agent_principal_id !== authenticatedPassport.agent_principal_id) {
@@ -365,6 +367,8 @@ export function createDiagnosticRepairWorkerService(
         const row = source.rows[0];
         if (!row) throw new KernelError(409, "REPAIR_TASK_INPUT_MISMATCH",
           "Case, demonstrated Reproduction Bundle, revision, and worker registration must exist and match.");
+        await maintenanceControl?.assertCaseWorkflowAvailable(input.case_id, client);
+        await maintenanceControl?.assertWorkerAvailable(row.agent_principal_id, client);
         if (row.bundle_deleted_at) throw new KernelError(409, "REPRODUCTION_BUNDLE_RETIRED",
           "Repair Task cannot use retired Reproduction Bundle bytes.");
         validateRepairIntentBoundary(
@@ -442,6 +446,7 @@ export function createDiagnosticRepairWorkerService(
   }
 
   async function discoverTasks(authenticatedPassport) {
+    await maintenanceControl?.assertWorkerAvailable(authenticatedPassport.agent_principal_id);
     const registrations = await pool.query(
       `SELECT registration_id FROM diagnostic_repair_worker_registrations
        WHERE installation_id=$1 AND passport_id=$2 AND agent_principal_id=$3`,

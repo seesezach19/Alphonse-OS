@@ -1071,6 +1071,29 @@ const maintenanceAssuranceInput = {
     .map((field) => [field, { type: "string", format: "uuid" }]))
 };
 
+const consoleReason = { enum: ["emergency_operator_action", "security_concern",
+  "unexpected_behavior", "manual_recovery"] };
+const consoleWorkerControlInput = {
+  type: "object",
+  required: ["agent_principal_id", "reason_code", "rationale"],
+  additionalProperties: false,
+  properties: {
+    agent_principal_id: { type: "string", format: "uuid" },
+    reason_code: consoleReason,
+    rationale: { type: "string", minLength: 1, maxLength: 1000 }
+  }
+};
+const consoleWorkflowControlInput = {
+  type: "object",
+  required: ["workflow_id", "reason_code", "rationale"],
+  additionalProperties: false,
+  properties: {
+    workflow_id: { type: "string", minLength: 1, maxLength: 160 },
+    reason_code: consoleReason,
+    rationale: { type: "string", minLength: 1, maxLength: 1000 }
+  }
+};
+
 const descriptors = [
   {
     operation_id: "diagnostic.workflow_runtime_adapter.contract.get",
@@ -1144,6 +1167,75 @@ const descriptors = [
     emitted_events: [],
     next_operations: ["diagnostic.maintenance_work_queue.get"]
   },
+  {
+    operation_id: "diagnostic.console_snapshot.get",
+    version: DIAGNOSTIC_PROTOCOL_VERSION,
+    summary: "Read one authenticated customer-safe authoritative Operations Console snapshot.",
+    visibility: "public",
+    authority_class: "authenticated_console_viewer_operator_or_owner",
+    effect_class: "read_only",
+    idempotency: "naturally_idempotent",
+    transport: { method: "GET", path: "/diagnostic/v0/console-snapshot" },
+    input_schema: { type: "object", additionalProperties: false },
+    output_schema: { type: "object", required: ["console_snapshot"] },
+    supported_modes: ["live"],
+    preconditions: ["diagnostic_plane_available", "authenticated_console_session"],
+    outcomes: ["authoritative_console_snapshot_returned"],
+    issues: ["DIAGNOSTIC_CONSOLE_UNAVAILABLE", "CONSOLE_ROLE_REQUIRED"],
+    emitted_events: [],
+    next_operations: ["diagnostic.console_worker.suspend", "diagnostic.console_workflow.quarantine"]
+  },
+  commandDescriptor({
+    operationId: "diagnostic.console_worker.suspend",
+    summary: "Operator or Owner suspend one exact Maintenance Worker with an immutable reason.",
+    path: "/diagnostic/v0/console-controls/workers/{agent_principal_id}/suspend",
+    input: consoleWorkerControlInput,
+    resultKey: "worker_control",
+    event: "diagnostic.console_worker.suspended",
+    issues: ["CONSOLE_CONTROL_AUTHORITY_REQUIRED", "MAINTENANCE_WORKER_NOT_FOUND",
+      "MAINTENANCE_WORKER_ALREADY_SUSPENDED"],
+    nextOperations: ["diagnostic.console_snapshot.get", "diagnostic.console_worker.resume"],
+    authorityClass: "authenticated_console_operator_or_owner",
+    effectClass: "append_only_emergency_worker_control"
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.console_worker.resume",
+    summary: "Owner resume one exact suspended Maintenance Worker with an immutable reason.",
+    path: "/diagnostic/v0/console-controls/workers/{agent_principal_id}/resume",
+    input: consoleWorkerControlInput,
+    resultKey: "worker_control",
+    event: "diagnostic.console_worker.resumed",
+    issues: ["OWNER_RECOVERY_AUTHORITY_REQUIRED", "MAINTENANCE_WORKER_NOT_SUSPENDED"],
+    nextOperations: ["diagnostic.console_snapshot.get", "diagnostic.console_worker.suspend"],
+    authorityClass: "authenticated_customer_owner",
+    effectClass: "append_only_owner_recovery_control"
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.console_workflow.quarantine",
+    summary: "Operator or Owner quarantine maintenance for one exact workflow without blocking recovery.",
+    path: "/diagnostic/v0/console-controls/workflows/{workflow_id}/quarantine",
+    input: consoleWorkflowControlInput,
+    resultKey: "workflow_control",
+    event: "diagnostic.console_workflow.quarantined",
+    issues: ["CONSOLE_CONTROL_AUTHORITY_REQUIRED", "AGENT_WORKFLOW_NOT_FOUND",
+      "WORKFLOW_ALREADY_QUARANTINED"],
+    nextOperations: ["diagnostic.console_snapshot.get", "diagnostic.console_workflow.release",
+      "diagnostic.promotion.reconcile", "diagnostic.promotion.rollback"],
+    authorityClass: "authenticated_console_operator_or_owner",
+    effectClass: "append_only_emergency_workflow_control"
+  }),
+  commandDescriptor({
+    operationId: "diagnostic.console_workflow.release",
+    summary: "Owner release maintenance quarantine for one exact workflow with an immutable reason.",
+    path: "/diagnostic/v0/console-controls/workflows/{workflow_id}/release",
+    input: consoleWorkflowControlInput,
+    resultKey: "workflow_control",
+    event: "diagnostic.console_workflow.released",
+    issues: ["OWNER_RECOVERY_AUTHORITY_REQUIRED", "WORKFLOW_NOT_QUARANTINED"],
+    nextOperations: ["diagnostic.console_snapshot.get", "diagnostic.console_workflow.quarantine"],
+    authorityClass: "authenticated_customer_owner",
+    effectClass: "append_only_owner_recovery_control"
+  }),
   {
     operation_id: "diagnostic.maintenance_work_queue.get",
     version: DIAGNOSTIC_PROTOCOL_VERSION,

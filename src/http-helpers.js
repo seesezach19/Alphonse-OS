@@ -155,6 +155,7 @@ export function writeError(response, error, CoordinationContractError) {
 export function createRouteHelpers(deps) {
   const {
     ownerToken, bootstrapPrincipalId, identityIntent,
+    diagnosticConsoleViewerToken, diagnosticConsoleViewerPrincipalId,
     dataPlaneServiceToken, substrateServiceToken, brokerServiceToken,
     diagnosticService, diagnosticDatabase, diagnosticRuntimeService,
     diagnosticReproductionService, grantAuthorityService,
@@ -169,7 +170,7 @@ export function createRouteHelpers(deps) {
     diagnosticVerificationService, diagnosticPromotionService,
     coverageOnboardingService, workflowInterpretationService, coverageReviewService,
     coverageReviewApprovalService, coverageCompilationService, coverageCapabilityService,
-    coverageReconciliationService, maintenanceAssuranceService
+    coverageReconciliationService, maintenanceAssuranceService, diagnosticConsoleService
   } = deps;
 
   /**
@@ -210,6 +211,26 @@ export function createRouteHelpers(deps) {
       return authorizeTrustedOperator(passport, operationId, request.headers).actor;
     }
     return directOwnerActor(authenticateBootstrapOperator(request));
+  }
+
+  /** @param {import("node:http").IncomingMessage} request */
+  async function authenticateDiagnosticConsoleReader(request) {
+    const authorization = request.headers.authorization;
+    if (authorization?.startsWith("Viewer ")) {
+      if (!diagnosticConsoleViewerToken) {
+        throw new KernelError(503, "CONSOLE_VIEWER_AUTHENTICATION_UNAVAILABLE",
+          "Console Viewer authentication is not configured.");
+      }
+      const supplied = Buffer.from(authorization.slice("Viewer ".length), "utf8");
+      const expected = Buffer.from(diagnosticConsoleViewerToken, "utf8");
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+        throw new KernelError(403, "INVALID_CONSOLE_VIEWER_CREDENTIAL",
+          "Console Viewer credential is invalid.");
+      }
+      return { type: "human", id: diagnosticConsoleViewerPrincipalId,
+        authorization: { mode: "console_viewer" } };
+    }
+    return authenticateDiagnosticOwner(request, "diagnostic.console_snapshot.get");
   }
 
   /**
@@ -291,7 +312,8 @@ export function createRouteHelpers(deps) {
   return {
     sendJson, sendHtml, readJson, sendCommandResult, pathId, requireRouteTaskMatch,
     serializeEnvironment, escapeHtml, observationAuthentication,
-    authenticateBootstrapOperator, authenticateDiagnosticOwner, authenticatePrivateService,
+    authenticateBootstrapOperator, authenticateDiagnosticOwner, authenticateDiagnosticConsoleReader,
+    authenticatePrivateService,
     authenticateDataPlane, authenticateSubstrate, authenticateBroker, authenticateAgent,
     requireDiagnosticPlane: () => requireOr(diagnosticService && diagnosticDatabase ? diagnosticService : null, 503,
       "DIAGNOSTIC_PLANE_UNAVAILABLE", "Diagnostic Plane is not configured for this Node."),
@@ -355,6 +377,8 @@ export function createRouteHelpers(deps) {
     requireCoverageReconciliation: () => requireOr(coverageReconciliationService, 503,
       "COVERAGE_RECONCILIATION_UNAVAILABLE", "Coverage reconciliation is not configured."),
     requireMaintenanceAssurance: () => requireOr(maintenanceAssuranceService, 503,
-      "MAINTENANCE_ASSURANCE_UNAVAILABLE", "Maintenance assurance is not configured.")
+      "MAINTENANCE_ASSURANCE_UNAVAILABLE", "Maintenance assurance is not configured."),
+    requireDiagnosticConsole: () => requireOr(diagnosticConsoleService, 503,
+      "DIAGNOSTIC_CONSOLE_UNAVAILABLE", "Authoritative Operations Console projection is not configured.")
   };
 }

@@ -51,6 +51,7 @@ export const ROUTE_CONTEXT_KEYS = /** @type {const} */ ([
   "coverageCapabilityService",
   "coverageReconciliationService",
   "maintenanceAssuranceService",
+  "diagnosticConsoleService",
   "installationId",
   "environmentId",
   "environmentName",
@@ -89,6 +90,7 @@ export const ROUTE_CONTEXT_KEYS = /** @type {const} */ ([
   "observationAuthentication",
   "authenticateBootstrapOperator",
   "authenticateDiagnosticOwner",
+  "authenticateDiagnosticConsoleReader",
   "authenticatePrivateService",
   "authenticateDataPlane",
   "authenticateSubstrate",
@@ -123,7 +125,8 @@ export const ROUTE_CONTEXT_KEYS = /** @type {const} */ ([
   "requireCoverageCompilation",
   "requireCoverageCapability",
   "requireCoverageReconciliation",
-  "requireMaintenanceAssurance"
+  "requireMaintenanceAssurance",
+  "requireDiagnosticConsole"
 ]);
 
 /** @typedef {typeof ROUTE_CONTEXT_KEYS[number]} RouteContextKey */
