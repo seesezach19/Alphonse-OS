@@ -75,7 +75,8 @@ function deliveryView(row) {
 }
 
 export function createDiagnosticRepairDeliveryService({
-  database, artifactStore, installationId, adapter, adapterManifest, credentialBindingRef
+  database, artifactStore, installationId, adapter, adapterManifest, credentialBindingRef,
+  maintenanceControl = null
 }) {
   const { pool, executeCommand } = database;
 
@@ -271,6 +272,7 @@ export function createDiagnosticRepairDeliveryService({
         }
         const selected = requireAdapter(binding);
         const candidate = await candidateInput(client, input.candidate_id);
+        await maintenanceControl?.assertCaseWorkflowAvailable(candidate.row.case_id, client);
         const snapshot = await selected.snapshot(binding.target);
         if (snapshot.target_revision_digest !== input.expected_base_revision_digest) {
           throw new KernelError(409, "REPAIR_TARGET_DRIFT",

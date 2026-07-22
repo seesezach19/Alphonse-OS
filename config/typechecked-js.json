@@ -2,6 +2,7 @@
   "policy": "append-only",
   "files": [
     "packages/n8n-operational-package/src/repair-delivery-adapter.js",
+    "src/diagnostic-console-service.js",
     "src/diagnostic-router.js",
     "src/diagnostic-runner.js",
     "src/errors.js",

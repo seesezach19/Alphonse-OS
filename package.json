@@ -47,7 +47,7 @@
     "test:canonical-proof:ticket-16": "node scripts/acceptance-canonical-proof-ticket-05.js --through-16",
     "test:canonical-proof:ticket-17": "node scripts/acceptance-canonical-proof-ticket-05.js --through-17",
     "proof:canonical": "node scripts/acceptance-canonical-proof-ticket-05.js --through-17",
-    "proof:maintenance": "node scripts/acceptance-canonical-proof-ticket-05.js --through-maintenance",
+    "proof:maintenance": "npm --prefix apps/console ci && npm --prefix apps/console exec -- playwright install chromium && npm --prefix apps/console run build && node scripts/acceptance-canonical-proof-ticket-05.js --through-maintenance",
     "diagnostic:cli": "node src/diagnostic-cli.js",
     "local:up": "docker compose up --build --wait",
     "local:down": "docker compose down",

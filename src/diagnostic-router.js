@@ -24,7 +24,7 @@ export function createDiagnosticRouter(ctx) {
     diagnosticIndependentVerificationService, diagnosticAssignmentService,
     diagnosticMaterialAvailabilityService, diagnosticDispatchService,
     diagnosticDispatchAuthorizationService, diagnosticWorkerExecutionService,
-    diagnosticConsistencyService, maintenanceAssuranceService,
+    diagnosticConsistencyService, maintenanceAssuranceService, diagnosticConsoleService,
     installationId, environmentId, environmentName,
     grantAuthorityFeedToken, grantApplicationReceiptServiceToken, diagnosticTokenizationResultToken,
     dataPlaneReceiptSecret, dataPlaneId,
@@ -37,7 +37,8 @@ export function createDiagnosticRouter(ctx) {
     canonicalize, sha256Digest, createHmac, createPublicKey,
     sendJson, sendHtml, readJson, sendCommandResult, pathId, requireRouteTaskMatch,
     serializeEnvironment, escapeHtml, observationAuthentication,
-    authenticateBootstrapOperator, authenticateDiagnosticOwner, authenticatePrivateService,
+    authenticateBootstrapOperator, authenticateDiagnosticOwner, authenticateDiagnosticConsoleReader,
+    authenticatePrivateService,
     authenticateDataPlane, authenticateSubstrate, authenticateBroker, authenticateAgent,
     requireDiagnosticPlane, requireDiagnosticRuntime, requireDiagnosticReproduction,
     requireGrantAuthority, requireDiagnosticGrantApplication, requireDiagnosticObservation,
@@ -48,10 +49,44 @@ export function createDiagnosticRouter(ctx) {
     requireDiagnosticRepairWorker, requireDiagnosticDiagnosis, requireDiagnosticRepairDelivery,
     requireDiagnosticVerification, requireDiagnosticPromotion, requireCoverageOnboarding,
     requireWorkflowInterpretation, requireCoverageReview, requireCoverageCompilation,
-    requireCoverageCapability, requireCoverageReconciliation, requireMaintenanceAssurance
+    requireCoverageCapability, requireCoverageReconciliation, requireMaintenanceAssurance,
+    requireDiagnosticConsole
   } = ctx;
 
   return async function diagnosticRouter(request, response, url) {
+  if (request.method === "GET" && url.pathname === "/diagnostic/v0/console-snapshot") {
+    const service = requireDiagnosticConsole();
+    const actor = await authenticateDiagnosticConsoleReader(request);
+    sendJson(response, 200, { console_snapshot: await service.getSnapshot(actor) });
+    return true;
+  }
+
+  const consoleControl = url.pathname.split("/").filter(Boolean);
+  if (request.method === "POST" && consoleControl.length === 6 &&
+      consoleControl[0] === "diagnostic" && consoleControl[1] === "v0" &&
+      consoleControl[2] === "console-controls") {
+    const [, , , resource, encodedId, action] = consoleControl;
+    const operationId = resource === "workers" && ["suspend", "resume"].includes(action)
+      ? `diagnostic.console_worker.${action}`
+      : resource === "workflows" && ["quarantine", "release"].includes(action)
+        ? `diagnostic.console_workflow.${action}` : null;
+    if (!operationId) return false;
+    const service = requireDiagnosticConsole();
+    const actor = await authenticateDiagnosticOwner(request, operationId);
+    const body = await readJson(request, 64 * 1024);
+    const id = decodeURIComponent(encodedId);
+    const bodyId = resource === "workers" ? body.input?.agent_principal_id : body.input?.workflow_id;
+    if (bodyId !== id) {
+      throw new KernelError(409, "ROUTE_CONTROL_TARGET_MISMATCH",
+        "Console control route and command input must name the same exact target.");
+    }
+    const method = operationId === "diagnostic.console_worker.suspend" ? "suspendWorker"
+      : operationId === "diagnostic.console_worker.resume" ? "resumeWorker"
+        : operationId === "diagnostic.console_workflow.quarantine" ? "quarantineWorkflow"
+          : "releaseWorkflow";
+    return sendCommandResult(response, await service[method](body, actor));
+  }
+
   if (request.method === "GET" && url.pathname === "/diagnostic/v0/maintenance-agent-profile") {
     const service = requireMaintenanceAssurance();
     authenticateBootstrapOperator(request);

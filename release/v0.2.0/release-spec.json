@@ -88,7 +88,8 @@
     "027_coverage_review_bundles.sql",
     "028_coverage_compilation_validation.sql",
     "029_coverage_reconciliation_intervals.sql",
-    "030_maintenance_assurance.sql"
+    "030_maintenance_assurance.sql",
+    "031_console_controls.sql"
   ],
   "qualification": [
     "v0.2_release_policy",
